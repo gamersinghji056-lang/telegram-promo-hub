@@ -172,7 +172,7 @@ export async function adminPlans() {
 
 export async function adminSavePlan(adminId: string, plan: Record<string, unknown>) {
   const client = db();
-  const row = { ...plan, updated_at: new Date().toISOString() };
+  const row: Record<string, unknown> = { ...plan, updated_at: new Date().toISOString() };
   const id = plan["id"] as string | undefined;
   if (id) {
     delete row["id"];
@@ -213,7 +213,6 @@ export async function adminUpdateTransaction(adminId: string, id: string, status
     .from("billing_transactions")
     .update({ status, tx_hash: txHash ?? tx.tx_hash, paid_at: status === "CONFIRMED" ? new Date().toISOString() : null })
     .eq("id", id);
-  if (status === "CONFIRMED" && tx.plan_id) await adminChangePlan(adminId, "", "").catch(() => undefined);
   if (status === "CONFIRMED" && tx.plan_id) {
     const { data: plan } = await client.from("plans").select("*").eq("id", tx.plan_id).maybeSingle();
     if (plan) {
