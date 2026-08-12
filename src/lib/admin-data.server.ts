@@ -231,13 +231,31 @@ export async function adminUpdateTransaction(adminId: string, id: string, status
   return { ok: true };
 }
 
-export async function adminSettings() {
+export type PlatformSettings = {
+  general: {
+    system_name?: string;
+    logo_url?: string;
+    support_email?: string;
+    support_telegram?: string;
+    maintenance_mode?: boolean;
+  };
+  registration: {
+    registration_enabled?: boolean;
+    email_verification_enabled?: boolean;
+    default_plan_code?: string;
+  };
+  payments: { payment_enabled?: boolean; network?: string; wallet_address?: string };
+  telegram: { bot_username: string; mini_app_url: string; token_configured: boolean };
+  discovery: { provider_url?: string; provider_key?: string };
+};
+
+export async function adminSettings(): Promise<PlatformSettings> {
   const [general, registration, payments, telegram, discovery] = await Promise.all([
-    getSetting("general"),
-    getSetting("registration"),
-    getSetting("payments"),
+    getSetting<PlatformSettings["general"]>("general"),
+    getSetting<PlatformSettings["registration"]>("registration"),
+    getSetting<PlatformSettings["payments"]>("payments"),
     telegramSettings(),
-    getSetting("discovery"),
+    getSetting<PlatformSettings["discovery"]>("discovery"),
   ]);
   return { general, registration, payments, telegram, discovery };
 }
