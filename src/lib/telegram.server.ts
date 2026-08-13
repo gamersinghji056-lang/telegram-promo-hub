@@ -1,4 +1,5 @@
 import { db, getSetting } from "./db.server";
+import { deriveWebhookSecret } from "./security.server";
 
 export const TELEGRAM_API = "https://api.telegram.org";
 
@@ -45,6 +46,18 @@ export type MessagePayload = {
   buttons?: { text: string; url: string }[];
 };
 
+export type TelegramWebhookInfo = {
+  url: string;
+  has_custom_certificate: boolean;
+  pending_update_count: number;
+  ip_address?: string;
+  last_error_date?: number;
+  last_error_message?: string;
+  last_synchronization_error_date?: number;
+  max_connections?: number;
+  allowed_updates?: string[];
+};
+
 export function buildSendArgs(chatId: string | number, message: MessagePayload) {
   const buttons = (message.buttons ?? []).filter((b) => b.text && b.url);
   const reply_markup = buttons.length
@@ -80,12 +93,83 @@ export async function botNotify(telegramUserId: number | null | undefined, text:
 }
 
 export async function telegramSettings() {
-  const s = await getSetting<{ bot_username?: string; mini_app_url?: string }>("telegram");
+  const s = await getSetting<{
+    bot_username?: string;
+    mini_app_url?: string;
+    webhook_url?: string;
+    webhook_status?: string;
+    webhook_last_checked_at?: string;
+    webhook_last_error?: string | null;
+    webhook_last_error_at?: string | null;
+    webhook_pending_updates?: number;
+    last_successful_update_at?: string | null;
+  }>("telegram");
   return {
     bot_username: s.bot_username ?? "",
     mini_app_url: s.mini_app_url ?? "",
     token_configured: !!botToken(),
+    webhook_url: s.webhook_url ?? "",
+    webhook_status: s.webhook_status ?? "NOT_CHECKED",
+    webhook_last_checked_at: s.webhook_last_checked_at ?? null,
+    webhook_last_error: s.webhook_last_error ?? null,
+    webhook_last_error_at: s.webhook_last_error_at ?? null,
+    webhook_pending_updates: s.webhook_pending_updates ?? 0,
+    last_successful_update_at: s.last_successful_update_at ?? null,
   };
+}
+
+function configuredWebhookUrl(): string {
+  const base = process.env["PUBLIC_APP_URL"] ?? "https://telegram-promo-suite.lovable.app";
+  return `${base.replace(/\/$/, "")}/api/public/telegram/webhook`;
+}
+
+async function saveWebhookHealth(info: TelegramWebhookInfo, status: string) {
+  const current = await getSetting<Record<string, unknown>>("telegram");
+  await db().from("system_settings").upsert(
+    {
+      key: "telegram",
+      value: {
+        ...current,
+        webhook_url: info.url,
+        webhook_status: status,
+        webhook_pending_updates: info.pending_update_count,
+        webhook_last_error: info.last_error_message ?? null,
+        webhook_last_error_at: info.last_error_date
+          ? new Date(info.last_error_date * 1000).toISOString()
+          : null,
+        webhook_last_checked_at: new Date().toISOString(),
+      },
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "key" },
+  );
+}
+
+export async function checkWebhook() {
+  const result = await callBot<TelegramWebhookInfo>("getWebhookInfo", {});
+  if (!result.ok) return result;
+  const expectedUrl = configuredWebhookUrl();
+  const status = result.result.url === expectedUrl ? "HEALTHY" : result.result.url ? "WRONG_URL" : "NOT_REGISTERED";
+  await saveWebhookHealth(result.result, status);
+  return { ok: true as const, result: { ...result.result, expected_url: expectedUrl, status } };
+}
+
+export async function registerWebhook() {
+  const token = botToken();
+  if (!token) return { ok: false as const, error: "Telegram bot token is not configured" };
+  const url = configuredWebhookUrl();
+  const registration = await callBot<boolean>("setWebhook", {
+    url,
+    secret_token: deriveWebhookSecret(token),
+    allowed_updates: ["message", "edited_message", "callback_query"],
+  });
+  if (!registration.ok) return registration;
+  const verification = await checkWebhook();
+  if (!verification.ok) return verification;
+  if (verification.result.url !== url) {
+    return { ok: false as const, error: `Telegram confirmed a different webhook URL: ${verification.result.url || "none"}` };
+  }
+  return verification;
 }
 
 /** Refresh bot identity into the telegram settings row; used by admin "Check status". */

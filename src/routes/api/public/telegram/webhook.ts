@@ -26,23 +26,25 @@ async function getState(userId: number) {
 }
 
 async function send(chatId: number, text: string, keyboard?: Record<string, unknown>) {
-  await callBot("sendMessage", { chat_id: chatId, text, parse_mode: "HTML", reply_markup: keyboard });
+  const result = await callBot("sendMessage", { chat_id: chatId, text, parse_mode: "HTML", reply_markup: keyboard });
+  if (!result.ok) throw new Error(`Telegram sendMessage failed: ${result.error}`);
 }
 
-async function mainMenu(chatId: number) {
+async function mainMenu(chatId: number, userId: number) {
   const url = await miniAppUrl();
-  const rows: Record<string, unknown>[][] = [
-    [{ text: "Register", callback_data: "register" }, { text: "Login", callback_data: "login" }],
-  ];
-  rows.push(
-    url
-      ? [{ text: "Open Mini App", web_app: { url } }]
-      : [{ text: "Open Mini App (not configured)", callback_data: "miniapp_missing" }],
-  );
+  const { data: customer } = await db()
+    .from("customers")
+    .select("id")
+    .eq("telegram_user_id", userId)
+    .eq("status", "ACTIVE")
+    .maybeSingle();
+  const rows: Record<string, unknown>[][] = customer
+    ? [url ? [{ text: "OPEN MINI APP", web_app: { url } }] : [{ text: "OPEN MINI APP (NOT CONFIGURED)", callback_data: "miniapp_missing" }]]
+    : [[{ text: "REGISTER", callback_data: "register" }, { text: "LOGIN", callback_data: "login" }]];
   rows.push([{ text: "Help", callback_data: "help" }]);
   await send(
     chatId,
-    "<b>Welcome to the Telegram Promotion Platform.</b>\nManage discovery, groups, audience and campaigns entirely from the Mini App.",
+    "<b>Welcome to the Telegram Promotion Platform.</b>\n\nManage discovery, groups, audience and campaigns entirely from the Mini App.",
     { inline_keyboard: rows },
   );
 }
@@ -78,7 +80,17 @@ async function handlePrivateText(msg: TgMessage) {
 
   if (text === "/start" || text === "/menu") {
     await setState(userId, "IDLE");
-    await mainMenu(chatId);
+    await mainMenu(chatId, userId);
+    return;
+  }
+  if (text === "/register") {
+    await setState(userId, "REG_EMAIL");
+    await send(chatId, "Send the email address you want to register with.");
+    return;
+  }
+  if (text === "/login") {
+    await setState(userId, "LOGIN_EMAIL");
+    await send(chatId, "Send your registered email address.");
     return;
   }
   if (text === "/help") {
@@ -122,7 +134,7 @@ async function handlePrivateText(msg: TgMessage) {
         return;
       }
       await send(chatId, "Account created. You can log in now.");
-      await mainMenu(chatId);
+       await mainMenu(chatId, userId);
       return;
     }
     case "LOGIN_EMAIL":
@@ -152,7 +164,7 @@ async function handlePrivateText(msg: TgMessage) {
       return;
     }
     default:
-      await mainMenu(chatId);
+       await mainMenu(chatId, userId);
   }
 }
 
@@ -193,6 +205,15 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
 
           if (msg.chat.type === "private") await handlePrivateText(msg);
           else await captureOptIn(msg);
+          const current = await getSetting<Record<string, unknown>>("telegram");
+          await db().from("system_settings").upsert(
+            {
+              key: "telegram",
+              value: { ...current, last_successful_update_at: new Date().toISOString() },
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "key" },
+          );
         } catch (error) {
           await logSystem({
             action: "BOT_WEBHOOK_ERROR",

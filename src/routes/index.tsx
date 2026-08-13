@@ -58,10 +58,10 @@ function Landing() {
               Customers, plans, subscriptions, payments, Telegram settings, logs and analytics.
             </p>
             <Link
-              to="/"
+              to="/admin/login"
               className="mt-4 inline-flex items-center rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent"
             >
-              Admin console (next phase)
+              Open admin console
             </Link>
           </div>
         </div>
