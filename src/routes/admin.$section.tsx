@@ -65,7 +65,7 @@ function SectionContent({ section, data, reload }: { section: string; data: any;
   const rows = Array.isArray(data) ? data : [];
   return <div className="overflow-hidden border border-border bg-card">
     <div className="flex items-center justify-between border-b border-border p-4"><p className="font-medium">{rows.length} records</p><Button variant="secondary" size="sm" onClick={reload}><RefreshCw />Refresh</Button></div>
-    <div className="overflow-x-auto"><table className="w-full text-left text-sm"><tbody>{rows.map((row: AnyData, index: number) => <tr key={row.id ?? index} className="border-b border-border last:border-0"><td className="p-4 font-medium">{row.email ?? row.name ?? row.action ?? row.code ?? `Record ${index + 1}`}</td><td className="p-4 text-muted-foreground">{row.status ?? row.created_at ?? row.price_usd ?? "—"}</td><td className="p-4 text-right text-muted-foreground">{row.plan_id ? "Plan assigned" : row.network ?? row.resource ?? ""}</td></tr>)}</tbody></table></div>
+    <div className="overflow-x-auto"><table className="w-full text-left text-sm"><tbody>{rows.map((row: AnyData, index: number) => <tr key={row["id"] ?? index} className="border-b border-border last:border-0"><td className="p-4 font-medium">{row["email"] ?? row["name"] ?? row["action"] ?? row["code"] ?? `Record ${index + 1}`}</td><td className="p-4 text-muted-foreground">{row["status"] ?? row["created_at"] ?? row["price_usd"] ?? "—"}</td><td className="p-4 text-right text-muted-foreground">{row["plan_id"] ? "Plan assigned" : row["network"] ?? row["resource"] ?? ""}</td></tr>)}</tbody></table></div>
     {!rows.length && <p className="p-8 text-center text-muted-foreground">No records yet.</p>}
   </div>;
 }
