@@ -1,6 +1,6 @@
 import { db, getSetting, setSetting, logAdmin } from "./db.server";
 import { hashPassword } from "./security.server";
-import { syncBotIdentity, telegramSettings } from "./telegram.server";
+import { checkWebhook, registerWebhook, syncBotIdentity, telegramSettings } from "./telegram.server";
 
 export async function assertSuperAdmin(userId: string) {
   const client = db();
@@ -245,7 +245,7 @@ export type PlatformSettings = {
     default_plan_code?: string;
   };
   payments: { payment_enabled?: boolean; network?: string; wallet_address?: string };
-  telegram: { bot_username: string; mini_app_url: string; token_configured: boolean };
+  telegram: Awaited<ReturnType<typeof telegramSettings>>;
   discovery: { provider_url?: string; provider_key?: string };
 };
 
@@ -268,12 +268,37 @@ export async function adminSaveSettings(
   const current = await getSetting(key);
   await setSetting(key, { ...current, ...value });
   await logAdmin({ admin_user_id: adminId, action: "SETTINGS_UPDATED", resource: key });
+  if (key === "telegram") {
+    const webhook = await registerWebhook();
+    await logAdmin({
+      admin_user_id: adminId,
+      action: "TELEGRAM_WEBHOOK_REGISTERED",
+      resource: "telegram",
+      details: webhook.ok ? { status: webhook.result.status, url: webhook.result.url } : { error: webhook.error },
+    });
+    if (!webhook.ok) throw new Error(webhook.error);
+  }
   return adminSettings();
 }
 
 export async function adminCheckBot() {
   const res = await syncBotIdentity();
   return res.ok ? { ok: true as const, username: (res.result as { username: string }).username } : { ok: false as const, error: res.error };
+}
+
+export async function adminCheckWebhook() {
+  return checkWebhook();
+}
+
+export async function adminRegisterWebhook(adminId: string) {
+  const result = await registerWebhook();
+  await logAdmin({
+    admin_user_id: adminId,
+    action: result.ok ? "TELEGRAM_WEBHOOK_REGISTERED" : "TELEGRAM_WEBHOOK_REGISTRATION_FAILED",
+    resource: "telegram",
+    details: result.ok ? { status: result.result.status, url: result.result.url } : { error: result.error },
+  });
+  return result;
 }
 
 export async function adminLogs(kind: "system" | "admin", search?: string) {

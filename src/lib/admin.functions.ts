@@ -131,6 +131,20 @@ export const checkBot = createServerFn({ method: "POST" })
     return admin.adminCheckBot();
   });
 
+export const checkTelegramWebhook = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    await admin.assertSuperAdmin(context.userId);
+    return admin.adminCheckWebhook();
+  });
+
+export const registerTelegramWebhook = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    await admin.assertSuperAdmin(context.userId);
+    return admin.adminRegisterWebhook(context.userId);
+  });
+
 export const getLogs = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((i: { kind: "system" | "admin"; search?: string }) => i)
