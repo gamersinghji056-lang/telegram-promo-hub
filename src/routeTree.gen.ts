@@ -14,6 +14,7 @@ import { Route as AdminRouteImport } from './routes/admin'
 import { Route as MiniAppRouteImport } from './routes/mini-app'
 import { Route as AdminSectionRouteImport } from './routes/admin.$section'
 import { Route as AdminLoginRouteImport } from './routes/admin.login'
+import { Route as MiniAppIndexRouteImport } from './routes/mini-app.index'
 import { Route as MiniAppSectionRouteImport } from './routes/mini-app.$section'
 import { Route as ApiPublicTelegramWebhookRouteImport } from './routes/api/public/telegram/webhook'
 
@@ -42,6 +43,11 @@ const AdminLoginRoute = AdminLoginRouteImport.update({
   path: '/login',
   getParentRoute: () => AdminRoute,
 } as any)
+const MiniAppIndexRoute = MiniAppIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => MiniAppRoute,
+} as any)
 const MiniAppSectionRoute = MiniAppSectionRouteImport.update({
   id: '/$section',
   path: '/$section',
@@ -61,15 +67,16 @@ export interface FileRoutesByFullPath {
   '/admin/$section': typeof AdminSectionRoute
   '/admin/login': typeof AdminLoginRoute
   '/mini-app/$section': typeof MiniAppSectionRoute
+  '/mini-app/': typeof MiniAppIndexRoute
   '/api/public/telegram/webhook': typeof ApiPublicTelegramWebhookRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteWithChildren
-  '/mini-app': typeof MiniAppRouteWithChildren
   '/admin/$section': typeof AdminSectionRoute
   '/admin/login': typeof AdminLoginRoute
   '/mini-app/$section': typeof MiniAppSectionRoute
+  '/mini-app': typeof MiniAppIndexRoute
   '/api/public/telegram/webhook': typeof ApiPublicTelegramWebhookRoute
 }
 export interface FileRoutesById {
@@ -80,6 +87,7 @@ export interface FileRoutesById {
   '/admin/$section': typeof AdminSectionRoute
   '/admin/login': typeof AdminLoginRoute
   '/mini-app/$section': typeof MiniAppSectionRoute
+  '/mini-app/': typeof MiniAppIndexRoute
   '/api/public/telegram/webhook': typeof ApiPublicTelegramWebhookRoute
 }
 export interface FileRouteTypes {
@@ -91,15 +99,16 @@ export interface FileRouteTypes {
     | '/admin/$section'
     | '/admin/login'
     | '/mini-app/$section'
+    | '/mini-app/'
     | '/api/public/telegram/webhook'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/admin'
-    | '/mini-app'
     | '/admin/$section'
     | '/admin/login'
     | '/mini-app/$section'
+    | '/mini-app'
     | '/api/public/telegram/webhook'
   id:
     | '__root__'
@@ -109,6 +118,7 @@ export interface FileRouteTypes {
     | '/admin/$section'
     | '/admin/login'
     | '/mini-app/$section'
+    | '/mini-app/'
     | '/api/public/telegram/webhook'
   fileRoutesById: FileRoutesById
 }
@@ -156,6 +166,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminLoginRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/mini-app/': {
+      id: '/mini-app/'
+      path: '/'
+      fullPath: '/mini-app/'
+      preLoaderRoute: typeof MiniAppIndexRouteImport
+      parentRoute: typeof MiniAppRoute
+    }
     '/mini-app/$section': {
       id: '/mini-app/$section'
       path: '/$section'
@@ -187,10 +204,12 @@ const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
 
 interface MiniAppRouteChildren {
   MiniAppSectionRoute: typeof MiniAppSectionRoute
+  MiniAppIndexRoute: typeof MiniAppIndexRoute
 }
 
 const MiniAppRouteChildren: MiniAppRouteChildren = {
   MiniAppSectionRoute: MiniAppSectionRoute,
+  MiniAppIndexRoute: MiniAppIndexRoute,
 }
 
 const MiniAppRouteWithChildren =
