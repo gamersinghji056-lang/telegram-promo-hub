@@ -21,7 +21,25 @@ type Update = {
 
 async function miniAppUrl() {
   const s = await getSetting<{ mini_app_url?: string }>("telegram");
-  return s.mini_app_url ?? "";
+  return validMiniAppUrl(s.mini_app_url ?? "");
+}
+
+function validMiniAppUrl(raw: string) {
+  const value = raw.trim();
+  if (!value) return "";
+  try {
+    const url = new URL(value);
+    const isLocal = ["localhost", "127.0.0.1"].includes(url.hostname);
+    if (url.protocol !== "https:" && !(isLocal && url.protocol === "http:")) return "";
+    if (url.username || url.password) return "";
+    if (!["/mini-app", "/mini-app/"].includes(url.pathname)) return "";
+    url.pathname = "/mini-app";
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return "";
+  }
 }
 
 function appendMiniAppPath(
@@ -94,22 +112,23 @@ async function mainMenu(chatId: number, userId: number) {
     .eq("telegram_user_id", userId)
     .eq("status", "ACTIVE")
     .maybeSingle();
-  const rows: Record<string, unknown>[][] = customer
-    ? [
-        url
-          ? [{ text: "OPEN MINI APP", web_app: { url } }]
-          : [{ text: "OPEN MINI APP (NOT CONFIGURED)", callback_data: "miniapp_missing" }],
-      ]
-    : [
-        [
-          { text: "REGISTER", callback_data: "register" },
-          { text: "LOGIN", callback_data: "login" },
-        ],
-      ];
-  rows.push([{ text: "Help", callback_data: "help" }]);
+  const rows: Record<string, unknown>[][] = [
+    [
+      { text: "REGISTER", callback_data: "register" },
+      { text: "LOGIN", callback_data: "login" },
+    ],
+    [
+      url
+        ? [{ text: "OPEN MINI APP", web_app: { url } }][0]
+        : { text: "OPEN MINI APP (NOT CONFIGURED)", callback_data: "miniapp_missing" },
+      { text: "HELP", callback_data: "help" },
+    ],
+  ];
   await send(
     chatId,
-    "<b>Welcome to the Telegram Promotion Platform.</b>\n\nManage discovery, groups, audience and campaigns entirely from the Mini App.",
+    customer
+      ? "<b>Welcome back to the Telegram Promotion Platform.</b>\n\nOpen the Mini App to manage your dashboard."
+      : "<b>Welcome to the Telegram Promotion Platform.</b>\n\nRegister or log in, then use the Mini App to manage your dashboard.",
     { inline_keyboard: rows },
   );
 }
