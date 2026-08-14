@@ -16,6 +16,8 @@ import { Route as AdminSectionRouteImport } from './routes/admin.$section'
 import { Route as AdminLoginRouteImport } from './routes/admin.login'
 import { Route as MiniAppIndexRouteImport } from './routes/mini-app.index'
 import { Route as MiniAppSectionRouteImport } from './routes/mini-app.$section'
+import { Route as MiniAppLoginRouteImport } from './routes/mini-app.login'
+import { Route as MiniAppRegisterRouteImport } from './routes/mini-app.register'
 import { Route as ApiPublicTelegramWebhookRouteImport } from './routes/api/public/telegram/webhook'
 
 const IndexRoute = IndexRouteImport.update({
@@ -53,6 +55,16 @@ const MiniAppSectionRoute = MiniAppSectionRouteImport.update({
   path: '/$section',
   getParentRoute: () => MiniAppRoute,
 } as any)
+const MiniAppLoginRoute = MiniAppLoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => MiniAppRoute,
+} as any)
+const MiniAppRegisterRoute = MiniAppRegisterRouteImport.update({
+  id: '/register',
+  path: '/register',
+  getParentRoute: () => MiniAppRoute,
+} as any)
 const ApiPublicTelegramWebhookRoute =
   ApiPublicTelegramWebhookRouteImport.update({
     id: '/api/public/telegram/webhook',
@@ -67,6 +79,8 @@ export interface FileRoutesByFullPath {
   '/admin/$section': typeof AdminSectionRoute
   '/admin/login': typeof AdminLoginRoute
   '/mini-app/$section': typeof MiniAppSectionRoute
+  '/mini-app/login': typeof MiniAppLoginRoute
+  '/mini-app/register': typeof MiniAppRegisterRoute
   '/mini-app/': typeof MiniAppIndexRoute
   '/api/public/telegram/webhook': typeof ApiPublicTelegramWebhookRoute
 }
@@ -76,6 +90,8 @@ export interface FileRoutesByTo {
   '/admin/$section': typeof AdminSectionRoute
   '/admin/login': typeof AdminLoginRoute
   '/mini-app/$section': typeof MiniAppSectionRoute
+  '/mini-app/login': typeof MiniAppLoginRoute
+  '/mini-app/register': typeof MiniAppRegisterRoute
   '/mini-app': typeof MiniAppIndexRoute
   '/api/public/telegram/webhook': typeof ApiPublicTelegramWebhookRoute
 }
@@ -87,6 +103,8 @@ export interface FileRoutesById {
   '/admin/$section': typeof AdminSectionRoute
   '/admin/login': typeof AdminLoginRoute
   '/mini-app/$section': typeof MiniAppSectionRoute
+  '/mini-app/login': typeof MiniAppLoginRoute
+  '/mini-app/register': typeof MiniAppRegisterRoute
   '/mini-app/': typeof MiniAppIndexRoute
   '/api/public/telegram/webhook': typeof ApiPublicTelegramWebhookRoute
 }
@@ -99,6 +117,8 @@ export interface FileRouteTypes {
     | '/admin/$section'
     | '/admin/login'
     | '/mini-app/$section'
+    | '/mini-app/login'
+    | '/mini-app/register'
     | '/mini-app/'
     | '/api/public/telegram/webhook'
   fileRoutesByTo: FileRoutesByTo
@@ -108,6 +128,8 @@ export interface FileRouteTypes {
     | '/admin/$section'
     | '/admin/login'
     | '/mini-app/$section'
+    | '/mini-app/login'
+    | '/mini-app/register'
     | '/mini-app'
     | '/api/public/telegram/webhook'
   id:
@@ -118,6 +140,8 @@ export interface FileRouteTypes {
     | '/admin/$section'
     | '/admin/login'
     | '/mini-app/$section'
+    | '/mini-app/login'
+    | '/mini-app/register'
     | '/mini-app/'
     | '/api/public/telegram/webhook'
   fileRoutesById: FileRoutesById
@@ -180,6 +204,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MiniAppSectionRouteImport
       parentRoute: typeof MiniAppRoute
     }
+    '/mini-app/login': {
+      id: '/mini-app/login'
+      path: '/login'
+      fullPath: '/mini-app/login'
+      preLoaderRoute: typeof MiniAppLoginRouteImport
+      parentRoute: typeof MiniAppRoute
+    }
+    '/mini-app/register': {
+      id: '/mini-app/register'
+      path: '/register'
+      fullPath: '/mini-app/register'
+      preLoaderRoute: typeof MiniAppRegisterRouteImport
+      parentRoute: typeof MiniAppRoute
+    }
     '/api/public/telegram/webhook': {
       id: '/api/public/telegram/webhook'
       path: '/api/public/telegram/webhook'
@@ -204,11 +242,15 @@ const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
 
 interface MiniAppRouteChildren {
   MiniAppSectionRoute: typeof MiniAppSectionRoute
+  MiniAppLoginRoute: typeof MiniAppLoginRoute
+  MiniAppRegisterRoute: typeof MiniAppRegisterRoute
   MiniAppIndexRoute: typeof MiniAppIndexRoute
 }
 
 const MiniAppRouteChildren: MiniAppRouteChildren = {
   MiniAppSectionRoute: MiniAppSectionRoute,
+  MiniAppLoginRoute: MiniAppLoginRoute,
+  MiniAppRegisterRoute: MiniAppRegisterRoute,
   MiniAppIndexRoute: MiniAppIndexRoute,
 }
 

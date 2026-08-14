@@ -1,8 +1,33 @@
 import { createServerFn } from "@tanstack/react-start";
-import { resolveAuth } from "./customer-auth.server";
+import {
+  loginCustomerFromFlow,
+  logoutCustomer,
+  registerCustomerFromFlow,
+  resolveAuth,
+} from "./customer-auth.server";
 import * as data from "./customer-data.server";
 
 type Auth = { auth: string };
+
+export const completeRegistration = createServerFn({ method: "POST" })
+  .inputValidator(
+    (i: {
+      flowToken: string;
+      email: string;
+      password: string;
+      confirmPassword: string;
+      name?: string | null;
+    }) => i,
+  )
+  .handler(async ({ data: i }) => registerCustomerFromFlow(i));
+
+export const completeLogin = createServerFn({ method: "POST" })
+  .inputValidator((i: { flowToken: string; email: string; password: string }) => i)
+  .handler(async ({ data: i }) => loginCustomerFromFlow(i));
+
+export const logout = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth) => i)
+  .handler(async ({ data: i }) => logoutCustomer(i.auth));
 
 export const getDashboard = createServerFn({ method: "POST" })
   .inputValidator((i: Auth) => i)
@@ -52,7 +77,9 @@ export const runGroupDiscovery = createServerFn({ method: "POST" })
 
 export const addGroupByUsername = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { username: string; keywords: string[] }) => i)
-  .handler(async ({ data: i }) => data.addGroupByUsername(await resolveAuth(i.auth), i.username, i.keywords));
+  .handler(async ({ data: i }) =>
+    data.addGroupByUsername(await resolveAuth(i.auth), i.username, i.keywords),
+  );
 
 export const getGroups = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { status?: string }) => i)
@@ -64,7 +91,9 @@ export const getGroupDetail = createServerFn({ method: "POST" })
 
 export const approveGroup = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { id: string; connectionId?: string | null }) => i)
-  .handler(async ({ data: i }) => data.approveGroup(await resolveAuth(i.auth), i.id, i.connectionId ?? null));
+  .handler(async ({ data: i }) =>
+    data.approveGroup(await resolveAuth(i.auth), i.id, i.connectionId ?? null),
+  );
 
 export const rejectGroup = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { id: string }) => i)
@@ -82,7 +111,9 @@ export const removeGroup = createServerFn({ method: "POST" })
 
 export const findAudience = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { groupIds: string[]; onlyNew: boolean }) => i)
-  .handler(async ({ data: i }) => data.findAudience(await resolveAuth(i.auth), i.groupIds, i.onlyNew));
+  .handler(async ({ data: i }) =>
+    data.findAudience(await resolveAuth(i.auth), i.groupIds, i.onlyNew),
+  );
 
 export const getContactHistory = createServerFn({ method: "POST" })
   .inputValidator((i: Auth) => i)
@@ -94,14 +125,16 @@ export const getTemplates = createServerFn({ method: "POST" })
 
 export const saveTemplate = createServerFn({ method: "POST" })
   .inputValidator(
-    (i: Auth & {
-      id?: string | null;
-      name: string;
-      body: string;
-      media_type?: string | null;
-      media_url?: string | null;
-      buttons?: { text: string; url: string }[];
-    }) => i,
+    (
+      i: Auth & {
+        id?: string | null;
+        name: string;
+        body: string;
+        media_type?: string | null;
+        media_url?: string | null;
+        buttons?: { text: string; url: string }[];
+      },
+    ) => i,
   )
   .handler(async ({ data: i }) => data.saveTemplate(await resolveAuth(i.auth), i));
 
@@ -122,17 +155,24 @@ export const getCampaignDetail = createServerFn({ method: "POST" })
 
 export const createCampaign = createServerFn({ method: "POST" })
   .inputValidator(
-    (i: Auth & {
-      name: string;
-      type: "GROUP" | "DM" | "GROUP_DM";
-      connection_id?: string | null;
-      template_id?: string | null;
-      message: { text?: string; media_type?: string | null; media_url?: string | null; buttons?: { text: string; url: string }[] };
-      group_ids: string[];
-      contact_ids: string[];
-      scheduled_at?: string | null;
-      start_now: boolean;
-    }) => i,
+    (
+      i: Auth & {
+        name: string;
+        type: "GROUP" | "DM" | "GROUP_DM";
+        connection_id?: string | null;
+        template_id?: string | null;
+        message: {
+          text?: string;
+          media_type?: string | null;
+          media_url?: string | null;
+          buttons?: { text: string; url: string }[];
+        };
+        group_ids: string[];
+        contact_ids: string[];
+        scheduled_at?: string | null;
+        start_now: boolean;
+      },
+    ) => i,
   )
   .handler(async ({ data: i }) => data.createCampaign(await resolveAuth(i.auth), i));
 

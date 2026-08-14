@@ -17,6 +17,7 @@ export type AuthContext = {
 };
 
 const SESSION_DAYS = 30;
+const FLOW_TTL_MINUTES = 20;
 
 export function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
@@ -34,6 +35,86 @@ export async function registrationSettings() {
   }>("registration");
 }
 
+async function createCustomerSession(input: {
+  customerId: string;
+  tenantId: string;
+}): Promise<string> {
+  const token = newSessionToken();
+  await db()
+    .from("customer_sessions")
+    .insert({
+      customer_id: input.customerId,
+      tenant_id: input.tenantId,
+      token_hash: hashToken(token),
+      expires_at: new Date(Date.now() + SESSION_DAYS * 86400_000).toISOString(),
+    });
+  return token;
+}
+
+export function flowExpiresAt() {
+  return new Date(Date.now() + FLOW_TTL_MINUTES * 60_000).toISOString();
+}
+
+export async function clearTelegramFlow(telegramUserId: number) {
+  await db().from("bot_states").delete().eq("telegram_user_id", telegramUserId);
+}
+
+export async function createTelegramFlow(input: {
+  telegramUserId: number;
+  flow: "REGISTRATION" | "LOGIN";
+  step: string;
+  payload?: Record<string, unknown>;
+}): Promise<string> {
+  const token = newSessionToken();
+  await db()
+    .from("bot_states")
+    .upsert(
+      {
+        telegram_user_id: input.telegramUserId,
+        flow: input.flow,
+        step: input.step,
+        state: `${input.flow}:${input.step}`,
+        payload: input.payload ?? {},
+        flow_token_hash: hashToken(token),
+        created_at: new Date().toISOString(),
+        expires_at: flowExpiresAt(),
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "telegram_user_id" },
+    );
+  return token;
+}
+
+async function consumeTelegramFlow(
+  token: string,
+  expectedFlow: "REGISTRATION" | "LOGIN",
+): Promise<{
+  telegramUserId: number;
+  payload: Record<string, unknown>;
+}> {
+  if (!token)
+    throw new Error("This registration link is invalid. Return to the bot and start again.");
+  const client = db();
+  const { data } = await client
+    .from("bot_states")
+    .select("telegram_user_id, flow, payload, expires_at")
+    .eq("flow_token_hash", hashToken(token))
+    .maybeSingle();
+
+  if (!data || data.flow !== expectedFlow) {
+    throw new Error("This secure link is invalid. Return to the bot and start again.");
+  }
+  if (new Date(data.expires_at as string) < new Date()) {
+    await clearTelegramFlow(data.telegram_user_id as number);
+    throw new Error("This secure link expired. Return to the bot and start again.");
+  }
+
+  return {
+    telegramUserId: data.telegram_user_id as number,
+    payload: (data.payload as Record<string, unknown>) ?? {},
+  };
+}
+
 /** Creates a tenant + customer pair. Returns an error string on failure. */
 export async function registerCustomer(input: {
   email: string;
@@ -49,10 +130,17 @@ export async function registerCustomer(input: {
 
   const settings = await registrationSettings();
   if (settings.registration_enabled === false)
-    return { ok: false, error: "Registration is currently disabled by the platform administrator." };
+    return {
+      ok: false,
+      error: "Registration is currently disabled by the platform administrator.",
+    };
 
   const client = db();
-  const { data: existing } = await client.from("customers").select("id").eq("email", email).maybeSingle();
+  const { data: existing } = await client
+    .from("customers")
+    .select("id")
+    .eq("email", email)
+    .maybeSingle();
   if (existing) return { ok: false, error: "An account with this email already exists." };
 
   const { data: plan } = await client
@@ -92,7 +180,10 @@ export async function registerCustomer(input: {
 
   if (customerError || !customer) {
     await client.from("tenants").delete().eq("id", tenant.id);
-    return { ok: false, error: "Could not create the account. This Telegram account may already be linked." };
+    return {
+      ok: false,
+      error: "Could not create the account. This Telegram account may already be linked.",
+    };
   }
 
   await client.from("tenant_members").insert({
@@ -141,12 +232,9 @@ export async function loginCustomer(input: {
   if (customer.status !== "ACTIVE")
     return { ok: false, error: "This account is suspended. Contact support." };
 
-  const token = newSessionToken();
-  await client.from("customer_sessions").insert({
-    customer_id: customer.id,
-    tenant_id: customer.tenant_id,
-    token_hash: hashToken(token),
-    expires_at: new Date(Date.now() + SESSION_DAYS * 86400_000).toISOString(),
+  const token = await createCustomerSession({
+    customerId: customer.id as string,
+    tenantId: customer.tenant_id as string,
   });
 
   const patch: Record<string, unknown> = { last_login_at: new Date().toISOString() };
@@ -163,6 +251,67 @@ export async function loginCustomer(input: {
     resource: email,
   });
   return { ok: true, token, customerId: customer.id as string };
+}
+
+export async function registerCustomerFromFlow(input: {
+  flowToken: string;
+  email: string;
+  password: string;
+  confirmPassword: string;
+  name?: string | null;
+}): Promise<{ token: string; customerId: string; tenantId: string }> {
+  if (input.password !== input.confirmPassword) throw new Error("Passwords do not match.");
+  const flow = await consumeTelegramFlow(input.flowToken, "REGISTRATION");
+  const flowEmail = normalizeEmail(String(flow.payload["email"] ?? ""));
+  const email = normalizeEmail(input.email);
+  if (!flowEmail || flowEmail !== email) {
+    throw new Error("Use the same email address you entered in Telegram.");
+  }
+
+  const res = await registerCustomer({
+    email,
+    password: input.password,
+    name: input.name ?? null,
+    telegramUserId: flow.telegramUserId,
+    telegramUsername:
+      typeof flow.payload["telegram_username"] === "string"
+        ? (flow.payload["telegram_username"] as string)
+        : null,
+  });
+  if (!res.ok) throw new Error(res.error);
+
+  const token = await createCustomerSession({ customerId: res.customerId, tenantId: res.tenantId });
+  await clearTelegramFlow(flow.telegramUserId);
+  return { token, customerId: res.customerId, tenantId: res.tenantId };
+}
+
+export async function loginCustomerFromFlow(input: {
+  flowToken: string;
+  email: string;
+  password: string;
+}): Promise<{ token: string; customerId: string }> {
+  const flow = await consumeTelegramFlow(input.flowToken, "LOGIN");
+  const res = await loginCustomer({
+    email: input.email,
+    password: input.password,
+    telegramUserId: flow.telegramUserId,
+    telegramUsername:
+      typeof flow.payload["telegram_username"] === "string"
+        ? (flow.payload["telegram_username"] as string)
+        : null,
+  });
+  if (!res.ok) throw new Error(res.error);
+  await clearTelegramFlow(flow.telegramUserId);
+  return { token: res.token, customerId: res.customerId };
+}
+
+export async function logoutCustomer(auth: string | undefined | null) {
+  if (!auth?.startsWith("sess ")) return { ok: true };
+  await db()
+    .from("customer_sessions")
+    .delete()
+    .eq("token_hash", hashToken(auth.slice(5)));
+  return { ok: true };
 }
 
 /**
@@ -200,7 +349,8 @@ export async function resolveAuth(auth: string | undefined | null): Promise<Auth
       .select("customer_id, tenant_id, expires_at")
       .eq("token_hash", hashToken(auth.slice(5)))
       .maybeSingle();
-    if (!data || new Date(data.expires_at as string) < new Date()) throw new Error("UNAUTHENTICATED");
+    if (!data || new Date(data.expires_at as string) < new Date())
+      throw new Error("UNAUTHENTICATED");
     const { data: customer } = await client
       .from("customers")
       .select("id, tenant_id, email, name, telegram_user_id, status")

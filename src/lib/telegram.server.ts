@@ -67,18 +67,33 @@ export function buildSendArgs(chatId: string | number, message: MessagePayload) 
   if (message.media_url && message.media_type === "photo") {
     return {
       method: "sendPhoto",
-      body: { chat_id: chatId, photo: message.media_url, caption: message.text ?? "", reply_markup },
+      body: {
+        chat_id: chatId,
+        photo: message.media_url,
+        caption: message.text ?? "",
+        reply_markup,
+      },
     };
   }
   if (message.media_url && message.media_type === "video") {
     return {
       method: "sendVideo",
-      body: { chat_id: chatId, video: message.media_url, caption: message.text ?? "", reply_markup },
+      body: {
+        chat_id: chatId,
+        video: message.media_url,
+        caption: message.text ?? "",
+        reply_markup,
+      },
     };
   }
   return {
     method: "sendMessage",
-    body: { chat_id: chatId, text: message.text ?? "", disable_web_page_preview: false, reply_markup },
+    body: {
+      chat_id: chatId,
+      text: message.text ?? "",
+      disable_web_page_preview: false,
+      reply_markup,
+    },
   };
 }
 
@@ -118,38 +133,54 @@ export async function telegramSettings() {
   };
 }
 
-function configuredWebhookUrl(): string {
-  const base = process.env["PUBLIC_APP_URL"] ?? "https://telegram-promo-suite.lovable.app";
-  return `${base.replace(/\/$/, "")}/api/public/telegram/webhook`;
+function configuredWebhookUrl(): string | null {
+  const base = process.env["PUBLIC_APP_URL"];
+  if (!base) return null;
+  try {
+    const url = new URL(base);
+    if (!["https:", "http:"].includes(url.protocol)) return null;
+    const webhook = new URL("/api/public/telegram/webhook", url.origin);
+    return webhook.toString();
+  } catch {
+    return null;
+  }
 }
 
 async function saveWebhookHealth(info: TelegramWebhookInfo, status: string) {
   const current = await getSetting<Record<string, unknown>>("telegram");
-  await db().from("system_settings").upsert(
-    {
-      key: "telegram",
-      value: {
-        ...current,
-        webhook_url: info.url,
-        webhook_status: status,
-        webhook_pending_updates: info.pending_update_count,
-        webhook_last_error: info.last_error_message ?? null,
-        webhook_last_error_at: info.last_error_date
-          ? new Date(info.last_error_date * 1000).toISOString()
-          : null,
-        webhook_last_checked_at: new Date().toISOString(),
+  await db()
+    .from("system_settings")
+    .upsert(
+      {
+        key: "telegram",
+        value: {
+          ...current,
+          webhook_url: info.url,
+          webhook_status: status,
+          webhook_pending_updates: info.pending_update_count,
+          webhook_last_error: info.last_error_message ?? null,
+          webhook_last_error_at: info.last_error_date
+            ? new Date(info.last_error_date * 1000).toISOString()
+            : null,
+          webhook_last_checked_at: new Date().toISOString(),
+        },
+        updated_at: new Date().toISOString(),
       },
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "key" },
-  );
+      { onConflict: "key" },
+    );
 }
 
 export async function checkWebhook() {
+  const expectedUrl = configuredWebhookUrl();
+  if (!expectedUrl) return { ok: false as const, error: "PUBLIC_APP_URL is not configured" };
   const result = await callBot<TelegramWebhookInfo>("getWebhookInfo", {});
   if (!result.ok) return result;
-  const expectedUrl = configuredWebhookUrl();
-  const status = result.result.url === expectedUrl ? "HEALTHY" : result.result.url ? "WRONG_URL" : "NOT_REGISTERED";
+  const status =
+    result.result.url === expectedUrl
+      ? "HEALTHY"
+      : result.result.url
+        ? "WRONG_URL"
+        : "NOT_REGISTERED";
   await saveWebhookHealth(result.result, status);
   return { ok: true as const, result: { ...result.result, expected_url: expectedUrl, status } };
 }
@@ -158,6 +189,7 @@ export async function registerWebhook() {
   const token = botToken();
   if (!token) return { ok: false as const, error: "Telegram bot token is not configured" };
   const url = configuredWebhookUrl();
+  if (!url) return { ok: false as const, error: "PUBLIC_APP_URL is not configured" };
   const registration = await callBot<boolean>("setWebhook", {
     url,
     secret_token: deriveWebhookSecret(token),
@@ -167,7 +199,10 @@ export async function registerWebhook() {
   const verification = await checkWebhook();
   if (!verification.ok) return verification;
   if (verification.result.url !== url) {
-    return { ok: false as const, error: `Telegram confirmed a different webhook URL: ${verification.result.url || "none"}` };
+    return {
+      ok: false as const,
+      error: `Telegram confirmed a different webhook URL: ${verification.result.url || "none"}`,
+    };
   }
   return verification;
 }
