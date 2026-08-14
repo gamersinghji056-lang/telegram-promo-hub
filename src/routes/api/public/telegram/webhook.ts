@@ -19,6 +19,27 @@ type Update = {
   callback_query?: { id: string; from: TgUser; data?: string; message?: TgMessage };
 };
 
+function diagnostic(event: string, details: Record<string, unknown>) {
+  console.info(JSON.stringify({ event: `telegram_webhook_${event}`, ...details }));
+}
+
+function updateType(update: Update) {
+  if (update.callback_query) return "callback_query";
+  if (update.message) return "message";
+  if (update.edited_message) return "edited_message";
+  return "unknown";
+}
+
+function updateChatId(update: Update) {
+  return (
+    update.callback_query?.message?.chat.id ??
+    update.callback_query?.from.id ??
+    update.message?.chat.id ??
+    update.edited_message?.chat.id ??
+    null
+  );
+}
+
 async function miniAppUrl() {
   const s = await getSetting<{ mini_app_url?: string }>("telegram");
   return validMiniAppUrl(s.mini_app_url ?? "");
@@ -100,6 +121,12 @@ async function send(chatId: number, text: string, keyboard?: Record<string, unkn
     text,
     parse_mode: "HTML",
     reply_markup: keyboard,
+  });
+  diagnostic("telegram_api", {
+    method: "sendMessage",
+    chat_id: chatId,
+    ok: result.ok,
+    error: result.ok ? null : result.error,
   });
   if (!result.ok) throw new Error(`Telegram sendMessage failed: ${result.error}`);
 }
@@ -232,20 +259,24 @@ async function handlePrivateText(msg: TgMessage) {
   const { flow, step } = await getState(userId);
 
   if (text === "/start" || text === "/menu") {
+    diagnostic("handler", { handler: "main_menu", chat_id: chatId });
     await clearTelegramFlow(userId);
     await mainMenu(chatId, userId);
     return;
   }
   if (text === "/register") {
+    diagnostic("handler", { handler: "registration_email", chat_id: chatId });
     await setState(userId, "REGISTRATION", "EMAIL");
     await send(chatId, "Send the email address you want to register with.");
     return;
   }
   if (text === "/login") {
+    diagnostic("handler", { handler: "login_button", chat_id: chatId });
     await sendLoginButton(msg);
     return;
   }
   if (text === "/help") {
+    diagnostic("handler", { handler: "help", chat_id: chatId });
     await send(
       chatId,
       "Register or log in here, then open the Mini App — it is your full dashboard: connections, group discovery, audience, campaigns, analytics and billing.",
@@ -253,12 +284,14 @@ async function handlePrivateText(msg: TgMessage) {
     return;
   }
   if (text === "/cancel") {
+    diagnostic("handler", { handler: "cancel", chat_id: chatId });
     await clearTelegramFlow(userId);
     await send(chatId, "Cancelled.");
     return;
   }
 
   if (flow === "REGISTRATION" && step === "EMAIL") {
+    diagnostic("handler", { handler: "registration_continue", chat_id: chatId });
     const email = normalizeEmail(text);
     if (!validEmail(email)) {
       await send(chatId, "Send a valid email address, or /cancel to stop registration.");
@@ -269,11 +302,74 @@ async function handlePrivateText(msg: TgMessage) {
   }
 
   if ((flow === "REGISTRATION" || flow === "LOGIN") && step === "MINI_APP") {
+    diagnostic("handler", { handler: "mini_app_wait", chat_id: chatId });
     await send(chatId, "Use the secure Mini App button to continue, or send /cancel to stop.");
     return;
   }
 
+  diagnostic("handler", { handler: "fallback_menu", chat_id: chatId });
   await mainMenu(chatId, userId);
+}
+
+async function processUpdate(update: Update) {
+  try {
+    if (update.callback_query) {
+      const cq = update.callback_query;
+      const chatId = cq.message?.chat.id ?? cq.from.id;
+      diagnostic("handler", { handler: `callback_${cq.data ?? "unknown"}`, chat_id: chatId });
+      await callBot("answerCallbackQuery", { callback_query_id: cq.id });
+      if (cq.data === "register") {
+        await setState(cq.from.id, "REGISTRATION", "EMAIL");
+        await send(chatId, "Send the email address you want to register with.");
+      } else if (cq.data === "login") {
+        await sendLoginButton({
+          chat: { id: chatId, type: "private" },
+          from: cq.from,
+          message_id: cq.message?.message_id ?? 0,
+        });
+      } else if (cq.data === "help") {
+        await send(chatId, "Register, log in, then open the Mini App to manage everything.");
+      } else if (cq.data === "miniapp_missing") {
+        await send(
+          chatId,
+          "The Mini App URL has not been configured by the platform admin yet.",
+        );
+      }
+      return;
+    }
+
+    const msg = update.message ?? update.edited_message;
+    if (!msg?.from) return;
+
+    if (msg.chat.type === "private") await handlePrivateText(msg);
+    else {
+      diagnostic("handler", { handler: "capture_opt_in", chat_id: msg.chat.id });
+      await captureOptIn(msg);
+    }
+    const current = await getSetting<Record<string, unknown>>("telegram");
+    await db()
+      .from("system_settings")
+      .upsert(
+        {
+          key: "telegram",
+          value: { ...current, last_successful_update_at: new Date().toISOString() },
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "key" },
+      );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown Telegram webhook error";
+    diagnostic("error", {
+      update_id: update.update_id,
+      chat_id: updateChatId(update),
+      error: message,
+    });
+    await logSystem({
+      action: "BOT_WEBHOOK_ERROR",
+      status: "FAILED",
+      details: { update_id: update.update_id, message },
+    });
+  }
 }
 
 export const Route = createFileRoute("/api/public/telegram/webhook")({
@@ -287,54 +383,17 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
         const provided = request.headers.get("x-telegram-bot-api-secret-token") ?? "";
         if (!safeEqual(provided, expected)) return new Response("Unauthorized", { status: 401 });
 
-        const update = (await request.json()) as Update;
-
         try {
-          if (update.callback_query) {
-            const cq = update.callback_query;
-            const chatId = cq.message?.chat.id ?? cq.from.id;
-            await callBot("answerCallbackQuery", { callback_query_id: cq.id });
-            if (cq.data === "register") {
-              await setState(cq.from.id, "REGISTRATION", "EMAIL");
-              await send(chatId, "Send the email address you want to register with.");
-            } else if (cq.data === "login") {
-              await sendLoginButton({
-                chat: { id: chatId, type: "private" },
-                from: cq.from,
-                message_id: cq.message?.message_id ?? 0,
-              });
-            } else if (cq.data === "help") {
-              await send(chatId, "Register, log in, then open the Mini App to manage everything.");
-            } else if (cq.data === "miniapp_missing") {
-              await send(
-                chatId,
-                "The Mini App URL has not been configured by the platform admin yet.",
-              );
-            }
-            return Response.json({ ok: true });
-          }
-
-          const msg = update.message ?? update.edited_message;
-          if (!msg?.from) return Response.json({ ok: true });
-
-          if (msg.chat.type === "private") await handlePrivateText(msg);
-          else await captureOptIn(msg);
-          const current = await getSetting<Record<string, unknown>>("telegram");
-          await db()
-            .from("system_settings")
-            .upsert(
-              {
-                key: "telegram",
-                value: { ...current, last_successful_update_at: new Date().toISOString() },
-                updated_at: new Date().toISOString(),
-              },
-              { onConflict: "key" },
-            );
+          const update = (await request.json()) as Update;
+          diagnostic("received", {
+            update_id: update.update_id,
+            message_type: updateType(update),
+            chat_id: updateChatId(update),
+          });
+          void processUpdate(update);
         } catch (error) {
-          await logSystem({
-            action: "BOT_WEBHOOK_ERROR",
-            status: "FAILED",
-            details: { message: (error as Error).message },
+          diagnostic("parse_error", {
+            error: error instanceof Error ? error.message : "Invalid update payload",
           });
         }
         return Response.json({ ok: true });
