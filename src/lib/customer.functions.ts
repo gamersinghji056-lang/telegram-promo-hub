@@ -191,6 +191,16 @@ export const getGroupCategories = createServerFn({ method: "POST" })
   .inputValidator((i: Auth) => i)
   .handler(async ({ data: i }) => data.listGroupCategories(await resolveAuth(i.auth)));
 
+export const getGroupWritabilitySummary = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth) => i)
+  .handler(async ({ data: i }) => data.groupWritabilitySummary(await resolveAuth(i.auth)));
+
+export const verifyWritableGroups = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { limit?: number }) => i)
+  .handler(async ({ data: i }) =>
+    data.verifyWritableGroups(await resolveAuth(i.auth), i.limit ?? 40),
+  );
+
 export const getGroupCategoryDetail = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { id: string }) => i)
   .handler(async ({ data: i }) => data.groupCategoryDetail(await resolveAuth(i.auth), i.id));

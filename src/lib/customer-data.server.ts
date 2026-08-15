@@ -13,6 +13,7 @@ import {
   resolvePublicGroupViaUserSession,
   searchPublicGroupsViaUserSession,
   startUserSessionLogin,
+  verifyGroupWritableViaUserSession,
 } from "./telegram-user-session.server";
 
 const MAX_TELEGRAM_SESSIONS = 20;
@@ -86,6 +87,77 @@ function normalizePublicGroupInput(value: string) {
   return handle;
 }
 
+const PENDING_JOB_STATUSES = ["QUEUED", "PROCESSING", "HELD", "PAUSED", "COOLDOWN"];
+const FAILED_JOB_STATUSES = [
+  "FAILED",
+  "SKIPPED",
+  "EXCLUDED",
+  "ENTITY_UNAVAILABLE",
+  "NOT_WRITABLE",
+  "CANCELLED",
+];
+
+type CampaignJobStats = {
+  total_messages: number;
+  sent_messages: number;
+  pending_messages: number;
+  failed_messages: number;
+};
+
+function emptyJobStats(): CampaignJobStats {
+  return { total_messages: 0, sent_messages: 0, pending_messages: 0, failed_messages: 0 };
+}
+
+async function campaignJobStatsMap(
+  client: ReturnType<typeof db>,
+  tenantId: string,
+  campaignIds: string[],
+) {
+  const map = new Map<string, CampaignJobStats>();
+  if (!campaignIds.length) return map;
+  const { data } = await client
+    .from("campaign_job_stats")
+    .select("campaign_id, total_messages, sent_messages, pending_messages, failed_messages")
+    .eq("tenant_id", tenantId)
+    .in("campaign_id", campaignIds);
+  for (const row of data ?? []) {
+    map.set(String(row.campaign_id), {
+      total_messages: Number(row.total_messages ?? 0),
+      sent_messages: Number(row.sent_messages ?? 0),
+      pending_messages: Number(row.pending_messages ?? 0),
+      failed_messages: Number(row.failed_messages ?? 0),
+    });
+  }
+  return map;
+}
+
+function withCampaignJobStats<T extends Record<string, unknown>>(
+  campaign: T,
+  stats: CampaignJobStats | undefined,
+) {
+  const next = stats ?? emptyJobStats();
+  return {
+    ...campaign,
+    job_stats: next,
+    total_targets: next.total_messages || Number(campaign.total_targets ?? 0),
+    completed_count: next.sent_messages,
+    failed_count: next.failed_messages,
+    pending_count: next.pending_messages,
+  };
+}
+
+function sumJobStats(rows: CampaignJobStats[]) {
+  return rows.reduce(
+    (total, row) => ({
+      total_messages: total.total_messages + Number(row.total_messages ?? 0),
+      sent_messages: total.sent_messages + Number(row.sent_messages ?? 0),
+      pending_messages: total.pending_messages + Number(row.pending_messages ?? 0),
+      failed_messages: total.failed_messages + Number(row.failed_messages ?? 0),
+    }),
+    emptyJobStats(),
+  );
+}
+
 /* ---------------------------------- plan / usage --------------------------------- */
 
 export async function tenantOverview(ctx: AuthContext) {
@@ -125,6 +197,7 @@ export async function dashboard(ctx: AuthContext) {
     groupsFound,
     groupsPending,
     groupsApproved,
+    groupsWritable,
     groupsJoined,
     audienceTotal,
     audienceContacted,
@@ -148,6 +221,7 @@ export async function dashboard(ctx: AuthContext) {
     count("discovered_groups"),
     count("discovered_groups", { status: "FOUND" }),
     count("discovered_groups", { status: "APPROVED" }),
+    count("discovered_groups", { can_send_messages: true, writable_status: "WRITABLE" }),
     count("discovered_groups", { status: "JOINED" }),
     count("audience_contacts"),
     count("audience_contacts", { status: "CONTACTED" }),
@@ -167,6 +241,11 @@ export async function dashboard(ctx: AuthContext) {
 
   const tenant = await tenantOverview(ctx);
   const plan = (tenant as { plans?: Record<string, number | string> } | null)?.plans ?? null;
+  const { data: jobStatsRows } = await client
+    .from("campaign_job_stats")
+    .select("total_messages, sent_messages, pending_messages, failed_messages")
+    .eq("tenant_id", t);
+  const messageStats = sumJobStats((jobStatsRows ?? []) as CampaignJobStats[]);
 
   return {
     connections: {
@@ -180,6 +259,7 @@ export async function dashboard(ctx: AuthContext) {
       found: groupsFound,
       pending: groupsPending,
       approved: groupsApproved,
+      writable: groupsWritable,
       joined: groupsJoined,
     },
     audience: {
@@ -187,7 +267,15 @@ export async function dashboard(ctx: AuthContext) {
       contacted: audienceContacted,
       available: Math.max(audienceTotal - audienceContacted, 0),
     },
-    campaigns: { running, scheduled, completed, failed, dm: dmCampaigns, group: groupCampaigns },
+    campaigns: {
+      running,
+      scheduled,
+      completed,
+      failed,
+      dm: dmCampaigns,
+      group: groupCampaigns,
+      messages: messageStats,
+    },
     usage: {
       messagesUsed: (tenant as { messages_used?: number } | null)?.messages_used ?? 0,
       messageLimit: Number(plan?.["monthly_message_limit"] ?? 0),
@@ -1194,6 +1282,7 @@ export type AudienceUser = {
   recent_activity_at?: string | null;
   messages_observed?: number;
   active_source_group_ids?: string[];
+  has_username?: boolean;
 };
 
 export type AudienceFilter =
@@ -1215,7 +1304,7 @@ const ACTIVE_PRESENCE = ["ONLINE", "RECENTLY", "WITHIN_WEEK", "WITHIN_MONTH"];
 const RECENT_PRESENCE = ["ONLINE", "RECENTLY", "WITHIN_WEEK"];
 
 function audienceColumns() {
-  return "id, telegram_user_id, access_hash, display_name, username, source_group_id, eligibility, status, entity_status, contact_count, first_found_at, last_contacted_at, presence_status, last_seen_at, recent_activity_at, messages_observed, active_source_group_ids, discovered_groups(title, username)";
+  return "id, telegram_user_id, access_hash, display_name, username, has_username, source_group_id, eligibility, status, entity_status, contact_count, first_found_at, last_contacted_at, presence_status, last_seen_at, recent_activity_at, messages_observed, active_source_group_ids, discovered_groups(title, username)";
 }
 
 function normalizeAudienceOptions(
@@ -1252,6 +1341,26 @@ function applyAudienceFilters(query: any, options: Required<AudienceQueryOptions
   return q;
 }
 
+function orderAudience(query: any) {
+  return query
+    .order("has_username", { ascending: false, nullsFirst: false })
+    .order("messages_observed", { ascending: false, nullsFirst: false })
+    .order("recent_activity_at", { ascending: false, nullsFirst: false })
+    .order("last_seen_at", { ascending: false, nullsFirst: false })
+    .order("first_found_at", { ascending: false });
+}
+
+function audienceCountBase(client: ReturnType<typeof db>, tenantId: string, options: Required<AudienceQueryOptions>) {
+  let q = client
+    .from("audience_contacts")
+    .select("id", { count: "exact", head: true })
+    .eq("tenant_id", tenantId)
+    .eq("eligibility", "OPTED_IN");
+  if (options.groupIds.length) q = q.in("source_group_id", options.groupIds);
+  if (options.onlyNew) q = q.eq("contact_count", 0);
+  return q;
+}
+
 export async function findAudience(
   ctx: AuthContext,
   groupIdsOrOptions: string[] | AudienceQueryOptions,
@@ -1262,6 +1371,8 @@ export async function findAudience(
   previouslyContacted: number;
   duplicates: number;
   excluded: number;
+  excludedInactive: number;
+  withUsername: number;
   activePosters: number;
   page: number;
   pageSize: number;
@@ -1280,12 +1391,10 @@ export async function findAudience(
     .eq("tenant_id", ctx.tenantId);
   const from = (options.page - 1) * options.pageSize;
   const to = from + options.pageSize - 1;
-  const { data, count } = await applyAudienceFilters(base, options)
-    .order("first_found_at", { ascending: false })
-    .range(from, to);
+  const { data, count } = await orderAudience(applyAudienceFilters(base, options)).range(from, to);
   const rows = (data ?? []) as unknown as AudienceUser[];
 
-  const [allRows, eligibleCount, contactedCount, activePosters] = await Promise.all([
+  const [allRows, eligibleCount, contactedCount, activePosters, excludedInactive, withUsername] = await Promise.all([
     client
       .from("audience_contacts")
       .select("telegram_user_id", { count: "exact", head: true })
@@ -1305,6 +1414,14 @@ export async function findAudience(
       .select("id", { count: "exact", head: true })
       .eq("tenant_id", ctx.tenantId)
       .gt("messages_observed", 0),
+    audienceCountBase(client, ctx.tenantId, options).eq("presence_status", "LONG_AGO"),
+    applyAudienceFilters(
+      client
+        .from("audience_contacts")
+        .select("id", { count: "exact", head: true })
+        .eq("tenant_id", ctx.tenantId),
+      options,
+    ).eq("has_username", true),
   ]);
   const totalAll = allRows.count ?? 0;
   const eligibleTotal = eligibleCount.count ?? 0;
@@ -1317,6 +1434,8 @@ export async function findAudience(
     previouslyContacted: contactedTotal,
     duplicates: 0,
     excluded: Math.max(totalAll - eligibleTotal, 0),
+    excludedInactive: excludedInactive.count ?? 0,
+    withUsername: withUsername.count ?? 0,
     activePosters: activePosters.count ?? 0,
     page: options.page,
     pageSize: options.pageSize,
@@ -1338,15 +1457,13 @@ export async function selectAudienceIds(
   const rangeTo = input.rangeTo ? Math.max(rangeFrom ?? 1, Number(input.rangeTo)) : null;
   const from = rangeFrom ? rangeFrom - 1 : 0;
   const to = rangeTo ? rangeTo - 1 : 4999;
-  const { data } = await applyAudienceFilters(
+  const { data } = await orderAudience(applyAudienceFilters(
     db()
       .from("audience_contacts")
       .select("id")
       .eq("tenant_id", ctx.tenantId),
     options,
-  )
-    .order("first_found_at", { ascending: false })
-    .range(from, Math.min(to, 4999));
+  )).range(from, Math.min(to, 4999));
   return { ids: (data ?? []).map((row) => row.id as string) };
 }
 
@@ -1680,6 +1797,145 @@ export async function groupCategoryDetail(ctx: AuthContext, id: string) {
   return { category, groups };
 }
 
+async function applySuccessfulSendWritableProof(ctx: AuthContext) {
+  const client = db();
+  const { data: jobs } = await client
+    .from("campaign_jobs")
+    .select("target_id")
+    .eq("tenant_id", ctx.tenantId)
+    .eq("job_type", "GROUP")
+    .eq("status", "SENT")
+    .limit(5000);
+  const targetIds = [...new Set((jobs ?? []).map((job) => job.target_id as string).filter(Boolean))];
+  if (!targetIds.length) return 0;
+  const { data: targets } = await client
+    .from("campaign_groups")
+    .select("group_id")
+    .eq("tenant_id", ctx.tenantId)
+    .in("id", targetIds);
+  const groupIds = [...new Set((targets ?? []).map((target) => target.group_id as string).filter(Boolean))];
+  if (!groupIds.length) return 0;
+  const { error } = await client
+    .from("discovered_groups")
+    .update({
+      can_send_messages: true,
+      writable_status: "WRITABLE",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("tenant_id", ctx.tenantId)
+    .in("id", groupIds)
+    .neq("writable_status", "NOT_WRITABLE");
+  if (error) throw new Error(error.message);
+  return groupIds.length;
+}
+
+export async function groupWritabilitySummary(ctx: AuthContext) {
+  const client = db();
+  await applySuccessfulSendWritableProof(ctx);
+  const [total, writable, notWritable, unknown] = await Promise.all([
+    client
+      .from("discovered_groups")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", ctx.tenantId)
+      .in("status", ["APPROVED", "JOINED"]),
+    client
+      .from("discovered_groups")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", ctx.tenantId)
+      .in("status", ["APPROVED", "JOINED"])
+      .eq("can_send_messages", true)
+      .eq("writable_status", "WRITABLE"),
+    client
+      .from("discovered_groups")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", ctx.tenantId)
+      .in("status", ["APPROVED", "JOINED"])
+      .eq("writable_status", "NOT_WRITABLE"),
+    client
+      .from("discovered_groups")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", ctx.tenantId)
+      .in("status", ["APPROVED", "JOINED"])
+      .or("writable_status.is.null,writable_status.eq.UNKNOWN,can_send_messages.is.null"),
+  ]);
+  return {
+    total: total.count ?? 0,
+    writable: writable.count ?? 0,
+    notWritable: notWritable.count ?? 0,
+    unknown: unknown.count ?? 0,
+  };
+}
+
+export async function verifyWritableGroups(ctx: AuthContext, limit = 40) {
+  const client = db();
+  const proofCount = await applySuccessfulSendWritableProof(ctx);
+  const { data: unknownGroups } = await client
+    .from("discovered_groups")
+    .select("id, title, username, telegram_group_id, access_hash, entity_type")
+    .eq("tenant_id", ctx.tenantId)
+    .in("status", ["APPROVED", "JOINED"])
+    .or("writable_status.is.null,writable_status.eq.UNKNOWN,can_send_messages.is.null")
+    .order("updated_at", { ascending: true, nullsFirst: true })
+    .limit(Math.max(1, Math.min(100, Number(limit) || 40)));
+  const rows = unknownGroups ?? [];
+  const result = {
+    checked: 0,
+    total: rows.length,
+    writable: proofCount,
+    notWritable: 0,
+    unknown: 0,
+    errors: [] as { group: string; reason: string }[],
+  };
+  if (!rows.length) return { ...result, summary: await groupWritabilitySummary(ctx) };
+  const connection = await defaultHealthyConnection(ctx);
+  for (const group of rows) {
+    result.checked += 1;
+    try {
+      const verified = await verifyGroupWritableViaUserSession(ctx.tenantId, connection.id as string, {
+        username: group.username as string | null,
+        telegram_group_id: group.telegram_group_id as number | null,
+        access_hash: group.access_hash as string | null,
+        entity_type: group.entity_type as string | null,
+      });
+      const writable = verified.writableStatus === "WRITABLE";
+      const notWritable = verified.writableStatus === "NOT_WRITABLE";
+      await client
+        .from("discovered_groups")
+        .update({
+          title: verified.title ?? group.title,
+          username: verified.username ?? group.username,
+          telegram_group_id: verified.telegramGroupId ?? group.telegram_group_id,
+          access_hash: verified.accessHash ?? group.access_hash,
+          entity_type: verified.entityType ?? group.entity_type,
+          can_send_messages: writable ? true : notWritable ? false : null,
+          writable_status: verified.writableStatus,
+          last_resolved_connection_id: connection.id,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("tenant_id", ctx.tenantId)
+        .eq("id", group.id);
+      if (writable) result.writable += 1;
+      else if (notWritable) result.notWritable += 1;
+      else result.unknown += 1;
+    } catch (error) {
+      result.unknown += 1;
+      result.errors.push({
+        group: String(group.title ?? group.username ?? group.id),
+        reason: error instanceof Error ? error.message : "Verification failed.",
+      });
+    }
+  }
+  await clientConnectionUsed(ctx.tenantId, connection.id as string);
+  await notify(
+    ctx.tenantId,
+    "Group verification completed",
+    `Checked ${result.checked} group(s). Writable: ${result.writable}. Not writable: ${result.notWritable}. Unknown: ${result.unknown}.`,
+    "INFO",
+    "/mini-app/group-categories",
+  );
+  return { ...result, summary: await groupWritabilitySummary(ctx) };
+}
+
 export async function saveGroupCategory(
   ctx: AuthContext,
   input: { id?: string | null; name: string; group_ids: string[] },
@@ -1794,7 +2050,8 @@ export async function deleteTemplate(ctx: AuthContext, id: string) {
 /* --------------------------------- campaigns -------------------------------------- */
 
 export async function listCampaigns(ctx: AuthContext, filter?: string) {
-  let q = db()
+  const client = db();
+  let q = client
     .from("campaigns")
     .select("*, group_categories(name)")
     .eq("tenant_id", ctx.tenantId)
@@ -1802,7 +2059,13 @@ export async function listCampaigns(ctx: AuthContext, filter?: string) {
   if (filter && ["GROUP", "DM", "GROUP_DM"].includes(filter)) q = q.eq("type", filter);
   else if (filter && filter !== "ALL") q = q.eq("status", filter);
   const { data } = await q.order("created_at", { ascending: false }).limit(200);
-  return data ?? [];
+  const rows = data ?? [];
+  const stats = await campaignJobStatsMap(
+    client,
+    ctx.tenantId,
+    rows.map((row) => row.id as string),
+  );
+  return rows.map((row) => withCampaignJobStats(row, stats.get(row.id as string)));
 }
 
 export async function campaignDetail(ctx: AuthContext, id: string) {
@@ -1814,7 +2077,7 @@ export async function campaignDetail(ctx: AuthContext, id: string) {
     .eq("tenant_id", ctx.tenantId)
     .maybeSingle();
   if (!campaign) throw new Error("Campaign not found.");
-  const [{ data: groups }, { data: recipients }, { data: logs }] = await Promise.all([
+  const [{ data: groups }, { data: recipients }, { data: logs }, stats] = await Promise.all([
     client
       .from("campaign_groups")
       .select("*, discovered_groups(title, username)")
@@ -1833,8 +2096,14 @@ export async function campaignDetail(ctx: AuthContext, id: string) {
       .eq("campaign_id", id)
       .order("created_at", { ascending: false })
       .limit(100),
+    campaignJobStatsMap(client, ctx.tenantId, [id]),
   ]);
-  return { campaign, groups: groups ?? [], recipients: recipients ?? [], logs: logs ?? [] };
+  return {
+    campaign: withCampaignJobStats(campaign, stats.get(id)),
+    groups: groups ?? [],
+    recipients: recipients ?? [],
+    logs: logs ?? [],
+  };
 }
 
 export async function createCampaign(
@@ -2176,16 +2445,69 @@ export async function controlCampaign(
 export async function analytics(ctx: AuthContext) {
   const client = db();
   const t = ctx.tenantId;
-  const [{ data: campaigns }, { data: groups }, { data: contacts }] = await Promise.all([
+  const [
+    { data: campaigns },
+    { data: groups },
+    { data: contacts },
+    { data: jobStats },
+    totalUsers,
+    eligibleUsers,
+    active30,
+    activePosters,
+    inactive,
+    unknownPresence,
+    connectedSessions,
+  ] = await Promise.all([
     client
       .from("campaigns")
-      .select("created_at, status, completed_count, failed_count, total_targets")
+      .select("created_at, status, type")
       .eq("tenant_id", t),
-    client.from("discovered_groups").select("status, discovered_at").eq("tenant_id", t),
+    client
+      .from("discovered_groups")
+      .select("status, discovered_at, can_send_messages, writable_status")
+      .eq("tenant_id", t),
     client
       .from("audience_contacts")
-      .select("contact_count, first_found_at, last_contacted_at")
+      .select("contact_count, first_found_at, last_contacted_at, presence_status, messages_observed, recent_activity_at")
       .eq("tenant_id", t),
+    client
+      .from("campaign_job_stats")
+      .select("campaign_type, campaign_status, total_messages, sent_messages, pending_messages, failed_messages")
+      .eq("tenant_id", t),
+    client.from("audience_contacts").select("id", { count: "exact", head: true }).eq("tenant_id", t),
+    client
+      .from("audience_contacts")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", t)
+      .eq("eligibility", "OPTED_IN"),
+    client
+      .from("audience_contacts")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", t)
+      .eq("eligibility", "OPTED_IN")
+      .or(
+        `presence_status.in.(${ACTIVE_PRESENCE.join(",")}),recent_activity_at.gte.${new Date(Date.now() - 30 * 86_400_000).toISOString()}`,
+      ),
+    client
+      .from("audience_contacts")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", t)
+      .gt("messages_observed", 0),
+    client
+      .from("audience_contacts")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", t)
+      .eq("presence_status", "LONG_AGO"),
+    client
+      .from("audience_contacts")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", t)
+      .or("presence_status.is.null,presence_status.eq.UNKNOWN"),
+    client
+      .from("telegram_connections")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", t)
+      .eq("status", "CONNECTED"),
   ]);
 
   const days = [...Array(14)].map((_, i) => {
@@ -2198,19 +2520,69 @@ export async function analytics(ctx: AuthContext) {
       value: rows.filter((r) => r.at?.slice(0, 10) === day).length,
     }));
 
+  const jobRows = (jobStats ?? []) as (CampaignJobStats & {
+    campaign_type?: string | null;
+    campaign_status?: string | null;
+  })[];
+  const allMessages = sumJobStats(jobRows);
+  const dmMessages = sumJobStats(jobRows.filter((row) => row.campaign_type === "DM"));
+  const groupMessages = sumJobStats(jobRows.filter((row) => row.campaign_type === "GROUP"));
+  const dmCampaigns = (campaigns ?? []).filter((c) => c.type === "DM");
+  const groupCampaigns = (campaigns ?? []).filter((c) => c.type === "GROUP");
+  const successRate = (stats: CampaignJobStats) =>
+    stats.sent_messages + stats.failed_messages
+      ? Math.round((stats.sent_messages / (stats.sent_messages + stats.failed_messages)) * 100)
+      : 0;
+
   return {
     totals: {
-      groupsFound: groups?.length ?? 0,
-      groupsApproved: groups?.filter((g) => g.status === "APPROVED").length ?? 0,
-      groupsJoined: groups?.filter((g) => g.status === "JOINED").length ?? 0,
-      campaigns: campaigns?.length ?? 0,
-      processed:
-        campaigns?.reduce((a, c) => a + (c.completed_count ?? 0) + (c.failed_count ?? 0), 0) ?? 0,
-      successful: campaigns?.reduce((a, c) => a + (c.completed_count ?? 0), 0) ?? 0,
-      failed: campaigns?.reduce((a, c) => a + (c.failed_count ?? 0), 0) ?? 0,
-      audience: contacts?.length ?? 0,
-      contacted: contacts?.filter((c) => (c.contact_count ?? 0) > 0).length ?? 0,
-      newAudience: contacts?.filter((c) => (c.contact_count ?? 0) === 0).length ?? 0,
+      totalUsers: totalUsers.count ?? 0,
+      totalGroups: groups?.length ?? 0,
+      approvedGroups: groups?.filter((g) => g.status === "APPROVED").length ?? 0,
+      writableGroups:
+        groups?.filter((g) => g.can_send_messages === true && g.writable_status === "WRITABLE")
+          .length ?? 0,
+      totalCampaigns: campaigns?.length ?? 0,
+      messagesSent: allMessages.sent_messages,
+      failed: allMessages.failed_messages,
+      pending: allMessages.pending_messages,
+    },
+    campaignOverview: allMessages,
+    dmPromotion: {
+      totalCampaigns: dmCampaigns.length,
+      active: dmCampaigns.filter((c) => ["RUNNING", "SCHEDULED"].includes(String(c.status))).length,
+      completed: dmCampaigns.filter((c) => String(c.status).startsWith("COMPLETED")).length,
+      messagesSent: dmMessages.sent_messages,
+      failed: dmMessages.failed_messages,
+      pending: dmMessages.pending_messages,
+      successRate: successRate(dmMessages),
+    },
+    groupPromotion: {
+      totalCampaigns: groupCampaigns.length,
+      active: groupCampaigns.filter((c) => ["RUNNING", "SCHEDULED"].includes(String(c.status))).length,
+      completed: groupCampaigns.filter((c) => String(c.status).startsWith("COMPLETED")).length,
+      messagesSent: groupMessages.sent_messages,
+      failed: groupMessages.failed_messages,
+      pending: groupMessages.pending_messages,
+      successRate: successRate(groupMessages),
+    },
+    users: {
+      totalDiscovered: totalUsers.count ?? 0,
+      eligible: eligibleUsers.count ?? 0,
+      active30: active30.count ?? 0,
+      activePosters: activePosters.count ?? 0,
+      inactive: inactive.count ?? 0,
+      unknownPresence: unknownPresence.count ?? 0,
+      connectedSessions: connectedSessions.count ?? 0,
+    },
+    groups: {
+      discovered: groups?.length ?? 0,
+      approved: groups?.filter((g) => g.status === "APPROVED").length ?? 0,
+      writable:
+        groups?.filter((g) => g.can_send_messages === true && g.writable_status === "WRITABLE")
+          .length ?? 0,
+      notWritable: groups?.filter((g) => g.writable_status === "NOT_WRITABLE").length ?? 0,
+      joined: groups?.filter((g) => g.status === "JOINED").length ?? 0,
     },
     charts: {
       campaigns: byDay((campaigns ?? []).map((c) => ({ at: c.created_at as string }))),

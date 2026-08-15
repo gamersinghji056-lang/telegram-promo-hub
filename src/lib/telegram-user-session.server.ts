@@ -559,6 +559,95 @@ export async function resolvePublicGroupViaUserSession(
   });
 }
 
+export async function verifyGroupWritableViaUserSession(
+  tenantId: string,
+  connectionId: string,
+  group: {
+    username?: string | null;
+    telegram_group_id?: number | null;
+    access_hash?: string | null;
+    entity_type?: string | null;
+  },
+) {
+  return withAuthorizedUserClient(tenantId, connectionId, async (client) => {
+    try {
+      const seed = group.username
+        ? await client.getEntity(group.username.replace(/^@/, ""))
+        : inputChannelFromStored({
+            id: group.telegram_group_id ?? null,
+            accessHash: group.access_hash ?? null,
+          });
+      if (!seed) {
+        return {
+          title: null,
+          username: group.username ?? null,
+          telegramGroupId: group.telegram_group_id ?? null,
+          accessHash: group.access_hash ?? null,
+          entityType: group.entity_type ?? null,
+          canSendMessages: null,
+          writableStatus: "UNKNOWN",
+          reason: "Group entity cannot be resolved without username or access hash.",
+        };
+      }
+      const entity = await client.getEntity(seed as never);
+      if (!(entity instanceof Api.Channel) && !(entity instanceof Api.Chat)) {
+        return {
+          title: null,
+          username: group.username ?? null,
+          telegramGroupId: group.telegram_group_id ?? null,
+          accessHash: group.access_hash ?? null,
+          entityType: group.entity_type ?? "UNKNOWN",
+          canSendMessages: false,
+          writableStatus: "NOT_WRITABLE",
+          reason: "Resolved entity is not a writable group or channel.",
+        };
+      }
+      const canSend = entity instanceof Api.Channel ? channelWritable(entity) : true;
+      return {
+        title: "title" in entity ? String(entity.title) : null,
+        username: "username" in entity && entity.username ? String(entity.username) : group.username ?? null,
+        telegramGroupId: Number(entity.id),
+        accessHash: accessHash(entity),
+        entityType: entityType(entity),
+        canSendMessages: canSend,
+        writableStatus: canSend ? "WRITABLE" : "NOT_WRITABLE",
+        reason: canSend ? null : "Selected session cannot post messages to this group/channel.",
+      };
+    } catch (error) {
+      const message = errorMessage(error);
+      const upper = message.toUpperCase();
+      if (
+        upper.includes("CHAT_WRITE_FORBIDDEN") ||
+        upper.includes("CHAT_ADMIN_REQUIRED") ||
+        upper.includes("USER_BANNED_IN_CHANNEL") ||
+        upper.includes("WRITE_FORBIDDEN") ||
+        upper.includes("NOT ENOUGH RIGHTS")
+      ) {
+        return {
+          title: null,
+          username: group.username ?? null,
+          telegramGroupId: group.telegram_group_id ?? null,
+          accessHash: group.access_hash ?? null,
+          entityType: group.entity_type ?? null,
+          canSendMessages: false,
+          writableStatus: "NOT_WRITABLE",
+          reason: message,
+        };
+      }
+      return {
+        title: null,
+        username: group.username ?? null,
+        telegramGroupId: group.telegram_group_id ?? null,
+        accessHash: group.access_hash ?? null,
+        entityType: group.entity_type ?? null,
+        canSendMessages: null,
+        writableStatus: "UNKNOWN",
+        reason: message,
+      };
+    }
+  });
+}
+
 export async function searchPublicGroupsViaUserSession(
   tenantId: string,
   connectionId: string,

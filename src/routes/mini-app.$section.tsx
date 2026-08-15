@@ -13,6 +13,7 @@ import {
   Eye,
   FolderOpen,
   LogOut,
+  Megaphone,
   Pause,
   Play,
   Plus,
@@ -52,6 +53,7 @@ import {
   getDashboard,
   getGroupCategories,
   getGroupCategoryDetail,
+  getGroupWritabilitySummary,
   getGroups,
   getKeywords,
   getNotifications,
@@ -78,6 +80,7 @@ import {
   updateCampaign,
   verifyConnectionCode,
   verifyConnectionPassword,
+  verifyWritableGroups,
 } from "@/lib/customer.functions";
 
 const valid = new Set([
@@ -188,6 +191,7 @@ function MiniAppSection() {
   const keywordsFn = useServerFn(getKeywords);
   const campaignsFn = useServerFn(getCampaigns);
   const groupCategoriesFn = useServerFn(getGroupCategories);
+  const groupWritabilitySummaryFn = useServerFn(getGroupWritabilitySummary);
   const analyticsFn = useServerFn(getAnalytics);
   const billingFn = useServerFn(getBilling);
   const logsFn = useServerFn(getOwnActivity);
@@ -225,6 +229,7 @@ function MiniAppSection() {
     rejectGroup: useServerFn(rejectGroup),
     removeGroup: useServerFn(removeGroup),
     getGroupCategoryDetail: useServerFn(getGroupCategoryDetail),
+    verifyWritableGroups: useServerFn(verifyWritableGroups),
     saveGroupCategory: useServerFn(saveGroupCategory),
     deleteGroupCategory: useServerFn(deleteGroupCategory),
     getCampaignDetail: useServerFn(getCampaignDetail),
@@ -298,6 +303,7 @@ function MiniAppSection() {
       "group-categories": async (a) => ({
         groups: await groupsFn({ data: { auth: a, status: "APPROVED_ACTIVE" } }),
         categories: await groupCategoriesFn({ data: { auth: a } }),
+        writability: await groupWritabilitySummaryFn({ data: { auth: a } }),
       }),
       analytics: (a) => analyticsFn({ data: { auth: a } }),
       billing: (a) => billingFn({ data: { auth: a } }),
@@ -538,25 +544,20 @@ function CustomerContent(props: {
 }
 
 function Dashboard({ data }: { data: any }) {
-  const stats = [
+  const messageStats = data?.campaigns?.messages ?? {};
+  const overview = [
     ["Connected Sessions", data?.connections?.active, Bot],
-    ["Healthy Sessions", data?.connections?.active, CheckCircle2],
-    [
-      "Restricted Sessions",
-      data?.connections?.restricted ?? data?.connections?.issues,
-      AlertTriangle,
-    ],
-    ["Keywords", data?.keywords, Search],
-    ["Groups Found", data?.groups?.found, Users],
-    ["Approved Groups", data?.groups?.approved, CheckCircle2],
-    ["Joined Groups", data?.groups?.joined, CheckCircle2],
-    ["Eligible Audience", data?.audience?.available, Users],
-    ["Previously Contacted", data?.audience?.contacted, Clock],
-    ["DM Campaigns", data?.campaigns?.dm, Send],
-    ["Group Campaigns", data?.campaigns?.group, Send],
-    ["Running Campaigns", data?.campaigns?.running, Send],
-    ["Completed Campaigns", data?.campaigns?.completed, CheckCircle2],
-    ["Failed Campaigns", data?.campaigns?.failed, AlertTriangle],
+    ["Approved Groups", data?.groups?.approved, FolderOpen],
+    ["Writable Groups", data?.groups?.writable, CheckCircle2],
+    ["Audience Users", data?.audience?.total, Users],
+    ["Active Campaigns", data?.campaigns?.running, Send],
+    ["Messages Sent", messageStats.sent_messages ?? 0, CheckCircle2],
+  ];
+  const quick = [
+    ["/mini-app/dm-create", "DM Promotion", "Create and manage one-to-one campaigns.", Send],
+    ["/mini-app/group-create", "Group Promotion", "Send approved campaigns to writable categories.", Megaphone],
+    ["/mini-app/groups-find", "Group Discovery", "Find and approve public Telegram groups.", Search],
+    ["/mini-app/dm-audience", "Find Users", "Build eligible audience from approved sources.", Users],
   ];
   return (
     <div className="space-y-4">
@@ -574,8 +575,8 @@ function Dashboard({ data }: { data: any }) {
           </div>
         </section>
       ) : null}
-      <section className={panelClass()}>
-        <div className="flex items-center justify-between">
+      <section className={panelClass("space-y-4")}>
+        <div className="flex items-center justify-between gap-4">
           <div>
             <p className="text-sm text-muted-foreground">Current plan</p>
             <p className="mt-1 text-xl font-semibold">{data?.subscription?.planName}</p>
@@ -594,32 +595,55 @@ function Dashboard({ data }: { data: any }) {
           {data?.usage?.messagesUsed ?? 0} / {data?.usage?.messageLimit ?? 0} messages
         </p>
       </section>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        {stats.map(([label, value, Icon]) => (
-          <section key={String(label)} className={panelClass()}>
-            <Icon className="size-4 text-primary" />
-            <p className="mt-3 text-xs text-muted-foreground">{label as string}</p>
-            <p className="mt-1 text-2xl font-semibold">{Number(value ?? 0)}</p>
-          </section>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        {overview.map(([label, value, Icon]) => (
+          <MetricCard key={String(label)} label={label as string} value={Number(value ?? 0)} icon={Icon as any} />
         ))}
       </div>
-      <div className="grid grid-cols-2 gap-3">
-        <QuickLink href="/mini-app/sessions" label="ADD SESSION" />
-        <QuickLink href="/mini-app/groups-find" label="FIND GROUPS" />
-        <QuickLink href="/mini-app/dm-create" label="CREATE DM CAMPAIGN" />
-        <QuickLink href="/mini-app/group-create" label="CREATE GROUP CAMPAIGN" />
+      <section className={panelClass("space-y-3")}>
+        <div className="flex items-center justify-between">
+          <p className="font-semibold">Campaign Status</p>
+          <p className="text-xs text-muted-foreground">Real job totals</p>
+        </div>
+        <CampaignDonut
+          stats={{
+            total: messageStats.total_messages ?? 0,
+            sent: messageStats.sent_messages ?? 0,
+            pending: messageStats.pending_messages ?? 0,
+            failed: messageStats.failed_messages ?? 0,
+          }}
+        />
+      </section>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {quick.map(([href, label, body, Icon]) => (
+          <QuickLink key={String(href)} href={href as string} label={label as string} body={body as string} icon={Icon as any} />
+        ))}
       </div>
     </div>
   );
 }
 
-function QuickLink({ href, label }: { href: string; label: string }) {
+function MetricCard({ label, value, icon: Icon }: { label: string; value: number | string; icon: any }) {
+  return (
+    <section className={panelClass("min-h-28")}>
+      <Icon className="size-4 text-primary" />
+      <p className="mt-3 text-xs text-muted-foreground">{label}</p>
+      <p className="mt-1 text-2xl font-semibold">{value}</p>
+    </section>
+  );
+}
+
+function QuickLink({ href, label, body, icon: Icon }: { href: string; label: string; body: string; icon: any }) {
   return (
     <a
-      className="flex min-h-24 items-center justify-center border border-border bg-card p-5 text-center text-base font-semibold text-primary"
+      className="flex min-h-28 items-start gap-3 border border-border bg-card p-4 text-left transition-colors hover:border-primary"
       href={href}
     >
-      + {label}
+      <Icon className="mt-1 size-5 text-primary" />
+      <span>
+        <span className="block text-sm font-semibold text-foreground">{label}</span>
+        <span className="mt-1 block text-xs text-muted-foreground">{body}</span>
+      </span>
     </a>
   );
 }
@@ -1290,10 +1314,27 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
     (g: any) => g.can_send_messages === true && g.writable_status === "WRITABLE",
   );
   const categories = data?.categories ?? [];
+  const [writability, setWritability] = useState<any>(data?.writability ?? {});
+  const [verification, setVerification] = useState<any>(null);
   const [editing, setEditing] = useState<any>(null);
   const [name, setName] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
   const [detail, setDetail] = useState<any>(null);
+  useEffect(() => {
+    setWritability(data?.writability ?? {});
+  }, [data?.writability]);
+
+  async function verifyGroups() {
+    await runAction("verify-writable-groups", async () => {
+      const response = await actions.verifyWritableGroups({ data: { auth, limit: 60 } });
+      setVerification(response);
+      setWritability(response.summary ?? writability);
+      setNotice(
+        `Checking Groups: ${response.checked}/${response.total}. Writable: ${response.writable}. Not Writable: ${response.notWritable}. Unknown: ${response.unknown}.`,
+      );
+      await reload();
+    });
+  }
 
   function openEditor(category?: any) {
     setDetail(null);
@@ -1315,10 +1356,25 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
 
   return (
     <div className="space-y-4">
-      <section className={panelClass()}>
-        <Button onClick={() => openEditor()}>
-          <Plus className="mr-2 size-4" /> CREATE CATEGORY
-        </Button>
+      <section className={panelClass("space-y-3")}>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <Button onClick={() => openEditor()}>
+            <Plus className="mr-2 size-4" /> CREATE CATEGORY
+          </Button>
+          <Button
+            variant="secondary"
+            disabled={actionBusy === "verify-writable-groups"}
+            onClick={() => void verifyGroups()}
+          >
+            {actionBusy === "verify-writable-groups" ? "Checking..." : "VERIFY GROUPS"}
+          </Button>
+        </div>
+        <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+          <Stat label="Checking Groups" value={`${verification?.checked ?? 0}/${verification?.total ?? writability.unknown ?? 0}`} />
+          <Stat label="Writable" value={writability.writable ?? writableGroups.length} />
+          <Stat label="Not Writable" value={writability.notWritable ?? 0} />
+          <Stat label="Unknown" value={writability.unknown ?? 0} />
+        </div>
       </section>
       <div className="space-y-3">
         {categories.map((category: any) => (
@@ -1448,7 +1504,10 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
                 </label>
               ))}
               {!writableGroups.length ? (
-                <p className="text-sm text-muted-foreground">No confirmed writable groups available.</p>
+                <p className="text-sm text-muted-foreground">
+                  No confirmed writable groups available. Tap VERIFY GROUPS to check approved groups
+                  with your healthy Telegram session.
+                </p>
               ) : null}
             </div>
             <Button className="w-full" type="submit" disabled={!name || !selected.length || actionBusy === "save-category"}>
@@ -1597,6 +1656,8 @@ function DMAudience({ auth, data, actions, reload, setNotice, actionBusy, runAct
             <Stat label="Users Found" value={audience.totalFound ?? 0} />
             <Stat label="Showing" value={`${audience.showingFrom ?? 0}-${audience.showingTo ?? 0}`} />
             <Stat label="New Users" value={state.new_users ?? 0} />
+            <Stat label="With Username" value={audience.withUsername ?? 0} />
+            <Stat label="Excluded Inactive" value={audience.excludedInactive ?? 0} />
             <Stat label="Active Posters" value={audience.activePosters ?? 0} />
             <Stat label="Duplicates" value={state.duplicates ?? 0} />
             <Stat label="Previously Saved" value={state.previously_saved ?? 0} />
@@ -1954,6 +2015,52 @@ function GroupCampaign({ auth, data, actions, reload, setNotice, actionBusy, run
   );
 }
 
+function jobStats(row: any) {
+  const stats = row?.job_stats ?? {};
+  const sent = Number(stats.sent_messages ?? row?.completed_count ?? 0);
+  const failed = Number(stats.failed_messages ?? row?.failed_count ?? 0);
+  const pending = Number(
+    stats.pending_messages ??
+      Math.max(Number(row?.total_targets ?? 0) - sent - failed, 0),
+  );
+  const total = Number(stats.total_messages ?? row?.total_targets ?? sent + pending + failed);
+  return { total, sent, pending, failed };
+}
+
+function CampaignDonut({ stats, compact = false }: { stats: any; compact?: boolean }) {
+  const total = Math.max(Number(stats.total ?? 0), 0);
+  const sent = Math.max(Number(stats.sent ?? 0), 0);
+  const pending = Math.max(Number(stats.pending ?? 0), 0);
+  const failed = Math.max(Number(stats.failed ?? 0), 0);
+  const safeTotal = Math.max(total, sent + pending + failed, 1);
+  const sentDeg = (sent / safeTotal) * 360;
+  const pendingDeg = ((sent + pending) / safeTotal) * 360;
+  const size = compact ? "size-24" : "size-32";
+  return (
+    <div className="flex items-center gap-4">
+      <div
+        className={`grid ${size} shrink-0 place-items-center rounded-full`}
+        style={{
+          background: `conic-gradient(hsl(var(--success)) 0deg ${sentDeg}deg, hsl(var(--warning)) ${sentDeg}deg ${pendingDeg}deg, hsl(var(--destructive)) ${pendingDeg}deg 360deg)`,
+        }}
+        aria-label={`Total ${total}, Sent ${sent}, Pending ${pending}, Failed ${failed}`}
+      >
+        <div className="grid size-[68%] place-items-center rounded-full bg-card text-center">
+          <div>
+            <p className="text-[10px] uppercase text-muted-foreground">Total</p>
+            <p className="text-lg font-semibold">{total}</p>
+          </div>
+        </div>
+      </div>
+      <div className="grid flex-1 grid-cols-1 gap-1 text-xs">
+        <p><span className="text-success">GREEN</span> Sent: {sent}</p>
+        <p><span className="text-warning">YELLOW</span> Pending: {pending}</p>
+        <p><span className="text-destructive">RED</span> Failed: {failed}</p>
+      </div>
+    </div>
+  );
+}
+
 function CampaignSummary({ rows }: { rows: any[] }) {
   const total = rows.length;
   const running = rows.filter((r) => r.status === "RUNNING").length;
@@ -1990,13 +2097,16 @@ function CampaignCards({ rows, auth, actions, reload, setNotice, actionBusy, run
                 {new Date(c.created_at).toLocaleDateString()}
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
-                Cycles {c.cycles_completed ?? 0} | Sent {c.completed_count ?? 0} | Failed{" "}
-                {c.failed_count ?? 0} | Last run{" "}
+                Cycles {c.cycles_completed ?? 0} | Total Messages {jobStats(c).total} | Sent{" "}
+                {jobStats(c).sent} | Pending {jobStats(c).pending} | Failed {jobStats(c).failed} | Last run{" "}
                 {c.last_run_at ? new Date(c.last_run_at).toLocaleString() : "never"} | Next run{" "}
                 {c.next_run_at ? new Date(c.next_run_at).toLocaleString() : "not scheduled"}
               </p>
             </div>
             <span className={`text-xs font-semibold ${statusTone(c.status)}`}>{c.status}</span>
+          </div>
+          <div className="mt-4">
+            <CampaignDonut stats={jobStats(c)} compact />
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
             <Button size="sm" variant="secondary" disabled={!!actionBusy} onClick={() => control(c.id, "START")}>
@@ -2052,10 +2162,12 @@ function CampaignCards({ rows, auth, actions, reload, setNotice, actionBusy, run
               <Stat label="Status" value={detail.campaign.status} />
               <Stat label="Selected Users" value={detail.recipients?.length ?? 0} />
               <Stat label="Groups" value={detail.groups?.length ?? 0} />
-              <Stat label="Messages Sent" value={detail.campaign.completed_count ?? 0} />
-              <Stat label="Failed" value={detail.campaign.failed_count ?? 0} />
-              <Stat label="Pending" value={Math.max((detail.campaign.total_targets ?? 0) - (detail.campaign.completed_count ?? 0) - (detail.campaign.failed_count ?? 0), 0)} />
+              <Stat label="Total Messages" value={jobStats(detail.campaign).total} />
+              <Stat label="Sent" value={jobStats(detail.campaign).sent} />
+              <Stat label="Pending" value={jobStats(detail.campaign).pending} />
+              <Stat label="Failed" value={jobStats(detail.campaign).failed} />
             </div>
+            <CampaignDonut stats={jobStats(detail.campaign)} />
             <div className="space-y-2">
               <p className="text-sm font-semibold">Recent errors/logs</p>
               {(detail.logs ?? []).map((log: any) => (
@@ -2163,6 +2275,8 @@ function AudienceSummary({ result, selectable, selected, setSelected, auth, acti
         <Stat label="Total Found" value={result.totalFound} />
         <Stat label="Showing" value={`${result.showingFrom ?? 0}-${result.showingTo ?? users.length}`} />
         <Stat label="Eligible" value={result.eligible} />
+        <Stat label="Excluded Inactive" value={result.excludedInactive ?? 0} />
+        <Stat label="With Username" value={result.withUsername ?? 0} />
         <Stat label="Active Posters" value={result.activePosters ?? 0} />
         <Stat label="Previously Contacted" value={result.previouslyContacted} />
         <Stat label="Duplicates" value={result.duplicates} />
@@ -2334,12 +2448,145 @@ function CampaignHistory({ auth, data, actions, reload }: any) {
 
 function Analytics({ data }: { data: any }) {
   const totals = data?.totals ?? {};
+  const campaignOverview = data?.campaignOverview ?? {};
+  const dm = data?.dmPromotion ?? {};
+  const group = data?.groupPromotion ?? {};
+  const users = data?.users ?? {};
+  const groups = data?.groups ?? {};
   return (
-    <div className="grid grid-cols-2 gap-3">
-      {Object.entries(totals).map(([key, value]) => (
-        <Stat key={key} label={key.replace(/([A-Z])/g, " $1")} value={value as number} />
-      ))}
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {[
+          ["Total Users", totals.totalUsers],
+          ["Total Groups", totals.totalGroups],
+          ["Approved Groups", totals.approvedGroups],
+          ["Writable Groups", totals.writableGroups],
+          ["Total Campaigns", totals.totalCampaigns],
+          ["Messages Sent", totals.messagesSent],
+          ["Failed", totals.failed],
+          ["Pending", totals.pending],
+        ].map(([label, value]) => (
+          <Stat key={String(label)} label={label as string} value={Number(value ?? 0)} />
+        ))}
+      </div>
+      <section className={panelClass("space-y-3")}>
+        <p className="font-semibold">Campaign Overview</p>
+        <CampaignDonut
+          stats={{
+            total: campaignOverview.total_messages ?? 0,
+            sent: campaignOverview.sent_messages ?? 0,
+            pending: campaignOverview.pending_messages ?? 0,
+            failed: campaignOverview.failed_messages ?? 0,
+          }}
+        />
+      </section>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <AnalyticsSection
+          title="DM Promotion"
+          stats={[
+            ["Total DM Campaigns", dm.totalCampaigns],
+            ["Active", dm.active],
+            ["Completed", dm.completed],
+            ["Messages Sent", dm.messagesSent],
+            ["Failed", dm.failed],
+            ["Pending", dm.pending],
+            ["Success Rate", `${dm.successRate ?? 0}%`],
+          ]}
+          bars={[
+            ["Sent", dm.messagesSent, "bg-success"],
+            ["Pending", dm.pending, "bg-warning"],
+            ["Failed", dm.failed, "bg-destructive"],
+          ]}
+        />
+        <AnalyticsSection
+          title="Group Promotion"
+          stats={[
+            ["Total Group Campaigns", group.totalCampaigns],
+            ["Active", group.active],
+            ["Completed", group.completed],
+            ["Messages Sent", group.messagesSent],
+            ["Failed", group.failed],
+            ["Pending", group.pending],
+            ["Success Rate", `${group.successRate ?? 0}%`],
+          ]}
+          bars={[
+            ["Sent", group.messagesSent, "bg-success"],
+            ["Pending", group.pending, "bg-warning"],
+            ["Failed", group.failed, "bg-destructive"],
+          ]}
+        />
+      </div>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <AnalyticsSection
+          title="Users"
+          stats={[
+            ["Total discovered", users.totalDiscovered],
+            ["Eligible", users.eligible],
+            ["Active <30 days", users.active30],
+            ["Active Posters", users.activePosters],
+            ["Inactive", users.inactive],
+            ["Unknown Presence", users.unknownPresence],
+          ]}
+          bars={[
+            ["Eligible", users.eligible, "bg-success"],
+            ["Active", users.active30, "bg-primary"],
+            ["Unknown", users.unknownPresence, "bg-muted-foreground"],
+            ["Inactive", users.inactive, "bg-destructive"],
+          ]}
+        />
+        <AnalyticsSection
+          title="Groups"
+          stats={[
+            ["Discovered", groups.discovered],
+            ["Approved", groups.approved],
+            ["Writable", groups.writable],
+            ["Not Writable", groups.notWritable],
+            ["Joined", groups.joined],
+          ]}
+          bars={[
+            ["Approved", groups.approved, "bg-primary"],
+            ["Writable", groups.writable, "bg-success"],
+            ["Not Writable", groups.notWritable, "bg-destructive"],
+            ["Joined", groups.joined, "bg-warning"],
+          ]}
+        />
+      </div>
     </div>
+  );
+}
+
+function AnalyticsSection({
+  title,
+  stats,
+  bars,
+}: {
+  title: string;
+  stats: [string, number | string | undefined][];
+  bars: [string, number | undefined, string][];
+}) {
+  const max = Math.max(1, ...bars.map(([, value]) => Number(value ?? 0)));
+  return (
+    <section className={panelClass("space-y-3")}>
+      <p className="font-semibold">{title}</p>
+      <div className="grid grid-cols-2 gap-2 text-sm">
+        {stats.map(([label, value]) => (
+          <Stat key={label} label={label} value={value ?? 0} />
+        ))}
+      </div>
+      <div className="space-y-2">
+        {bars.map(([label, value, color]) => (
+          <div key={label}>
+            <div className="mb-1 flex justify-between text-xs text-muted-foreground">
+              <span>{label}</span>
+              <span>{Number(value ?? 0)}</span>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-muted">
+              <div className={`h-full ${color}`} style={{ width: `${(Number(value ?? 0) / max) * 100}%` }} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
