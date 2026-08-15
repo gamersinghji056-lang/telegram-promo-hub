@@ -1392,9 +1392,20 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
   const writableGroups = groups.filter(
     (g: any) => g.can_send_messages === true && g.writable_status === "WRITABLE",
   );
+  const testableGroups = groups.filter(
+    (g: any) =>
+      ["APPROVED", "JOINED"].includes(g.status) &&
+      (g.writable_status === "UNKNOWN" ||
+        g.writable_status === "NOT_WRITABLE" ||
+        g.writable_status === "INACCESSIBLE" ||
+        g.can_send_messages !== true),
+  );
   const categories = data?.categories ?? [];
   const [writability, setWritability] = useState<any>(data?.writability ?? {});
   const [verification, setVerification] = useState<any>(null);
+  const [testConnectionId, setTestConnectionId] = useState("");
+  const [testSelected, setTestSelected] = useState<string[]>([]);
+  const [testResult, setTestResult] = useState<any>(null);
   const [editing, setEditing] = useState<any>(null);
   const [name, setName] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
@@ -1410,6 +1421,20 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
       setWritability(response.summary ?? writability);
       setNotice(
         `Checking Groups: ${response.checked}/${response.total}. Writable: ${response.writable}. Not Writable: ${response.notWritable}. Unknown: ${response.unknown}.`,
+      );
+      await reload();
+    });
+  }
+
+  async function testWritable() {
+    await runAction("test-category-writable-groups", async () => {
+      const response = await actions.testWritableGroups({
+        data: { auth, connectionId: testConnectionId, groupIds: testSelected },
+      });
+      setTestResult(response);
+      setWritability(response.summary ?? writability);
+      setNotice(
+        `Tested: ${response.checked}/${response.total}. Writable: ${response.writable}. Not Writable: ${response.notWritable}. Unknown: ${response.unknown}. Inaccessible: ${response.inaccessible}.`,
       );
       await reload();
     });
@@ -1454,6 +1479,48 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
           <Stat label="Not Writable" value={writability.notWritable ?? 0} />
           <Stat label="Unknown" value={writability.unknown ?? 0} />
         </div>
+        {testableGroups.length ? (
+          <div className="space-y-3 border-t border-border pt-3">
+            <SessionSelect
+              label="Select Test Session"
+              value={testConnectionId}
+              onChange={setTestConnectionId}
+              connections={data?.connections}
+            />
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold">
+                Testable Groups: {testableGroups.length} | Selected: {testSelected.length}
+              </p>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setTestSelected(testableGroups.map((g: any) => g.id))}
+                >
+                  SELECT ALL
+                </Button>
+                <Button type="button" size="sm" variant="secondary" onClick={() => setTestSelected([])}>
+                  CLEAR ALL
+                </Button>
+              </div>
+            </div>
+            <Button
+              className="w-full"
+              disabled={!testConnectionId || !testSelected.length || actionBusy === "test-category-writable-groups"}
+              onClick={testWritable}
+            >
+              {actionBusy === "test-category-writable-groups" ? "Testing..." : "TEST WRITABLE GROUPS"}
+            </Button>
+            <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-5">
+              <Stat label="Tested" value={`${testResult?.checked ?? 0}/${testResult?.total ?? testSelected.length}`} />
+              <Stat label="Writable" value={testResult?.writable ?? 0} />
+              <Stat label="Not Writable" value={testResult?.notWritable ?? 0} />
+              <Stat label="Unknown" value={testResult?.unknown ?? 0} />
+              <Stat label="Inaccessible" value={testResult?.inaccessible ?? 0} />
+            </div>
+          </div>
+        ) : null}
       </section>
       <div className="space-y-3">
         {categories.map((category: any) => (
