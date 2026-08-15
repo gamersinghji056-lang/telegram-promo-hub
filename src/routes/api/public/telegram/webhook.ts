@@ -1,11 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { db, getSetting, logSystem } from "@/lib/db.server";
-import { deriveWebhookSecret, safeEqual } from "@/lib/security.server";
+import { deriveWebhookSecret, hashPassword, safeEqual, verifyPassword } from "@/lib/security.server";
 import { botToken, callBot } from "@/lib/telegram.server";
 import {
   clearTelegramFlow,
-  createTelegramFlow,
+  loginCustomer,
   normalizeEmail,
+  registerCustomerWithPasswordHash,
   validEmail,
 } from "@/lib/customer-auth.server";
 
@@ -61,16 +62,6 @@ function validMiniAppUrl(raw: string) {
   } catch {
     return "";
   }
-}
-
-function appendMiniAppPath(
-  base: string,
-  path: "register" | "login",
-  params: Record<string, string>,
-) {
-  const root = base.replace(/\/$/, "");
-  const search = new URLSearchParams(params);
-  return `${root}/${path}?${search.toString()}`;
 }
 
 async function setState(
@@ -131,6 +122,36 @@ async function send(chatId: number, text: string, keyboard?: Record<string, unkn
   if (!result.ok) throw new Error(`Telegram sendMessage failed: ${result.error}`);
 }
 
+async function deleteMessage(chatId: number, messageId: number) {
+  const result = await callBot("deleteMessage", {
+    chat_id: chatId,
+    message_id: messageId,
+  });
+  diagnostic("telegram_api", {
+    method: "deleteMessage",
+    chat_id: chatId,
+    ok: result.ok,
+    error: result.ok ? null : result.error,
+  });
+}
+
+async function openMiniAppKeyboard() {
+  const url = await miniAppUrl();
+  if (!url) return null;
+  return { inline_keyboard: [[{ text: "OPEN MINI APP", web_app: { url } }]] };
+}
+
+async function sendOpenMiniApp(chatId: number, text: string) {
+  const keyboard = await openMiniAppKeyboard();
+  await send(
+    chatId,
+    keyboard
+      ? text
+      : `${text}\n\nThe Mini App URL has not been configured by the platform admin yet.`,
+    keyboard ?? undefined,
+  );
+}
+
 async function mainMenu(chatId: number, userId: number) {
   const url = await miniAppUrl();
   const { data: customer } = await db()
@@ -157,75 +178,6 @@ async function mainMenu(chatId: number, userId: number) {
       ? "<b>Welcome back to the Telegram Promotion Platform.</b>\n\nOpen the Mini App to manage your dashboard."
       : "<b>Welcome to the Telegram Promotion Platform.</b>\n\nRegister or log in, then use the Mini App to manage your dashboard.",
     { inline_keyboard: rows },
-  );
-}
-
-async function sendRegistrationButton(msg: TgMessage, email: string) {
-  const url = await miniAppUrl();
-  if (!url) {
-    await send(
-      msg.chat.id,
-      "Registration can continue after the platform admin configures the Mini App URL.",
-    );
-    return;
-  }
-  const flowToken = await createTelegramFlow({
-    telegramUserId: msg.from!.id,
-    flow: "REGISTRATION",
-    step: "MINI_APP",
-    payload: {
-      email,
-      telegram_username: msg.from?.username ?? null,
-      first_name: msg.from?.first_name ?? null,
-    },
-  });
-  await send(
-    msg.chat.id,
-    "Continue registration in the secure Mini App. Do not send your password in Telegram.",
-    {
-      inline_keyboard: [
-        [
-          {
-            text: "CONTINUE REGISTRATION",
-            web_app: { url: appendMiniAppPath(url, "register", { flow: flowToken, email }) },
-          },
-        ],
-      ],
-    },
-  );
-}
-
-async function sendLoginButton(msg: TgMessage) {
-  const url = await miniAppUrl();
-  if (!url) {
-    await send(
-      msg.chat.id,
-      "Login can continue after the platform admin configures the Mini App URL.",
-    );
-    return;
-  }
-  const flowToken = await createTelegramFlow({
-    telegramUserId: msg.from!.id,
-    flow: "LOGIN",
-    step: "MINI_APP",
-    payload: {
-      telegram_username: msg.from?.username ?? null,
-      first_name: msg.from?.first_name ?? null,
-    },
-  });
-  await send(
-    msg.chat.id,
-    "Open the secure Mini App login. Do not send your password in Telegram.",
-    {
-      inline_keyboard: [
-        [
-          {
-            text: "CONTINUE LOGIN",
-            web_app: { url: appendMiniAppPath(url, "login", { flow: flowToken }) },
-          },
-        ],
-      ],
-    },
   );
 }
 
@@ -256,7 +208,7 @@ async function handlePrivateText(msg: TgMessage) {
   const chatId = msg.chat.id;
   const userId = msg.from!.id;
   const text = (msg.text ?? "").trim();
-  const { flow, step } = await getState(userId);
+  const { flow, step, payload } = await getState(userId);
 
   if (text === "/start" || text === "/menu") {
     diagnostic("handler", { handler: "main_menu", chat_id: chatId });
@@ -271,8 +223,12 @@ async function handlePrivateText(msg: TgMessage) {
     return;
   }
   if (text === "/login") {
-    diagnostic("handler", { handler: "login_button", chat_id: chatId });
-    await sendLoginButton(msg);
+    diagnostic("handler", { handler: "login_email", chat_id: chatId });
+    await setState(userId, "LOGIN", "EMAIL", {
+      telegram_username: msg.from?.username ?? null,
+      first_name: msg.from?.first_name ?? null,
+    });
+    await send(chatId, "Send your account email address.");
     return;
   }
   if (text === "/help") {
@@ -291,19 +247,94 @@ async function handlePrivateText(msg: TgMessage) {
   }
 
   if (flow === "REGISTRATION" && step === "EMAIL") {
-    diagnostic("handler", { handler: "registration_continue", chat_id: chatId });
+    diagnostic("handler", { handler: "registration_password", chat_id: chatId });
     const email = normalizeEmail(text);
     if (!validEmail(email)) {
       await send(chatId, "Send a valid email address, or /cancel to stop registration.");
       return;
     }
-    await sendRegistrationButton(msg, email);
+    await setState(userId, "REGISTRATION", "PASSWORD", {
+      email,
+      telegram_username: msg.from?.username ?? null,
+      first_name: msg.from?.first_name ?? null,
+    });
+    await send(chatId, "Send a password with at least 8 characters.");
     return;
   }
 
-  if ((flow === "REGISTRATION" || flow === "LOGIN") && step === "MINI_APP") {
-    diagnostic("handler", { handler: "mini_app_wait", chat_id: chatId });
-    await send(chatId, "Use the secure Mini App button to continue, or send /cancel to stop.");
+  if (flow === "REGISTRATION" && step === "PASSWORD") {
+    diagnostic("handler", { handler: "registration_confirm_password", chat_id: chatId });
+    await deleteMessage(chatId, msg.message_id);
+    if (text.length < 8) {
+      await send(chatId, "Password must be at least 8 characters. Send a new password, or /cancel.");
+      return;
+    }
+    await setState(userId, "REGISTRATION", "CONFIRM_PASSWORD", {
+      ...payload,
+      password_hash: await hashPassword(text),
+    });
+    await send(chatId, "Confirm your password.");
+    return;
+  }
+
+  if (flow === "REGISTRATION" && step === "CONFIRM_PASSWORD") {
+    diagnostic("handler", { handler: "registration_create_account", chat_id: chatId });
+    await deleteMessage(chatId, msg.message_id);
+    const email = normalizeEmail(String(payload.email ?? ""));
+    const passwordHash = typeof payload.password_hash === "string" ? payload.password_hash : "";
+    if (!email || !passwordHash || !(await verifyPassword(text, passwordHash))) {
+      await clearTelegramFlow(userId);
+      await send(chatId, "Passwords did not match. Send /register to start again.");
+      return;
+    }
+    const result = await registerCustomerWithPasswordHash({
+      email,
+      passwordHash,
+      telegramUserId: userId,
+      telegramUsername: msg.from?.username ?? null,
+      name: typeof payload.first_name === "string" ? payload.first_name : null,
+    });
+    await clearTelegramFlow(userId);
+    if (!result.ok) {
+      await send(chatId, result.error);
+      return;
+    }
+    await sendOpenMiniApp(chatId, "Account created. Open the Mini App to continue.");
+    return;
+  }
+
+  if (flow === "LOGIN" && step === "EMAIL") {
+    diagnostic("handler", { handler: "login_password", chat_id: chatId });
+    const email = normalizeEmail(text);
+    if (!validEmail(email)) {
+      await send(chatId, "Send a valid email address, or /cancel to stop login.");
+      return;
+    }
+    await setState(userId, "LOGIN", "PASSWORD", {
+      email,
+      telegram_username: msg.from?.username ?? null,
+      first_name: msg.from?.first_name ?? null,
+    });
+    await send(chatId, "Send your password.");
+    return;
+  }
+
+  if (flow === "LOGIN" && step === "PASSWORD") {
+    diagnostic("handler", { handler: "login_complete", chat_id: chatId });
+    await deleteMessage(chatId, msg.message_id);
+    const email = normalizeEmail(String(payload.email ?? ""));
+    const result = await loginCustomer({
+      email,
+      password: text,
+      telegramUserId: userId,
+      telegramUsername: msg.from?.username ?? null,
+    });
+    await clearTelegramFlow(userId);
+    if (!result.ok) {
+      await send(chatId, result.error);
+      return;
+    }
+    await sendOpenMiniApp(chatId, "Login successful. Open the Mini App to continue.");
     return;
   }
 
@@ -322,11 +353,11 @@ async function processUpdate(update: Update) {
         await setState(cq.from.id, "REGISTRATION", "EMAIL");
         await send(chatId, "Send the email address you want to register with.");
       } else if (cq.data === "login") {
-        await sendLoginButton({
-          chat: { id: chatId, type: "private" },
-          from: cq.from,
-          message_id: cq.message?.message_id ?? 0,
+        await setState(cq.from.id, "LOGIN", "EMAIL", {
+          telegram_username: cq.from?.username ?? null,
+          first_name: cq.from?.first_name ?? null,
         });
+        await send(chatId, "Send your account email address.");
       } else if (cq.data === "help") {
         await send(chatId, "Register, log in, then open the Mini App to manage everything.");
       } else if (cq.data === "miniapp_missing") {

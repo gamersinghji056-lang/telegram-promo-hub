@@ -123,10 +123,28 @@ export async function registerCustomer(input: {
   telegramUserId?: number | null;
   telegramUsername?: string | null;
 }): Promise<{ ok: true; customerId: string; tenantId: string } | { ok: false; error: string }> {
-  const email = normalizeEmail(input.email);
-  if (!validEmail(email)) return { ok: false, error: "Enter a valid email address." };
   if (!input.password || input.password.length < 8)
     return { ok: false, error: "Password must be at least 8 characters." };
+
+  return registerCustomerWithPasswordHash({
+    email: input.email,
+    passwordHash: await hashPassword(input.password),
+    name: input.name,
+    telegramUserId: input.telegramUserId,
+    telegramUsername: input.telegramUsername,
+  });
+}
+
+export async function registerCustomerWithPasswordHash(input: {
+  email: string;
+  passwordHash: string;
+  name?: string | null;
+  telegramUserId?: number | null;
+  telegramUsername?: string | null;
+}): Promise<{ ok: true; customerId: string; tenantId: string } | { ok: false; error: string }> {
+  const email = normalizeEmail(input.email);
+  if (!validEmail(email)) return { ok: false, error: "Enter a valid email address." };
+  if (!input.passwordHash) return { ok: false, error: "Password could not be processed." };
 
   const settings = await registrationSettings();
   if (settings.registration_enabled === false)
@@ -169,7 +187,7 @@ export async function registerCustomer(input: {
     .insert({
       tenant_id: tenant.id,
       email,
-      password_hash: await hashPassword(input.password),
+      password_hash: input.passwordHash,
       name: input.name?.trim() || null,
       telegram_user_id: input.telegramUserId ?? null,
       telegram_username: input.telegramUsername ?? null,
@@ -232,17 +250,33 @@ export async function loginCustomer(input: {
   if (customer.status !== "ACTIVE")
     return { ok: false, error: "This account is suspended. Contact support." };
 
+  const patch: Record<string, unknown> = { last_login_at: new Date().toISOString() };
+  if (input.telegramUserId) {
+    await client
+      .from("customers")
+      .update({ telegram_user_id: null, telegram_username: null })
+      .eq("telegram_user_id", input.telegramUserId)
+      .neq("id", customer.id);
+    patch["telegram_user_id"] = input.telegramUserId;
+    patch["telegram_username"] = input.telegramUsername ?? null;
+  }
+  const { error: updateError } = await client.from("customers").update(patch).eq("id", customer.id);
+  if (updateError) {
+    await logSystem({
+      tenant_id: customer.tenant_id as string,
+      customer_id: customer.id as string,
+      action: "LOGIN_LINK_FAILED",
+      resource: email,
+      status: "FAILED",
+      details: { message: updateError.message },
+    });
+    return { ok: false, error: "Login succeeded but Telegram linking failed. Try again." };
+  }
+
   const token = await createCustomerSession({
     customerId: customer.id as string,
     tenantId: customer.tenant_id as string,
   });
-
-  const patch: Record<string, unknown> = { last_login_at: new Date().toISOString() };
-  if (input.telegramUserId) {
-    patch["telegram_user_id"] = input.telegramUserId;
-    patch["telegram_username"] = input.telegramUsername ?? null;
-  }
-  await client.from("customers").update(patch).eq("id", customer.id);
 
   await logSystem({
     tenant_id: customer.tenant_id as string,
