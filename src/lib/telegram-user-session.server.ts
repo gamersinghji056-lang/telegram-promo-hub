@@ -95,6 +95,14 @@ function channelWritable(entity: Api.Channel) {
   return true;
 }
 
+function inputChannelFromStored(target: { id?: number | null; accessHash?: string | null }) {
+  if (!target.id || !target.accessHash) return null;
+  return new Api.InputChannel({
+    channelId: bigInt(String(target.id)),
+    accessHash: bigInt(String(target.accessHash)),
+  });
+}
+
 async function resolveSendEntity(
   client: TelegramClient,
   target: {
@@ -128,6 +136,17 @@ function errorCode(error: unknown) {
     return String((error as { errorMessage?: string }).errorMessage);
   }
   return errorMessage(error);
+}
+
+function invalidSessionError(error: unknown) {
+  const upper = errorCode(error).toUpperCase();
+  return (
+    upper.includes("AUTH_KEY_UNREGISTERED") ||
+    upper.includes("SESSION_REVOKED") ||
+    upper.includes("SESSION_EXPIRED") ||
+    upper.includes("USER_DEACTIVATED") ||
+    upper.includes("USER_DEACTIVATED_BAN")
+  );
 }
 
 function classifyAudienceError(error: unknown) {
@@ -347,25 +366,45 @@ export async function checkUserSession(ctx: AuthContext, connectionId: string) {
   const encrypted = decryptSecret(connection.encrypted_session);
   if (!encrypted) throw new Error("This Telegram session is not authorized.");
   const client = clientFromSession(encrypted);
+  console.info("SESSION_CONNECT_START", { tenantId: ctx.tenantId, connectionId });
   await client.connect();
   try {
     const me = await client.getMe();
+    console.info("SESSION_AUTHORIZED", {
+      tenantId: ctx.tenantId,
+      connectionId,
+      telegramUserId: Number((me as Api.User).id),
+    });
     const row = await saveConnectedProfile(ctx, connectionId, client, me);
     return { ok: true as const, connection: row };
   } catch (error) {
     const message = errorMessage(error);
-    await db()
-      .from("telegram_connections")
-      .update({
-        status: "ERROR",
-        health: "REQUIRES_ACTION",
-        restriction_status: "REQUIRES_ACTION",
-        restriction_reason: message,
-        error_message: message,
-        last_sync_at: new Date().toISOString(),
-      })
-      .eq("id", connectionId)
-      .eq("tenant_id", ctx.tenantId);
+    if (invalidSessionError(error)) {
+      console.warn("SESSION_INVALID", { tenantId: ctx.tenantId, connectionId, reason: message });
+      await db()
+        .from("telegram_connections")
+        .update({
+          status: "ERROR",
+          health: "REQUIRES_ACTION",
+          restriction_status: "REQUIRES_ACTION",
+          restriction_reason: message,
+          error_message: message,
+          last_sync_at: new Date().toISOString(),
+        })
+        .eq("id", connectionId)
+        .eq("tenant_id", ctx.tenantId);
+    } else {
+      console.warn("SESSION_CHECK_FAILED", { tenantId: ctx.tenantId, connectionId, reason: message });
+      await db()
+        .from("telegram_connections")
+        .update({
+          error_message: message,
+          last_sync_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", connectionId)
+        .eq("tenant_id", ctx.tenantId);
+    }
     return { ok: false as const, error: message };
   } finally {
     await client.disconnect();
@@ -412,10 +451,51 @@ export async function withAuthorizedUserClient<T>(
   }
   const session = decryptSecret(row.encrypted_session);
   if (!session) throw new Error("Telegram session is not authorized.");
+  console.info("SESSION_LOAD", { tenantId, connectionId });
   const client = clientFromSession(session);
-  await client.connect();
   try {
+    console.info("SESSION_CONNECT_START", { tenantId, connectionId });
+    await client.connect();
+    console.info("SESSION_CONNECT_OK", { tenantId, connectionId });
+    const me = await client.getMe();
+    console.info("SESSION_AUTHORIZED", {
+      tenantId,
+      connectionId,
+      telegramUserId: Number((me as Api.User).id),
+    });
+    await db()
+      .from("telegram_connections")
+      .update({
+        status: "CONNECTED",
+        health: "HEALTHY",
+        restriction_status: "NONE",
+        error_message: null,
+        last_active_at: new Date().toISOString(),
+        last_sync_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", connectionId)
+      .eq("tenant_id", tenantId);
     return await fn(client, row);
+  } catch (error) {
+    if (invalidSessionError(error)) {
+      const message = errorMessage(error);
+      console.warn("SESSION_INVALID", { tenantId, connectionId, reason: message });
+      await db()
+        .from("telegram_connections")
+        .update({
+          status: "ERROR",
+          health: "REQUIRES_ACTION",
+          restriction_status: "REQUIRES_ACTION",
+          restriction_reason: message,
+          error_message: message,
+          last_sync_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", connectionId)
+        .eq("tenant_id", tenantId);
+    }
+    throw error;
   } finally {
     await client.disconnect();
   }
@@ -528,16 +608,30 @@ export async function searchPublicGroupsViaUserSession(
 export async function discoverAudienceViaUserSession(
   tenantId: string,
   connectionId: string,
-  group: { username?: string | null; telegram_group_id?: number | null },
+  group: {
+    username?: string | null;
+    telegram_group_id?: number | null;
+    access_hash?: string | null;
+    entity_type?: string | null;
+  },
 ) {
   return withAuthorizedUserClient(tenantId, connectionId, async (client) => {
     try {
-      const entity = await client.getEntity(
-        group.username ? group.username.replace(/^@/, "") : Number(group.telegram_group_id),
-      );
-      if (!(entity instanceof Api.Channel)) {
+      console.info("AUDIENCE_GROUP_START", {
+        tenantId,
+        connectionId,
+        groupId: group.telegram_group_id ?? null,
+        username: group.username ?? null,
+      });
+      const entity = group.username
+        ? await client.getEntity(group.username.replace(/^@/, ""))
+        : inputChannelFromStored({
+            id: group.telegram_group_id ?? null,
+            accessHash: group.access_hash ?? null,
+          });
+      if (!(entity instanceof Api.Channel) && !(entity instanceof Api.InputChannel)) {
         return {
-          status: "MEMBERS_NOT_EXPOSED" as const,
+          status: "NO_PARTICIPANTS_EXPOSED" as const,
           reason: "Telegram member enumeration is only available for eligible channels/supergroups.",
           users: [],
         };
@@ -585,9 +679,29 @@ export async function discoverAudienceViaUserSession(
         if (pageUsers.length < limit) break;
         offset += limit;
       }
+      console.info("AUDIENCE_GROUP_COMPLETE", {
+        tenantId,
+        connectionId,
+        groupId: group.telegram_group_id ?? null,
+        usersFound: users.length,
+      });
+      if (!users.length) {
+        return {
+          status: "NO_PARTICIPANTS_EXPOSED" as const,
+          reason: "Telegram returned no visible participants for this session and group.",
+          users,
+        };
+      }
       return { status: "FOUND" as const, reason: null, users };
     } catch (error) {
       const classified = classifyAudienceError(error);
+      console.warn("AUDIENCE_GROUP_FAILED", {
+        tenantId,
+        connectionId,
+        groupId: group.telegram_group_id ?? null,
+        status: classified.status,
+        reason: classified.reason,
+      });
       return { ...classified, users: [] };
     }
   });

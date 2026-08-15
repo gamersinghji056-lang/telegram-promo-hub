@@ -106,9 +106,9 @@ export const getGroupDiscoveryState = createServerFn({ method: "POST" })
   .handler(async ({ data: i }) => data.groupDiscoveryState(await resolveAuth(i.auth)));
 
 export const startGroupDiscovery = createServerFn({ method: "POST" })
-  .inputValidator((i: Auth & { connectionId: string }) => i)
+  .inputValidator((i: Auth & { connectionId: string; keywords?: string[] }) => i)
   .handler(async ({ data: i }) =>
-    data.startGroupDiscovery(await resolveAuth(i.auth), i.connectionId),
+    data.startGroupDiscovery(await resolveAuth(i.auth), i.connectionId, i.keywords),
   );
 
 export const pauseGroupDiscovery = createServerFn({ method: "POST" })
@@ -116,9 +116,9 @@ export const pauseGroupDiscovery = createServerFn({ method: "POST" })
   .handler(async ({ data: i }) => data.pauseGroupDiscovery(await resolveAuth(i.auth)));
 
 export const searchGroupDiscoveryNow = createServerFn({ method: "POST" })
-  .inputValidator((i: Auth & { connectionId?: string | null }) => i)
+  .inputValidator((i: Auth & { connectionId?: string | null; keywords?: string[] }) => i)
   .handler(async ({ data: i }) =>
-    data.searchGroupDiscoveryNow(await resolveAuth(i.auth), i.connectionId ?? null),
+    data.searchGroupDiscoveryNow(await resolveAuth(i.auth), i.connectionId ?? null, i.keywords),
   );
 
 export const addGroupByUsername = createServerFn({ method: "POST" })

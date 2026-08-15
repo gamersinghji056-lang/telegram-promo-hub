@@ -23,6 +23,7 @@ function sendDelayMs() {
 
 function classifyTelegramError(error: string) {
   const lower = error.toLowerCase();
+  if (lower.includes("cooldown_until:") || lower.includes("cooling down")) return "COOLDOWN";
   if (
     lower.includes("flood") ||
     lower.includes("too many requests") ||
@@ -86,7 +87,7 @@ async function verifyConnection(tenantId: string, connectionId: string | null) {
   if (!data) throw new Error("Sending session not found.");
   if (data.status !== "CONNECTED") throw new Error("Sending session is not connected.");
   if (data.cooldown_until && new Date(data.cooldown_until as string) > new Date()) {
-    throw new Error("Sending session is cooling down.");
+    throw new Error(`COOLDOWN_UNTIL:${data.cooldown_until}`);
   }
   if (["RESTRICTED", "REQUIRES_ACTION"].includes(String(data.restriction_status ?? ""))) {
     throw new Error("Sending session requires attention.");
@@ -231,6 +232,34 @@ async function logCampaign(
 
 async function failJob(job: JobRow, error: string) {
   const classification = classifyTelegramError(error);
+  if (classification === "COOLDOWN") {
+    const cooldown = error.match(/COOLDOWN_UNTIL:([^\s]+)/)?.[1];
+    const runAfter =
+      cooldown && !Number.isNaN(new Date(cooldown).getTime())
+        ? new Date(cooldown).toISOString()
+        : new Date(Date.now() + sendDelayMs()).toISOString();
+    await db()
+      .from("campaign_jobs")
+      .update({
+        status: "QUEUED",
+        last_error: "Selected Telegram session is cooling down.",
+        run_after: runAfter,
+        locked_at: null,
+        started_at: null,
+      })
+      .eq("id", job.id);
+    await logCampaign(job, "INFO", "Job delayed for Telegram session cooldown.", {
+      classification,
+      run_after: runAfter,
+    });
+    console.info("CAMPAIGN_JOB_COOLDOWN", {
+      tenantId: job.tenant_id,
+      campaignId: job.campaign_id,
+      jobId: job.id,
+      runAfter,
+    });
+    return;
+  }
   const final =
     ["PERMANENT", "ENTITY_UNAVAILABLE", "NOT_WRITABLE"].includes(classification) ||
     job.attempts + 1 >= MAX_ATTEMPTS;
@@ -307,15 +336,34 @@ async function processJob(job: JobRow) {
   if (!locked) return { skipped: true };
 
   try {
+    console.info("CAMPAIGN_JOB_PICKED", {
+      tenantId: job.tenant_id,
+      campaignId: job.campaign_id,
+      jobId: job.id,
+      jobType: job.job_type,
+    });
     const campaign = await campaignMessage(job.campaign_id, job.tenant_id);
     await verifyConnection(job.tenant_id, job.connection_id ?? campaign.connection_id);
     const target = await resolveTarget(job);
+    console.info("TARGET_RESOLVE_OK", {
+      tenantId: job.tenant_id,
+      campaignId: job.campaign_id,
+      jobId: job.id,
+      jobType: job.job_type,
+      targetKind: target.kind,
+    });
     const connectionId = job.connection_id ?? campaign.connection_id ?? "";
     if (target.kind === "GROUP") {
       await sendGroupViaUserSession(job.tenant_id, connectionId, target.target, campaign.message);
     } else {
       await sendDirectViaUserSession(job.tenant_id, connectionId, target.target, campaign.message);
     }
+    console.info("SEND_OK", {
+      tenantId: job.tenant_id,
+      campaignId: job.campaign_id,
+      jobId: job.id,
+      jobType: job.job_type,
+    });
 
     await client
       .from("campaign_jobs")
@@ -362,6 +410,13 @@ async function processJob(job: JobRow) {
     return { sent: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Campaign job failed.";
+    console.warn("SEND_FAILED", {
+      tenantId: job.tenant_id,
+      campaignId: job.campaign_id,
+      jobId: job.id,
+      jobType: job.job_type,
+      reason: message,
+    });
     await failJob(job, message);
     return { failed: true, error: message };
   } finally {
@@ -371,6 +426,17 @@ async function processJob(job: JobRow) {
 
 export async function processCampaignJobs(limit = DEFAULT_BATCH_LIMIT) {
   const batchLimit = Math.max(1, Math.min(limit, 50));
+  await db()
+    .from("campaign_jobs")
+    .update({
+      status: "QUEUED",
+      locked_at: null,
+      started_at: null,
+      last_error: "Recovered stale processing job after worker restart.",
+      run_after: new Date().toISOString(),
+    })
+    .eq("status", "PROCESSING")
+    .lt("locked_at", new Date(Date.now() - 5 * 60_000).toISOString());
   const { data: jobs, error } = await db()
     .from("campaign_jobs")
     .select("*")

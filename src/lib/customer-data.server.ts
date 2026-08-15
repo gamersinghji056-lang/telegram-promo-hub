@@ -370,6 +370,15 @@ export async function discoverGroups(ctx: AuthContext, connectionId: string, key
   return result;
 }
 
+function discoveryTerms(keywords: string[], batch = 0) {
+  const suffixes = ["", " group", " chat", " community", " official", " p2p", " trading"];
+  const offset = batch % suffixes.length;
+  return keywords.flatMap((keyword) => {
+    const ordered = suffixes.slice(offset).concat(suffixes.slice(0, offset));
+    return ordered.slice(0, 3).map((suffix) => `${keyword}${suffix}`.trim());
+  });
+}
+
 async function discoverGroupsForTenant(tenantId: string, connectionId: string, safeKeywords: string[]) {
   const s = await getSetting<{ provider_url?: string; provider_key?: string }>("discovery");
   let providerRows: {
@@ -407,6 +416,9 @@ async function discoverGroupsForTenant(tenantId: string, connectionId: string, s
       member_count?: number | null;
       keywords?: string[];
       telegram_group_id?: number | null;
+      accessHash?: string | null;
+      entityType?: string | null;
+      canSendMessages?: boolean | null;
     }
   >();
   for (const g of providerRows) {
@@ -421,6 +433,9 @@ async function discoverGroupsForTenant(tenantId: string, connectionId: string, s
       member_count: existing?.member_count ?? g.memberCount,
       keywords: [...new Set([...(existing?.keywords ?? []), ...g.matchedKeywords])],
       telegram_group_id: g.telegramGroupId,
+      accessHash: g.accessHash,
+      entityType: g.entityType,
+      canSendMessages: g.canSendMessages,
     });
   }
 
@@ -428,20 +443,21 @@ async function discoverGroupsForTenant(tenantId: string, connectionId: string, s
     tenant_id: tenantId,
     title: g.title,
     username: g.username.replace(/^@/, ""),
-        member_count: g.member_count ?? null,
-        matched_keywords: [...new Set(g.keywords ?? safeKeywords)],
-        status: "FOUND",
-        connection_id: connectionId,
-        telegram_group_id: g.telegram_group_id ?? null,
-        access_hash: g.accessHash ?? null,
-        entity_type: g.entityType ?? null,
-        can_send_messages: g.canSendMessages ?? null,
-        writable_status: g.canSendMessages === false ? "NOT_WRITABLE" : "UNKNOWN",
-        last_resolved_connection_id: connectionId,
-        discovery_source: "AUTO",
-        last_seen_at: new Date().toISOString(),
-      }));
+    member_count: g.member_count ?? null,
+    matched_keywords: [...new Set(g.keywords ?? safeKeywords)],
+    status: "FOUND",
+    connection_id: connectionId,
+    telegram_group_id: g.telegram_group_id ?? null,
+    access_hash: g.accessHash ?? null,
+    entity_type: g.entityType ?? null,
+    can_send_messages: g.canSendMessages ?? null,
+    writable_status: g.canSendMessages === false ? "NOT_WRITABLE" : "UNKNOWN",
+    last_resolved_connection_id: connectionId,
+    discovery_source: "AUTO",
+    last_seen_at: new Date().toISOString(),
+  }));
   let added = 0;
+  let duplicates = 0;
   if (rows.length) {
     const client = db();
     for (const row of rows) {
@@ -452,6 +468,7 @@ async function discoverGroupsForTenant(tenantId: string, connectionId: string, s
         .eq("username", row.username)
         .maybeSingle();
       if (existing) {
+        duplicates += 1;
         await client
           .from("discovered_groups")
           .update({
@@ -477,7 +494,7 @@ async function discoverGroupsForTenant(tenantId: string, connectionId: string, s
       }
     }
   }
-  return { configured: !!s.provider_url, added, results: rows };
+  return { configured: !!s.provider_url, added, duplicates, results: rows };
 }
 
 export async function groupDiscoveryState(ctx: AuthContext) {
@@ -493,6 +510,9 @@ export async function groupDiscoveryState(ctx: AuthContext) {
       keywords: [],
       total_found: 0,
       new_groups_found: 0,
+      duplicates_found: 0,
+      current_keyword: null,
+      errors: [],
       last_search_at: null,
       next_search_at: null,
       last_error: null,
@@ -501,9 +521,18 @@ export async function groupDiscoveryState(ctx: AuthContext) {
   );
 }
 
-export async function startGroupDiscovery(ctx: AuthContext, connectionId: string) {
+function selectedSavedKeywords(saved: string[], selected?: string[]) {
+  const allowed = new Set(saved.map((k) => k.toLowerCase()));
+  const requested = selected?.map((k) => k.trim().toLowerCase()).filter((k) => allowed.has(k)) ?? [];
+  return [...new Set(requested.length ? requested : saved)];
+}
+
+export async function startGroupDiscovery(ctx: AuthContext, connectionId: string, selected?: string[]) {
   const connection = await requireConnection(ctx, connectionId);
-  const keywords = (await listKeywords(ctx)).map((k) => String(k.keyword));
+  const keywords = selectedSavedKeywords(
+    (await listKeywords(ctx)).map((k) => String(k.keyword)),
+    selected,
+  );
   if (!keywords.length) throw new Error("Add at least one keyword before starting discovery.");
   await db().from("group_discovery_states").upsert(
     {
@@ -511,6 +540,7 @@ export async function startGroupDiscovery(ctx: AuthContext, connectionId: string
       connection_id: connection.id,
       status: "RUNNING",
       keywords,
+      selected_keywords: keywords,
       next_search_at: new Date().toISOString(),
       last_error: null,
       updated_at: new Date().toISOString(),
@@ -530,13 +560,18 @@ export async function pauseGroupDiscovery(ctx: AuthContext) {
   return groupDiscoveryState(ctx);
 }
 
-export async function searchGroupDiscoveryNow(ctx: AuthContext, connectionId?: string | null) {
+export async function searchGroupDiscoveryNow(ctx: AuthContext, connectionId?: string | null, selected?: string[]) {
   const existing = await groupDiscoveryState(ctx);
   const selectedConnection = connectionId || existing.connection_id;
   const connection = await requireConnection(ctx, selectedConnection);
-  const keywords = (await listKeywords(ctx)).map((k) => String(k.keyword));
+  const keywords = selectedSavedKeywords(
+    (await listKeywords(ctx)).map((k) => String(k.keyword)),
+    selected ?? existing.selected_keywords ?? existing.keywords,
+  );
   if (!keywords.length) throw new Error("Add at least one keyword before searching.");
-  const result = await discoverGroupsForTenant(ctx.tenantId, connection.id as string, keywords);
+  const batch = Number(existing.batches_completed ?? 0);
+  const terms = discoveryTerms(keywords, batch);
+  const result = await discoverGroupsForTenant(ctx.tenantId, connection.id as string, terms);
   const nextSearch = new Date(Date.now() + 15 * 60_000).toISOString();
   await db().from("group_discovery_states").upsert(
     {
@@ -544,8 +579,11 @@ export async function searchGroupDiscoveryNow(ctx: AuthContext, connectionId?: s
       connection_id: connection.id,
       status: existing.status === "RUNNING" ? "RUNNING" : "IDLE",
       keywords,
-      total_found: (existing.total_found ?? 0) + result.results.length,
+      selected_keywords: keywords,
+      total_found: (existing.total_found ?? 0) + result.added,
       new_groups_found: result.added,
+      duplicates_found: result.duplicates,
+      current_keyword: terms[0] ?? null,
       last_search_at: new Date().toISOString(),
       next_search_at: existing.status === "RUNNING" ? nextSearch : null,
       last_error: null,
@@ -568,18 +606,37 @@ export async function processGroupDiscoveryJobs(limit = 5) {
   let processed = 0;
   for (const state of states ?? []) {
     try {
-      const keywords = (state.keywords ?? []).map(String).filter(Boolean);
+      const keywords = (state.selected_keywords ?? state.keywords ?? []).map(String).filter(Boolean);
       if (!state.connection_id || !keywords.length) throw new Error("Discovery needs keywords and a healthy session.");
+      const batch = Number(state.batches_completed ?? 0);
+      const cursor = keywords.length ? batch % keywords.length : 0;
+      const keyword = keywords[cursor];
+      const terms = discoveryTerms([keyword], batch);
+      console.info("DISCOVERY_BATCH_START", {
+        tenantId: state.tenant_id,
+        connectionId: state.connection_id,
+        keyword,
+        batch,
+      });
       const result = await discoverGroupsForTenant(
         state.tenant_id as string,
         state.connection_id as string,
-        keywords,
+        terms,
       );
+      console.info("DISCOVERY_BATCH_COMPLETE", {
+        tenantId: state.tenant_id,
+        connectionId: state.connection_id,
+        keyword,
+        added: result.added,
+        duplicates: result.duplicates,
+      });
       await db()
         .from("group_discovery_states")
         .update({
-          total_found: Number(state.total_found ?? 0) + result.results.length,
+          total_found: Number(state.total_found ?? 0) + result.added,
           new_groups_found: result.added,
+          duplicates_found: result.duplicates,
+          current_keyword: keyword,
           last_search_at: new Date().toISOString(),
           next_search_at: new Date(Date.now() + 15 * 60_000).toISOString(),
           batches_completed: Number(state.batches_completed ?? 0) + 1,
@@ -592,8 +649,14 @@ export async function processGroupDiscoveryJobs(limit = 5) {
       await db()
         .from("group_discovery_states")
         .update({
-          status: "PAUSED",
           last_error: error instanceof Error ? error.message : "Discovery failed.",
+          errors: [
+            {
+              time: new Date().toISOString(),
+              message: error instanceof Error ? error.message : "Discovery failed.",
+            },
+          ],
+          next_search_at: new Date(Date.now() + 15 * 60_000).toISOString(),
           updated_at: new Date().toISOString(),
         })
         .eq("tenant_id", state.tenant_id);
@@ -1198,7 +1261,7 @@ export async function discoverAudience(
   const connection = connectionId ? await requireConnection(ctx, connectionId) : await defaultHealthyConnection(ctx);
   const { data: groups } = await db()
     .from("discovered_groups")
-    .select("id, title, username, telegram_group_id, status")
+    .select("id, title, username, telegram_group_id, access_hash, entity_type, status")
     .eq("tenant_id", ctx.tenantId)
     .in("id", ids)
     .in("status", ["APPROVED", "JOINED"]);
@@ -1227,6 +1290,8 @@ export async function discoverAudience(
     const result = await discoverAudienceViaUserSession(ctx.tenantId, connection.id as string, {
       username: group.username as string | null,
       telegram_group_id: group.telegram_group_id as number | null,
+      access_hash: group.access_hash as string | null,
+      entity_type: group.entity_type as string | null,
     });
     const groupResult = {
       groupId: group.id as string,

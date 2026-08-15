@@ -796,8 +796,24 @@ function SessionSelect({ value, onChange, connections, label }: any) {
 function GroupFinder({ auth, data, actions, reload, setNotice, actionBusy, runAction }: any) {
   const [keyword, setKeyword] = useState("");
   const [connectionId, setConnectionId] = useState("");
-  const keywords = (data?.keywords ?? []).map((k: any) => k.keyword);
+  const keywords = (data?.keywords ?? []).map((k: any) => String(k.keyword));
   const discovery = data?.discovery ?? {};
+  const [selectedKeywords, setSelectedKeywords] = useState<string[]>([]);
+  useEffect(() => {
+    const saved = new Set(keywords);
+    const preferred = ((discovery.selected_keywords ?? discovery.keywords ?? keywords) as string[])
+      .map(String)
+      .filter((k) => saved.has(k));
+    setSelectedKeywords((current) => {
+      const kept = current.filter((k) => saved.has(k));
+      return kept.length ? kept : preferred.length ? preferred : keywords;
+    });
+  }, [keywords.join("|"), (discovery.selected_keywords ?? discovery.keywords ?? []).join("|")]);
+  const toggleKeyword = (value: string) => {
+    setSelectedKeywords((current) =>
+      current.includes(value) ? current.filter((k) => k !== value) : [...current, value],
+    );
+  };
   async function addKey(e: FormEvent) {
     e.preventDefault();
     await runAction("add-keyword", async () => {
@@ -810,7 +826,7 @@ function GroupFinder({ auth, data, actions, reload, setNotice, actionBusy, runAc
   async function searchGroups() {
     await runAction("search-groups", async () => {
       const result = await actions.searchGroupDiscoveryNow({
-        data: { auth, connectionId: connectionId || null },
+        data: { auth, connectionId: connectionId || null, keywords: selectedKeywords },
       });
       setNotice(`${result.added} new group(s) found. Discovery progress saved.`);
       await reload();
@@ -818,7 +834,7 @@ function GroupFinder({ auth, data, actions, reload, setNotice, actionBusy, runAc
   }
   async function startDiscovery() {
     await runAction("start-discovery", async () => {
-      await actions.startGroupDiscovery({ data: { auth, connectionId } });
+      await actions.startGroupDiscovery({ data: { auth, connectionId, keywords: selectedKeywords } });
       setNotice("Group discovery started.");
       await reload();
     });
@@ -847,39 +863,66 @@ function GroupFinder({ auth, data, actions, reload, setNotice, actionBusy, runAc
         </div>
         <div className="flex flex-wrap gap-2">
           {(data?.keywords ?? []).map((k: any) => (
-            <button
+            <span
               key={k.id}
-              type="button"
-              disabled={!!actionBusy}
-              onClick={() =>
-                runAction(`remove-keyword-${k.id}`, async () => {
-                  await actions.removeKeyword({ data: { auth, id: k.id } });
-                  await reload();
-                })
-              }
-              className="inline-flex items-center gap-1 border border-border px-2 py-1 text-xs"
+              className="inline-flex items-center gap-2 border border-border px-2 py-1 text-xs"
             >
-              {k.keyword} <X className="size-3" />
-            </button>
+              <label className="inline-flex items-center gap-1">
+                <input
+                  type="checkbox"
+                  checked={selectedKeywords.includes(String(k.keyword))}
+                  onChange={() => toggleKeyword(String(k.keyword))}
+                />
+                {k.keyword}
+              </label>
+              <button
+                type="button"
+                disabled={!!actionBusy}
+                aria-label={`Remove ${k.keyword}`}
+                onClick={() =>
+                  runAction(`remove-keyword-${k.id}`, async () => {
+                    await actions.removeKeyword({ data: { auth, id: k.id } });
+                    await reload();
+                  })
+                }
+              >
+                <X className="size-3" />
+              </button>
+            </span>
           ))}
         </div>
       </form>
       <section className={panelClass("space-y-3")}>
-        <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-5">
+        <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-6">
           <Stat label="Status" value={discovery.status ?? "IDLE"} />
-          <Stat label="Groups Found" value={data?.groups?.length ?? 0} />
+          <Stat label="Selected Keywords" value={selectedKeywords.length} />
+          <Stat label="Groups Found Total" value={discovery.total_found ?? data?.groups?.length ?? 0} />
           <Stat
             label="Last Search"
             value={discovery.last_search_at ? new Date(discovery.last_search_at).toLocaleString() : "never"}
           />
-          <Stat label="New Groups Found" value={discovery.new_groups_found ?? 0} />
+          <Stat label="New This Run" value={discovery.new_groups_found ?? 0} />
+          <Stat label="Duplicates" value={discovery.duplicates_found ?? 0} />
           <Stat
             label="Next Search"
             value={discovery.next_search_at ? new Date(discovery.next_search_at).toLocaleString() : "not scheduled"}
           />
         </div>
+        <p className="text-xs text-muted-foreground">
+          Current Keyword: {discovery.current_keyword ?? "none"} | Errors: {(discovery.errors ?? []).length}
+        </p>
         {discovery.last_error ? (
           <p className="text-sm text-warning">{discovery.last_error}</p>
+        ) : null}
+        {(discovery.errors ?? []).length ? (
+          <details className="text-xs text-muted-foreground">
+            <summary>Discovery Errors ({(discovery.errors ?? []).length})</summary>
+            <div className="mt-2 space-y-1">
+              {(discovery.errors ?? []).slice(0, 5).map((item: any, index: number) => (
+                <p key={`${item.time ?? "error"}-${index}`}>{item.message ?? "Discovery failed."}</p>
+              ))}
+            </div>
+          </details>
         ) : null}
         <SessionSelect
           label="Select Search Session"
@@ -890,7 +933,7 @@ function GroupFinder({ auth, data, actions, reload, setNotice, actionBusy, runAc
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
           <Button
             onClick={startDiscovery}
-            disabled={!connectionId || keywords.length === 0 || actionBusy === "start-discovery"}
+            disabled={!connectionId || selectedKeywords.length === 0 || actionBusy === "start-discovery"}
           >
             {actionBusy === "start-discovery" ? "Starting..." : "START DISCOVERY"}
           </Button>
@@ -904,7 +947,7 @@ function GroupFinder({ auth, data, actions, reload, setNotice, actionBusy, runAc
           <Button
             variant="secondary"
             onClick={searchGroups}
-            disabled={!connectionId || keywords.length === 0 || actionBusy === "search-groups"}
+            disabled={!connectionId || selectedKeywords.length === 0 || actionBusy === "search-groups"}
           >
             <Search className="mr-2 size-4" /> {actionBusy === "search-groups" ? "Searching..." : "SEARCH NOW"}
           </Button>
