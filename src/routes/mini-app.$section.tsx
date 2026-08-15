@@ -1320,9 +1320,16 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
   const [name, setName] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
   const [detail, setDetail] = useState<any>(null);
+  const autoVerifyStarted = useRef(false);
   useEffect(() => {
     setWritability(data?.writability ?? {});
   }, [data?.writability]);
+  useEffect(() => {
+    const unknown = Number(data?.writability?.unknown ?? 0);
+    if (autoVerifyStarted.current || writableGroups.length > 0 || unknown <= 0) return;
+    autoVerifyStarted.current = true;
+    void verifyGroups();
+  }, [data?.writability?.unknown, writableGroups.length]);
 
   async function verifyGroups() {
     await runAction("verify-writable-groups", async () => {
