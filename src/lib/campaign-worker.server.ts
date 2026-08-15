@@ -21,7 +21,7 @@ function sendDelayMs() {
   return Number.isFinite(raw) && raw >= 1000 ? raw : DEFAULT_SEND_DELAY_MS;
 }
 
-function classifyTelegramError(error: string) {
+function classifyTelegramError(error: string, jobType?: JobRow["job_type"]) {
   const lower = error.toLowerCase();
   if (lower.includes("cooldown_until:") || lower.includes("cooling down")) return "COOLDOWN";
   if (
@@ -32,15 +32,40 @@ function classifyTelegramError(error: string) {
     return "FLOOD";
   }
   if (
-    lower.includes("forbidden") ||
-    lower.includes("blocked") ||
-    lower.includes("not enough rights")
+    lower.includes("not_writable") ||
+    lower.includes("chat_write_forbidden") ||
+    lower.includes("chat_send") ||
+    lower.includes("chat_admin_required") ||
+    lower.includes("user_banned_in_channel") ||
+    lower.includes("not enough rights") ||
+    lower.includes("write forbidden")
+  ) {
+    return "NOT_WRITABLE";
+  }
+  if (
+    lower.includes("channel_private") ||
+    lower.includes("username_not_occupied") ||
+    lower.includes("chat not found") ||
+    lower.includes("user not found") ||
+    lower.includes("entity_unavailable")
+  ) {
+    return "ENTITY_UNAVAILABLE";
+  }
+  if (jobType === "GROUP" && (lower.includes("forbidden") || lower.includes("blocked"))) {
+    return "NOT_WRITABLE";
+  }
+  if (jobType === "DM" && (lower.includes("forbidden") || lower.includes("blocked"))) {
+    return "PERMANENT";
+  }
+  if (
+    lower.includes("auth_key") ||
+    lower.includes("session_revoked") ||
+    lower.includes("session_expired") ||
+    lower.includes("user_restricted") ||
+    lower.includes("account")
   ) {
     return "RESTRICTED";
   }
-  if (lower.includes("chat not found") || lower.includes("user not found")) return "PERMANENT";
-  if (lower.includes("entity_unavailable")) return "ENTITY_UNAVAILABLE";
-  if (lower.includes("not_writable")) return "NOT_WRITABLE";
   return "TEMPORARY";
 }
 
@@ -234,7 +259,7 @@ async function logCampaign(
 }
 
 async function failJob(job: JobRow, error: string) {
-  const classification = classifyTelegramError(error);
+  const classification = classifyTelegramError(error, job.job_type);
   if (classification === "COOLDOWN") {
     const cooldown = error.match(/COOLDOWN_UNTIL:([^\s]+)/)?.[1];
     const runAfter =
@@ -293,6 +318,25 @@ async function failJob(job: JobRow, error: string) {
       .update({ status, error, sent_at: null })
       .eq("id", job.target_id)
       .eq("tenant_id", job.tenant_id);
+    if (job.job_type === "GROUP" && classification === "NOT_WRITABLE") {
+      const { data: target } = await db()
+        .from("campaign_groups")
+        .select("group_id")
+        .eq("id", job.target_id)
+        .eq("tenant_id", job.tenant_id)
+        .maybeSingle();
+      if (target?.group_id) {
+        await db()
+          .from("discovered_groups")
+          .update({
+            can_send_messages: false,
+            writable_status: "NOT_WRITABLE",
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", target.group_id)
+          .eq("tenant_id", job.tenant_id);
+      }
+    }
   }
 
   if (classification === "FLOOD" && job.connection_id) {
