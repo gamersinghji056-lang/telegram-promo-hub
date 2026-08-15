@@ -303,6 +303,7 @@ function MiniAppSection() {
       }),
       "group-history": (a) => campaignsFn({ data: { auth: a, filter: "GROUP" } }),
       "group-categories": async (a) => ({
+        connections: await connectionsFn({ data: { auth: a } }),
         groups: await groupsFn({ data: { auth: a, status: "APPROVED_ACTIVE" } }),
         categories: await groupCategoriesFn({ data: { auth: a } }),
         writability: await groupWritabilitySummaryFn({ data: { auth: a } }),
@@ -394,6 +395,43 @@ function MiniAppSection() {
     sectionRef.current = section;
     void load();
   }, [section]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const root = document.documentElement;
+    const focusSelector = "input, textarea, select, [contenteditable='true']";
+    const updateViewportPadding = () => {
+      const viewport = window.visualViewport;
+      const inset = viewport
+        ? Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop)
+        : 0;
+      root.style.setProperty("--miniapp-keyboard-inset", `${Math.ceil(inset)}px`);
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active.matches(focusSelector)) {
+        window.setTimeout(() => {
+          active.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+        }, 40);
+      }
+    };
+    const onFocus = (event: Event) => {
+      if (event.target instanceof HTMLElement && event.target.matches(focusSelector)) {
+        window.setTimeout(updateViewportPadding, 60);
+        window.setTimeout(updateViewportPadding, 260);
+      }
+    };
+    window.visualViewport?.addEventListener("resize", updateViewportPadding);
+    window.visualViewport?.addEventListener("scroll", updateViewportPadding);
+    window.addEventListener("focusin", onFocus);
+    window.addEventListener("focusout", updateViewportPadding);
+    updateViewportPadding();
+    return () => {
+      window.visualViewport?.removeEventListener("resize", updateViewportPadding);
+      window.visualViewport?.removeEventListener("scroll", updateViewportPadding);
+      window.removeEventListener("focusin", onFocus);
+      window.removeEventListener("focusout", updateViewportPadding);
+      root.style.removeProperty("--miniapp-keyboard-inset");
+    };
+  }, []);
 
   const unread = notifications.filter((n) => !n.read_at).length;
   const guardedNotice = (origin: string) => (value: string) => {
@@ -1435,13 +1473,33 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
 
   async function testWritable() {
     await runAction("test-category-writable-groups", async () => {
-      const response = await actions.testWritableGroups({
-        data: { auth, connectionId: testConnectionId, groupIds: testSelected },
-      });
-      setTestResult(response);
-      setWritability(response.summary ?? writability);
+      const aggregate = {
+        checked: 0,
+        total: testSelected.length,
+        writable: 0,
+        notWritable: 0,
+        unknown: 0,
+        inaccessible: 0,
+        errors: [] as any[],
+      };
+      setTestResult(aggregate);
+      let summary = writability;
+      for (const groupId of testSelected) {
+        const response = await actions.testWritableGroups({
+          data: { auth, connectionId: testConnectionId, groupIds: [groupId] },
+        });
+        aggregate.checked += response.checked ?? 0;
+        aggregate.writable += response.writable ?? 0;
+        aggregate.notWritable += response.notWritable ?? 0;
+        aggregate.unknown += response.unknown ?? 0;
+        aggregate.inaccessible += response.inaccessible ?? 0;
+        aggregate.errors = [...aggregate.errors, ...(response.errors ?? [])];
+        summary = response.summary ?? summary;
+        setTestResult({ ...aggregate, errors: [...aggregate.errors] });
+      }
+      setWritability(summary);
       setNotice(
-        `Tested: ${response.checked}/${response.total}. Writable: ${response.writable}. Not Writable: ${response.notWritable}. Unknown: ${response.unknown}. Inaccessible: ${response.inaccessible}.`,
+        `Tested: ${aggregate.checked}/${aggregate.total}. Writable: ${aggregate.writable}. Not Writable: ${aggregate.notWritable}. Unknown: ${aggregate.unknown}. Inaccessible: ${aggregate.inaccessible}.`,
       );
       await reload();
     });
@@ -2181,10 +2239,12 @@ function jobStats(row: any) {
     stats.pending_messages ??
       Math.max(Number(row?.total_targets ?? 0) - sent - failed, 0),
   );
-  const total = sent + pending + failed;
-  const groupsPerCycle = Number(row?.total_targets ?? stats.groups_per_cycle ?? 0);
-  const completedCycles = Number(row?.cycles_completed ?? 0);
-  return { total, sent, pending, failed, groupsPerCycle, completedCycles };
+  const groupsPerCycle = Number(stats.groups_per_cycle ?? row?.total_targets ?? 0);
+  const completedCycles = Number(stats.completed_cycles ?? row?.cycles_completed ?? 0);
+  const currentCycleAttempted = Number(stats.current_cycle_attempted ?? Math.max(sent + failed - completedCycles * groupsPerCycle, 0));
+  const totalAttempted = Number(stats.total_attempted ?? sent + failed);
+  const total = Number(stats.total_messages ?? totalAttempted);
+  return { total, sent, pending, failed, groupsPerCycle, completedCycles, currentCycleAttempted, totalAttempted };
 }
 
 function CampaignDonut({ stats, compact = false }: { stats: any; compact?: boolean }) {
@@ -2283,7 +2343,8 @@ function CampaignCards({ rows, auth, actions, reload, setNotice, actionBusy, run
               <p className="mt-1 text-xs text-muted-foreground">
                 Completed Cycles {jobStats(c).completedCycles} | Current Cycle{" "}
                 {Number(c.cycles_completed ?? 0) + 1} | Groups per Cycle {jobStats(c).groupsPerCycle} |
-                Total Messages {jobStats(c).total} | Sent {jobStats(c).sent} | Pending{" "}
+                Current Cycle Progress {jobStats(c).currentCycleAttempted} / {jobStats(c).groupsPerCycle} |
+                Total Messages Attempted {jobStats(c).totalAttempted} | Sent {jobStats(c).sent} | Pending Current Cycle{" "}
                 {jobStats(c).pending} | Failed {jobStats(c).failed} | Last run{" "}
                 {c.last_run_at ? new Date(c.last_run_at).toLocaleString() : "never"} | Next run{" "}
                 {c.next_run_at ? new Date(c.next_run_at).toLocaleString() : "not scheduled"}
@@ -2351,9 +2412,10 @@ function CampaignCards({ rows, auth, actions, reload, setNotice, actionBusy, run
               <Stat label="Completed Cycles" value={jobStats(detail.campaign).completedCycles} />
               <Stat label="Current Cycle" value={Number(detail.campaign.cycles_completed ?? 0) + 1} />
               <Stat label="Groups per Cycle" value={jobStats(detail.campaign).groupsPerCycle} />
-              <Stat label="Total Messages" value={jobStats(detail.campaign).total} />
+              <Stat label="Current Cycle Progress" value={`${jobStats(detail.campaign).currentCycleAttempted} / ${jobStats(detail.campaign).groupsPerCycle}`} />
+              <Stat label="Total Messages Attempted" value={jobStats(detail.campaign).totalAttempted} />
               <Stat label="Sent" value={jobStats(detail.campaign).sent} />
-              <Stat label="Pending" value={jobStats(detail.campaign).pending} />
+              <Stat label="Pending Current Cycle" value={jobStats(detail.campaign).pending} />
               <Stat label="Failed" value={jobStats(detail.campaign).failed} />
               <Stat
                 label="Next Cycle"

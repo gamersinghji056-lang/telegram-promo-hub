@@ -103,10 +103,23 @@ type CampaignJobStats = {
   sent_messages: number;
   pending_messages: number;
   failed_messages: number;
+  groups_per_cycle?: number;
+  completed_cycles?: number;
+  current_cycle_attempted?: number;
+  total_attempted?: number;
 };
 
 function emptyJobStats(): CampaignJobStats {
-  return { total_messages: 0, sent_messages: 0, pending_messages: 0, failed_messages: 0 };
+  return {
+    total_messages: 0,
+    sent_messages: 0,
+    pending_messages: 0,
+    failed_messages: 0,
+    groups_per_cycle: 0,
+    completed_cycles: 0,
+    current_cycle_attempted: 0,
+    total_attempted: 0,
+  };
 }
 
 async function campaignJobStatsMap(
@@ -118,7 +131,7 @@ async function campaignJobStatsMap(
   if (!campaignIds.length) return map;
   const { data } = await client
     .from("campaign_job_stats")
-    .select("campaign_id, total_messages, sent_messages, pending_messages, failed_messages")
+    .select("campaign_id, total_messages, sent_messages, pending_messages, failed_messages, groups_per_cycle, completed_cycles, current_cycle_attempted, total_attempted")
     .eq("tenant_id", tenantId)
     .in("campaign_id", campaignIds);
   for (const row of data ?? []) {
@@ -127,6 +140,10 @@ async function campaignJobStatsMap(
       sent_messages: Number(row.sent_messages ?? 0),
       pending_messages: Number(row.pending_messages ?? 0),
       failed_messages: Number(row.failed_messages ?? 0),
+      groups_per_cycle: Number(row.groups_per_cycle ?? 0),
+      completed_cycles: Number(row.completed_cycles ?? 0),
+      current_cycle_attempted: Number(row.current_cycle_attempted ?? 0),
+      total_attempted: Number(row.total_attempted ?? 0),
     });
   }
   return map;
@@ -1976,12 +1993,22 @@ export async function testWritableGroups(
   };
   for (const group of rows ?? []) {
     result.checked += 1;
-    const tested = await testGroupWritableViaUserSession(ctx.tenantId, connection.id as string, {
-      username: group.username as string | null,
-      telegram_group_id: group.telegram_group_id as number | null,
-      access_hash: group.access_hash as string | null,
-      entity_type: group.entity_type as string | null,
-    });
+    let tested;
+    try {
+      tested = await testGroupWritableViaUserSession(ctx.tenantId, connection.id as string, {
+        username: group.username as string | null,
+        telegram_group_id: group.telegram_group_id as number | null,
+        access_hash: group.access_hash as string | null,
+        entity_type: group.entity_type as string | null,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "Writable test failed.";
+      tested = {
+        writableStatus: "UNKNOWN",
+        canSendMessages: null,
+        reason,
+      };
+    }
     const status = tested.writableStatus;
     const patch: Record<string, unknown> = {
       can_send_messages: status === "WRITABLE" ? true : status === "UNKNOWN" ? null : false,
@@ -2009,16 +2036,20 @@ export async function testWritableGroups(
         reason: tested.reason,
       });
     }
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    if ((rows?.length ?? 0) > 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
   }
   await clientConnectionUsed(ctx.tenantId, connection.id as string);
-  await notify(
-    ctx.tenantId,
-    "Writable group test completed",
-    `Tested ${result.checked}/${result.total}. Writable: ${result.writable}. Not writable: ${result.notWritable}. Unknown: ${result.unknown}. Inaccessible: ${result.inaccessible}.`,
-    "INFO",
-    "/mini-app/groups-approved",
-  );
+  if (ids.length > 1) {
+    await notify(
+      ctx.tenantId,
+      "Writable group test completed",
+      `Tested ${result.checked}/${result.total}. Writable: ${result.writable}. Not writable: ${result.notWritable}. Unknown: ${result.unknown}. Inaccessible: ${result.inaccessible}.`,
+      "INFO",
+      "/mini-app/groups-approved",
+    );
+  }
   return { ...result, summary: await groupWritabilitySummary(ctx) };
 }
 
