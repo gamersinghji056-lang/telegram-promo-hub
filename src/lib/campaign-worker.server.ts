@@ -80,12 +80,15 @@ async function verifyConnection(tenantId: string, connectionId: string | null) {
   if (!connectionId) throw new Error("Campaign has no selected sending session.");
   const { data } = await db()
     .from("telegram_connections")
-    .select("id, status, restriction_status, cooldown_until")
+    .select("id, status, restriction_status, cooldown_until, encrypted_session")
     .eq("id", connectionId)
     .eq("tenant_id", tenantId)
     .maybeSingle();
   if (!data) throw new Error("Sending session not found.");
-  if (data.status !== "CONNECTED") throw new Error("Sending session is not connected.");
+  if (!data.encrypted_session) throw new Error("Sending session is not authorized.");
+  if (["DISCONNECTED", "AUTH_CODE_SENT", "TWO_FACTOR_REQUIRED"].includes(String(data.status))) {
+    throw new Error("Sending session is not connected.");
+  }
   if (data.cooldown_until && new Date(data.cooldown_until as string) > new Date()) {
     throw new Error(`COOLDOWN_UNTIL:${data.cooldown_until}`);
   }

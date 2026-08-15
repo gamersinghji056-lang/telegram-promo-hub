@@ -445,12 +445,14 @@ export async function withAuthorizedUserClient<T>(
     .maybeSingle();
   if (!connection) throw new Error("Telegram session not found.");
   const row = connection as ConnectionRow;
-  if (row.status !== "CONNECTED") throw new Error("Telegram session is not connected.");
+  const session = decryptSecret(row.encrypted_session);
+  if (!session) throw new Error("Telegram session is not authorized.");
+  if (["DISCONNECTED", "AUTH_CODE_SENT", "TWO_FACTOR_REQUIRED"].includes(row.status)) {
+    throw new Error("Telegram session is not connected.");
+  }
   if (row.cooldown_until && new Date(row.cooldown_until) > new Date()) {
     throw new Error("Telegram session is cooling down.");
   }
-  const session = decryptSecret(row.encrypted_session);
-  if (!session) throw new Error("Telegram session is not authorized.");
   console.info("SESSION_LOAD", { tenantId, connectionId });
   const client = clientFromSession(session);
   try {
