@@ -51,6 +51,13 @@ async function createCustomerSession(input: {
   return token;
 }
 
+export async function createCustomerSessionForCustomer(input: {
+  customerId: string;
+  tenantId: string;
+}) {
+  return createCustomerSession(input);
+}
+
 export function flowExpiresAt() {
   return new Date(Date.now() + FLOW_TTL_MINUTES * 60_000).toISOString();
 }

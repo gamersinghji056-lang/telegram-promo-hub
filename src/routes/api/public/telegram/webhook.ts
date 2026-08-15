@@ -4,6 +4,7 @@ import { deriveWebhookSecret, hashPassword, safeEqual, verifyPassword } from "@/
 import { botToken, callBot } from "@/lib/telegram.server";
 import {
   clearTelegramFlow,
+  createCustomerSessionForCustomer,
   loginCustomer,
   normalizeEmail,
   registerCustomerWithPasswordHash,
@@ -135,14 +136,21 @@ async function deleteMessage(chatId: number, messageId: number) {
   });
 }
 
-async function openMiniAppKeyboard() {
-  const url = await miniAppUrl();
-  if (!url) return null;
-  return { inline_keyboard: [[{ text: "OPEN MINI APP", web_app: { url } }]] };
+function miniAppUrlWithSession(url: string, sessionToken?: string) {
+  if (!sessionToken) return url;
+  return `${url}#sess=${encodeURIComponent(sessionToken)}`;
 }
 
-async function sendOpenMiniApp(chatId: number, text: string) {
-  const keyboard = await openMiniAppKeyboard();
+async function openMiniAppKeyboard(sessionToken?: string) {
+  const url = await miniAppUrl();
+  if (!url) return null;
+  return {
+    inline_keyboard: [[{ text: "OPEN MINI APP", web_app: { url: miniAppUrlWithSession(url, sessionToken) } }]],
+  };
+}
+
+async function sendOpenMiniApp(chatId: number, text: string, sessionToken?: string) {
+  const keyboard = await openMiniAppKeyboard(sessionToken);
   await send(
     chatId,
     keyboard
@@ -299,7 +307,11 @@ async function handlePrivateText(msg: TgMessage) {
       await send(chatId, result.error);
       return;
     }
-    await sendOpenMiniApp(chatId, "Account created. Open the Mini App to continue.");
+    const sessionToken = await createCustomerSessionForCustomer({
+      customerId: result.customerId,
+      tenantId: result.tenantId,
+    });
+    await sendOpenMiniApp(chatId, "Account created. Open the Mini App to continue.", sessionToken);
     return;
   }
 
@@ -334,7 +346,7 @@ async function handlePrivateText(msg: TgMessage) {
       await send(chatId, result.error);
       return;
     }
-    await sendOpenMiniApp(chatId, "Login successful. Open the Mini App to continue.");
+    await sendOpenMiniApp(chatId, "Login successful. Open the Mini App to continue.", result.token);
     return;
   }
 

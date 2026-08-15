@@ -84,6 +84,8 @@ const titles: Record<string, string> = {
   settings: "Settings",
 };
 
+const AUTH_REQUIRED_MESSAGE = "Please login or register in @wpaypromotionbot first.";
+
 export const Route = createFileRoute("/mini-app/$section")({
   head: ({ params }) => ({
     meta: [
@@ -99,6 +101,15 @@ export const Route = createFileRoute("/mini-app/$section")({
 });
 
 function telegramAuth(): string | null {
+  const fromHash = new URLSearchParams(window.location.hash.slice(1)).get("sess");
+  if (fromHash) {
+    sessionStorage.setItem("customer-session", fromHash);
+    history.replaceState(null, "", window.location.pathname);
+    return `sess ${fromHash}`;
+  }
+  const session = sessionStorage.getItem("customer-session");
+  if (session) return `sess ${session}`;
+
   const telegram = (
     window as unknown as {
       Telegram?: { WebApp?: { initData?: string; ready?: () => void; expand?: () => void } };
@@ -107,13 +118,7 @@ function telegramAuth(): string | null {
   telegram?.ready?.();
   telegram?.expand?.();
   if (telegram?.initData) return `tma ${telegram.initData}`;
-  const fromHash = new URLSearchParams(window.location.hash.slice(1)).get("sess");
-  if (fromHash) {
-    sessionStorage.setItem("customer-session", fromHash);
-    history.replaceState(null, "", window.location.pathname);
-  }
-  const session = fromHash ?? sessionStorage.getItem("customer-session");
-  return session ? `sess ${session}` : null;
+  return null;
 }
 
 function inputClass(extra = "") {
@@ -225,9 +230,7 @@ function MiniAppSection() {
       return;
     }
     if (!nextAuth) {
-      setError(
-        "Open this control panel from @Wpaypromotionbot after using Register or Login in the bot.",
-      );
+      setError(AUTH_REQUIRED_MESSAGE);
       setBusy(false);
       return;
     }
@@ -238,7 +241,9 @@ function MiniAppSection() {
     } catch (e) {
       setError(
         e instanceof Error && e.message.includes("NO_ACCOUNT")
-          ? "No customer account is linked to this Telegram profile. Use Register in the bot first."
+          ? AUTH_REQUIRED_MESSAGE
+          : e instanceof Error && e.message.includes("UNAUTHENTICATED")
+            ? AUTH_REQUIRED_MESSAGE
           : e instanceof Error
             ? e.message
             : "Your session could not be verified. Return to the bot and open the Mini App again.",
@@ -265,6 +270,14 @@ function MiniAppSection() {
   useEffect(() => {
     void load();
   }, [section]);
+
+  if (error === AUTH_REQUIRED_MESSAGE) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-background p-5 text-center text-foreground">
+        <p className="max-w-xs text-base font-medium">{AUTH_REQUIRED_MESSAGE}</p>
+      </main>
+    );
+  }
 
   return (
     <MiniAppShell active={section}>
