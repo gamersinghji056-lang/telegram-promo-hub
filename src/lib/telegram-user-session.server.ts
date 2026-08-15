@@ -69,6 +69,60 @@ function errorMessage(error: unknown) {
   return "Telegram operation failed.";
 }
 
+function accessHash(value: unknown) {
+  if (!value || typeof value !== "object" || !("accessHash" in value)) return null;
+  const hash = (value as { accessHash?: { toString?: () => string } | string | number }).accessHash;
+  return hash == null ? null : String(hash);
+}
+
+function entityType(entity: unknown) {
+  if (entity instanceof Api.Channel) {
+    return entity.megagroup ? "MEGAGROUP" : "CHANNEL";
+  }
+  if (entity instanceof Api.Chat) return "CHAT";
+  if (entity instanceof Api.User) return "USER";
+  return "UNKNOWN";
+}
+
+function channelWritable(entity: Api.Channel) {
+  const row = entity as Api.Channel & {
+    creator?: boolean;
+    adminRights?: { postMessages?: boolean } | null;
+    defaultBannedRights?: { sendMessages?: boolean } | null;
+  };
+  if (row.broadcast && !row.creator && !row.adminRights?.postMessages) return false;
+  if (row.defaultBannedRights?.sendMessages) return false;
+  return true;
+}
+
+async function resolveSendEntity(
+  client: TelegramClient,
+  target: {
+    id?: number | null;
+    username?: string | null;
+    accessHash?: string | null;
+    entityType?: string | null;
+  },
+) {
+  if (target.username) return client.getEntity(target.username.replace(/^@/, ""));
+  if (target.id && target.accessHash && target.entityType === "USER") {
+    return new Api.InputPeerUser({
+      userId: bigInt(String(target.id)),
+      accessHash: bigInt(String(target.accessHash)),
+    });
+  }
+  if (target.id && target.accessHash && ["CHANNEL", "MEGAGROUP"].includes(target.entityType ?? "")) {
+    return new Api.InputPeerChannel({
+      channelId: bigInt(String(target.id)),
+      accessHash: bigInt(String(target.accessHash)),
+    });
+  }
+  if (target.id && target.entityType === "CHAT") {
+    return new Api.InputPeerChat({ chatId: bigInt(String(target.id)) });
+  }
+  throw new Error("ENTITY_UNAVAILABLE: target cannot be resolved without username or access hash.");
+}
+
 function errorCode(error: unknown) {
   if (typeof error === "object" && error && "errorMessage" in error) {
     return String((error as { errorMessage?: string }).errorMessage);
@@ -391,6 +445,9 @@ export async function resolvePublicGroupViaUserSession(
       username: "username" in entity && entity.username ? String(entity.username) : handle,
       telegramGroupId: Number(entity.id),
       memberCount,
+      accessHash: accessHash(entity),
+      entityType: entityType(entity),
+      canSendMessages: entity instanceof Api.Channel ? channelWritable(entity) : true,
     };
   });
 }
@@ -407,6 +464,9 @@ export async function searchPublicGroupsViaUserSession(
       telegramGroupId: number;
       memberCount: number | null;
       matchedKeywords: string[];
+      accessHash: string | null;
+      entityType: string;
+      canSendMessages: boolean;
     }[] = [];
     const addChat = (chat: unknown, keyword: string) => {
       if (!(chat instanceof Api.Channel) && !(chat instanceof Api.Chat)) return;
@@ -422,6 +482,9 @@ export async function searchPublicGroupsViaUserSession(
         title,
         username,
         telegramGroupId: Number(chat.id),
+        accessHash: accessHash(chat),
+        entityType: entityType(chat),
+        canSendMessages: chat instanceof Api.Channel ? channelWritable(chat) : true,
         memberCount:
           "participantsCount" in chat && chat.participantsCount
             ? Number(chat.participantsCount)
@@ -481,6 +544,7 @@ export async function discoverAudienceViaUserSession(
       }
       const users: {
         telegramUserId: number;
+        accessHash: string | null;
         username: string | null;
         displayName: string | null;
       }[] = [];
@@ -513,6 +577,7 @@ export async function discoverAudienceViaUserSession(
           const displayName = [user.firstName, user.lastName].filter(Boolean).join(" ").trim();
           users.push({
             telegramUserId: id,
+            accessHash: accessHash(user),
             username: user.username ?? null,
             displayName: displayName || user.username || String(id),
           });
@@ -543,16 +608,46 @@ export async function importGroupsFromFolderViaUserSession(
       username: string;
       telegramGroupId: number;
       memberCount: number | null;
+      accessHash: string | null;
+      entityType: string;
+      canSendMessages: boolean;
+      writableStatus: string;
+      status: string;
+      reason?: string | null;
     }[] = [];
     for (const chat of chats) {
       if (!(chat instanceof Api.Channel) && !(chat instanceof Api.Chat)) continue;
       const username = "username" in chat && chat.username ? String(chat.username) : "";
-      if (!username) continue;
       const title = "title" in chat ? String(chat.title) : username;
+      if (!username) {
+        results.push({
+          title,
+          username: "",
+          telegramGroupId: Number(chat.id),
+          accessHash: accessHash(chat),
+          entityType: entityType(chat),
+          canSendMessages: false,
+          writableStatus: "INACCESSIBLE",
+          status: "INACCESSIBLE",
+          reason: "Folder entry has no public username/link this app can safely use.",
+          memberCount:
+            "participantsCount" in chat && chat.participantsCount
+              ? Number(chat.participantsCount)
+              : null,
+        });
+        continue;
+      }
+      const canSend = chat instanceof Api.Channel ? channelWritable(chat) : true;
       results.push({
         title,
         username,
         telegramGroupId: Number(chat.id),
+        accessHash: accessHash(chat),
+        entityType: entityType(chat),
+        canSendMessages: canSend,
+        writableStatus: canSend ? "WRITABLE" : "NOT_WRITABLE",
+        status: canSend ? "VALID" : "NOT_WRITABLE",
+        reason: canSend ? null : "Selected session cannot post messages to this folder entry.",
         memberCount:
           "participantsCount" in chat && chat.participantsCount
             ? Number(chat.participantsCount)
@@ -601,6 +696,74 @@ export async function sendViaUserSession(
       .filter(Boolean)
       .join("\n\n");
     await client.sendMessage(target, {
+      ...(text ? { message: text } : {}),
+      ...(message.media_url ? { file: message.media_url } : {}),
+      linkPreview: true,
+    });
+    await db()
+      .from("telegram_connections")
+      .update({ last_used_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .eq("id", connectionId)
+      .eq("tenant_id", tenantId);
+  });
+}
+
+export async function sendGroupViaUserSession(
+  tenantId: string,
+  connectionId: string,
+  target: {
+    telegramGroupId?: number | null;
+    username?: string | null;
+    accessHash?: string | null;
+    entityType?: string | null;
+  },
+  message: MessagePayload,
+) {
+  return withAuthorizedUserClient(tenantId, connectionId, async (client) => {
+    const entity = await resolveSendEntity(client, {
+      id: target.telegramGroupId ?? null,
+      username: target.username ?? null,
+      accessHash: target.accessHash ?? null,
+      entityType: target.entityType ?? null,
+    });
+    if (entity instanceof Api.Channel && !channelWritable(entity)) {
+      throw new Error("NOT_WRITABLE: selected Telegram session cannot post to this group/channel.");
+    }
+    const text = [message.text ?? ""]
+      .concat((message.buttons ?? []).map((button) => `${button.text}: ${button.url}`))
+      .filter(Boolean)
+      .join("\n\n");
+    await client.sendMessage(entity, {
+      ...(text ? { message: text } : {}),
+      ...(message.media_url ? { file: message.media_url } : {}),
+      linkPreview: true,
+    });
+    await db()
+      .from("telegram_connections")
+      .update({ last_used_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .eq("id", connectionId)
+      .eq("tenant_id", tenantId);
+  });
+}
+
+export async function sendDirectViaUserSession(
+  tenantId: string,
+  connectionId: string,
+  target: { telegramUserId: number; username?: string | null; accessHash?: string | null },
+  message: MessagePayload,
+) {
+  return withAuthorizedUserClient(tenantId, connectionId, async (client) => {
+    const entity = await resolveSendEntity(client, {
+      id: target.telegramUserId,
+      username: target.username ?? null,
+      accessHash: target.accessHash ?? null,
+      entityType: "USER",
+    });
+    const text = [message.text ?? ""]
+      .concat((message.buttons ?? []).map((button) => `${button.text}: ${button.url}`))
+      .filter(Boolean)
+      .join("\n\n");
+    await client.sendMessage(entity, {
       ...(text ? { message: text } : {}),
       ...(message.media_url ? { file: message.media_url } : {}),
       linkPreview: true,

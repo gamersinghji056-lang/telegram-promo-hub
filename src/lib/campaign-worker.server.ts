@@ -1,6 +1,6 @@
 import { db, logSystem } from "./db.server";
 import type { MessagePayload } from "./telegram.server";
-import { sendViaUserSession } from "./telegram-user-session.server";
+import { sendDirectViaUserSession, sendGroupViaUserSession } from "./telegram-user-session.server";
 
 const DEFAULT_BATCH_LIMIT = 10;
 const DEFAULT_SEND_DELAY_MS = 2_000;
@@ -38,6 +38,8 @@ function classifyTelegramError(error: string) {
     return "RESTRICTED";
   }
   if (lower.includes("chat not found") || lower.includes("user not found")) return "PERMANENT";
+  if (lower.includes("entity_unavailable")) return "ENTITY_UNAVAILABLE";
+  if (lower.includes("not_writable")) return "NOT_WRITABLE";
   return "TEMPORARY";
 }
 
@@ -96,7 +98,7 @@ async function resolveTarget(job: JobRow) {
   if (job.job_type === "GROUP") {
     const { data } = await client
       .from("campaign_groups")
-      .select("id, status, discovered_groups(id, title, username, telegram_group_id, status)")
+      .select("id, status, discovered_groups(id, title, username, telegram_group_id, access_hash, entity_type, status, can_send_messages, writable_status)")
       .eq("id", job.target_id)
       .eq("tenant_id", job.tenant_id)
       .maybeSingle();
@@ -106,8 +108,17 @@ async function resolveTarget(job: JobRow) {
     if (!data || !group) throw new Error("Group target not found.");
     if (!["APPROVED", "JOINED"].includes(String(group.status)))
       throw new Error("Group is not approved.");
+    if (group.can_send_messages === false || group.writable_status === "NOT_WRITABLE") {
+      throw new Error("NOT_WRITABLE: selected session cannot post to this group/channel.");
+    }
     return {
-      chatId: group.telegram_group_id ?? (group.username ? `@${group.username}` : null),
+      kind: "GROUP" as const,
+      target: {
+        telegramGroupId: group.telegram_group_id ? Number(group.telegram_group_id) : null,
+        username: group.username as string | null,
+        accessHash: group.access_hash as string | null,
+        entityType: group.entity_type as string | null,
+      },
       targetTable: "campaign_groups",
       label: group.username ? `@${group.username}` : group.title,
     };
@@ -115,7 +126,7 @@ async function resolveTarget(job: JobRow) {
 
   const { data } = await client
     .from("campaign_recipients")
-    .select("id, status, telegram_user_id, audience_contacts(id, eligibility, contact_count)")
+    .select("id, status, telegram_user_id, audience_contacts(id, eligibility, contact_count, username, access_hash, entity_status)")
     .eq("id", job.target_id)
     .eq("tenant_id", job.tenant_id)
     .maybeSingle();
@@ -125,8 +136,16 @@ async function resolveTarget(job: JobRow) {
   if (!data || !contact) throw new Error("Recipient target not found.");
   if (contact.eligibility !== "OPTED_IN") throw new Error("Recipient is not opted in.");
   if ((contact.contact_count ?? 0) > 0) throw new Error("Recipient was already contacted.");
+  if (contact.entity_status === "ENTITY_UNAVAILABLE" || (!contact.username && !contact.access_hash)) {
+    throw new Error("ENTITY_UNAVAILABLE: recipient has no resolvable Telegram entity.");
+  }
   return {
-    chatId: data.telegram_user_id,
+    kind: "DM" as const,
+    target: {
+      telegramUserId: Number(data.telegram_user_id),
+      username: contact.username as string | null,
+      accessHash: contact.access_hash as string | null,
+    },
     targetTable: "campaign_recipients",
     contactId: contact.id,
     label: String(data.telegram_user_id),
@@ -151,7 +170,7 @@ async function markCampaignCounts(campaignId: string, tenantId: string) {
       .from("campaign_jobs")
       .select("id", { count: "exact", head: true })
       .eq("campaign_id", campaignId)
-      .in("status", ["FAILED", "SKIPPED", "EXCLUDED"]),
+      .in("status", ["FAILED", "SKIPPED", "EXCLUDED", "ENTITY_UNAVAILABLE", "NOT_WRITABLE"]),
     client
       .from("campaign_jobs")
       .select("id", { count: "exact", head: true })
@@ -212,12 +231,22 @@ async function logCampaign(
 
 async function failJob(job: JobRow, error: string) {
   const classification = classifyTelegramError(error);
-  const final = classification === "PERMANENT" || job.attempts + 1 >= MAX_ATTEMPTS;
+  const final =
+    ["PERMANENT", "ENTITY_UNAVAILABLE", "NOT_WRITABLE"].includes(classification) ||
+    job.attempts + 1 >= MAX_ATTEMPTS;
   const nextRun = new Date(Date.now() + backoffMinutes(job.attempts + 1) * 60_000).toISOString();
+  const status =
+    classification === "ENTITY_UNAVAILABLE"
+      ? "ENTITY_UNAVAILABLE"
+      : classification === "NOT_WRITABLE"
+        ? "NOT_WRITABLE"
+        : final
+          ? "FAILED"
+          : "QUEUED";
   await db()
     .from("campaign_jobs")
     .update({
-      status: final ? "FAILED" : "QUEUED",
+      status,
       attempts: job.attempts + 1,
       last_error: error,
       run_after: final ? new Date().toISOString() : nextRun,
@@ -225,6 +254,14 @@ async function failJob(job: JobRow, error: string) {
     })
     .eq("id", job.id);
   await logCampaign(job, final ? "ERROR" : "WARNING", error, { classification });
+  if (classification === "ENTITY_UNAVAILABLE" || classification === "NOT_WRITABLE") {
+    const targetTable = job.job_type === "GROUP" ? "campaign_groups" : "campaign_recipients";
+    await db()
+      .from(targetTable)
+      .update({ status, error, sent_at: null })
+      .eq("id", job.target_id)
+      .eq("tenant_id", job.tenant_id);
+  }
 
   if (classification === "FLOOD" && job.connection_id) {
     const until = new Date(Date.now() + backoffMinutes(job.attempts + 1) * 60_000).toISOString();
@@ -273,14 +310,12 @@ async function processJob(job: JobRow) {
     const campaign = await campaignMessage(job.campaign_id, job.tenant_id);
     await verifyConnection(job.tenant_id, job.connection_id ?? campaign.connection_id);
     const target = await resolveTarget(job);
-    if (!target.chatId) throw new Error("Target has no Telegram address.");
-
-    await sendViaUserSession(
-      job.tenant_id,
-      job.connection_id ?? campaign.connection_id ?? "",
-      target.chatId,
-      campaign.message,
-    );
+    const connectionId = job.connection_id ?? campaign.connection_id ?? "";
+    if (target.kind === "GROUP") {
+      await sendGroupViaUserSession(job.tenant_id, connectionId, target.target, campaign.message);
+    } else {
+      await sendDirectViaUserSession(job.tenant_id, connectionId, target.target, campaign.message);
+    }
 
     await client
       .from("campaign_jobs")

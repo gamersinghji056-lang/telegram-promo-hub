@@ -1,5 +1,9 @@
 import { processCampaignJobs } from "./campaign-worker.server";
-import { processGroupDiscoveryJobs } from "./customer-data.server";
+import {
+  processAudienceDiscoveryJobs,
+  processBulkJoinJobs,
+  processGroupDiscoveryJobs,
+} from "./customer-data.server";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -24,6 +28,8 @@ export function startBackgroundWorkers() {
     try {
       await processCampaignJobs(Number(process.env["CAMPAIGN_WORKER_BATCH_LIMIT"] ?? 10));
       await processGroupDiscoveryJobs(Number(process.env["GROUP_DISCOVERY_BATCH_LIMIT"] ?? 5));
+      await processAudienceDiscoveryJobs(Number(process.env["AUDIENCE_DISCOVERY_BATCH_LIMIT"] ?? 2));
+      await processBulkJoinJobs(Number(process.env["BULK_JOIN_BATCH_LIMIT"] ?? 2));
     } catch (error) {
       console.error("Background worker failed", error instanceof Error ? error.message : error);
     } finally {
@@ -34,4 +40,3 @@ export function startBackgroundWorkers() {
   setTimeout(tick, 3_000).unref?.();
   setInterval(tick, intervalMs()).unref?.();
 }
-

@@ -52,6 +52,14 @@ export async function logAdmin(entry: {
   });
 }
 
-export async function notify(tenantId: string, title: string, body?: string, kind = "INFO") {
-  await db().from("notifications").insert({ tenant_id: tenantId, title, body: body ?? null, kind });
+export async function notify(
+  tenantId: string,
+  title: string,
+  body?: string,
+  kind = "INFO",
+  link?: string | null,
+) {
+  await db()
+    .from("notifications")
+    .insert({ tenant_id: tenantId, title, body: body ?? null, kind, link: link ?? null });
 }

@@ -157,6 +157,22 @@ export const joinGroup = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { id: string; connectionId: string }) => i)
   .handler(async ({ data: i }) => data.joinGroup(await resolveAuth(i.auth), i.id, i.connectionId));
 
+export const getBulkJoinState = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth) => i)
+  .handler(async ({ data: i }) => data.bulkJoinState(await resolveAuth(i.auth)));
+
+export const startBulkJoin = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { connectionId: string }) => i)
+  .handler(async ({ data: i }) => data.startBulkJoin(await resolveAuth(i.auth), i.connectionId));
+
+export const pauseBulkJoin = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth) => i)
+  .handler(async ({ data: i }) => data.pauseBulkJoin(await resolveAuth(i.auth)));
+
+export const resumeBulkJoin = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth) => i)
+  .handler(async ({ data: i }) => data.resumeBulkJoin(await resolveAuth(i.auth)));
+
 export const rejectGroup = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { id: string }) => i)
   .handler(async ({ data: i }) => {
@@ -202,6 +218,20 @@ export const findAudience = createServerFn({ method: "POST" })
 export const discoverAudience = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { groupIds: string[] }) => i)
   .handler(async ({ data: i }) => data.discoverAudience(await resolveAuth(i.auth), i.groupIds));
+
+export const getAudienceDiscoveryState = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth) => i)
+  .handler(async ({ data: i }) => data.audienceDiscoveryState(await resolveAuth(i.auth)));
+
+export const startAudienceDiscovery = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { groupIds: string[] }) => i)
+  .handler(async ({ data: i }) =>
+    data.startAudienceDiscovery(await resolveAuth(i.auth), i.groupIds),
+  );
+
+export const pauseAudienceDiscovery = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth) => i)
+  .handler(async ({ data: i }) => data.pauseAudienceDiscovery(await resolveAuth(i.auth)));
 
 export const getContactHistory = createServerFn({ method: "POST" })
   .inputValidator((i: Auth) => i)

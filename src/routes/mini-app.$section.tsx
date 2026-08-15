@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, react-hooks/exhaustive-deps */
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   AlertTriangle,
   Bell,
@@ -41,8 +41,10 @@ import {
   discoverAudience,
   disconnectConnection,
   findAudience,
+  getAudienceDiscoveryState,
   getAnalytics,
   getBilling,
+  getBulkJoinState,
   getCampaignDetail,
   getCampaigns,
   getConnections,
@@ -63,7 +65,12 @@ import {
   importApprovedGroups,
   joinGroup,
   logout as logoutCustomer,
+  pauseAudienceDiscovery,
+  pauseBulkJoin,
   saveGroupCategory,
+  resumeBulkJoin,
+  startAudienceDiscovery,
+  startBulkJoin,
   startGroupDiscovery,
   startConnectionLogin,
   updateCampaign,
@@ -186,6 +193,8 @@ function MiniAppSection() {
   const logoutFn = useServerFn(logoutCustomer);
   const discoveryStateFn = useServerFn(getGroupDiscoveryState);
   const audienceFn = useServerFn(findAudience);
+  const audienceDiscoveryFn = useServerFn(getAudienceDiscoveryState);
+  const bulkJoinStateFn = useServerFn(getBulkJoinState);
 
   const actions = {
     addConnection: useServerFn(addConnection),
@@ -206,6 +215,10 @@ function MiniAppSection() {
     importApprovedGroups: useServerFn(importApprovedGroups),
     approveGroup: useServerFn(approveGroup),
     joinGroup: useServerFn(joinGroup),
+    getBulkJoinState: useServerFn(getBulkJoinState),
+    startBulkJoin: useServerFn(startBulkJoin),
+    pauseBulkJoin: useServerFn(pauseBulkJoin),
+    resumeBulkJoin: useServerFn(resumeBulkJoin),
     rejectGroup: useServerFn(rejectGroup),
     removeGroup: useServerFn(removeGroup),
     getGroupCategoryDetail: useServerFn(getGroupCategoryDetail),
@@ -214,6 +227,9 @@ function MiniAppSection() {
     getCampaignDetail: useServerFn(getCampaignDetail),
     findAudience: useServerFn(findAudience),
     discoverAudience: useServerFn(discoverAudience),
+    getAudienceDiscoveryState: useServerFn(getAudienceDiscoveryState),
+    startAudienceDiscovery: useServerFn(startAudienceDiscovery),
+    pauseAudienceDiscovery: useServerFn(pauseAudienceDiscovery),
     createCampaign: useServerFn(createCampaign),
     updateCampaign: useServerFn(updateCampaign),
     deleteCampaign: useServerFn(deleteCampaign),
@@ -227,6 +243,9 @@ function MiniAppSection() {
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [actionBusy, setActionBusy] = useState("");
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const sectionRef = useRef(section);
 
   const loaders = useMemo<Record<string, (auth: string) => Promise<any>>>(
     () => ({
@@ -245,6 +264,7 @@ function MiniAppSection() {
       "groups-approved": async (a) => ({
         connections: await connectionsFn({ data: { auth: a } }),
         groups: await groupsFn({ data: { auth: a, status: "APPROVED_ACTIVE" } }),
+        bulkJoin: await bulkJoinStateFn({ data: { auth: a } }),
       }),
       "groups-joined": async (a) => ({
         connections: await connectionsFn({ data: { auth: a } }),
@@ -252,6 +272,7 @@ function MiniAppSection() {
       }),
       "dm-audience": async (a) => ({
         groups: await groupsFn({ data: { auth: a, status: "APPROVED_ACTIVE" } }),
+        discovery: await audienceDiscoveryFn({ data: { auth: a } }),
       }),
       "dm-create": async (a) => ({
         connections: await connectionsFn({ data: { auth: a } }),
@@ -306,7 +327,8 @@ function MiniAppSection() {
       const result = await loaders[targetSection]?.(nextAuth);
       setData(result);
       setLoadedSection(targetSection);
-      if (targetSection === "dashboard") void notificationsFn({ data: { auth: nextAuth } });
+      const notes = await notificationsFn({ data: { auth: nextAuth } });
+      setNotifications(notes ?? []);
     } catch (e) {
       setError(
         e instanceof Error && e.message.includes("NO_ACCOUNT")
@@ -349,8 +371,14 @@ function MiniAppSection() {
   }
 
   useEffect(() => {
+    sectionRef.current = section;
     void load();
   }, [section]);
+
+  const unread = notifications.filter((n) => !n.read_at).length;
+  const guardedNotice = (origin: string) => (value: string) => {
+    if (sectionRef.current === origin) setNotice(value);
+  };
 
   if (error === AUTH_REQUIRED_MESSAGE) {
     return (
@@ -370,6 +398,20 @@ function MiniAppSection() {
         <div className="flex gap-2">
           <Button size="icon" variant="secondary" aria-label="Refresh" onClick={load} disabled={busy}>
             <RefreshCw className={busy ? "animate-spin" : ""} />
+          </Button>
+          <Button
+            size="icon"
+            variant="secondary"
+            aria-label="Notifications"
+            className="relative"
+            onClick={() => setShowNotifications(true)}
+          >
+            <Bell />
+            {unread ? (
+              <span className="absolute -right-1 -top-1 min-w-5 border border-background bg-primary px-1 text-[10px] text-primary-foreground">
+                {unread}
+              </span>
+            ) : null}
           </Button>
           <Button size="icon" variant="secondary" aria-label="Sign out" onClick={signOut}>
             <LogOut />
@@ -392,11 +434,40 @@ function MiniAppSection() {
           data={data}
           actions={actions}
           reload={load}
-          setNotice={setNotice}
+          setNotice={guardedNotice(section)}
           actionBusy={actionBusy}
           runAction={runAction}
         />
       )}
+      {showNotifications ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4">
+          <section className={panelClass("max-h-[88vh] w-full max-w-md space-y-3 overflow-auto shadow-lg")}>
+            <div className="flex items-center justify-between">
+              <p className="font-semibold">Notifications</p>
+              <button type="button" onClick={() => setShowNotifications(false)} aria-label="Close">
+                <X className="size-4" />
+              </button>
+            </div>
+            {notifications.map((note) => (
+              <a
+                key={note.id}
+                href={note.link ?? "#"}
+                className="block border border-border bg-background p-3 text-sm"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <p className="font-medium">{note.title}</p>
+                  {!note.read_at ? <span className="text-xs text-primary">Unread</span> : null}
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">{note.body}</p>
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  {new Date(note.created_at).toLocaleString()}
+                </p>
+              </a>
+            ))}
+            {!notifications.length ? <Empty message="No notifications yet." /> : null}
+          </section>
+        </div>
+      ) : null}
     </MiniAppShell>
   );
 }
@@ -860,18 +931,24 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
   return (
     <div className="space-y-4">
       {section === "groups-approved" ? (
-        <section className={panelClass("flex flex-wrap gap-2")}>
-          <Button onClick={() => setModal("ADD")}>
-            <Plus className="mr-2 size-4" /> ADD GROUP
-          </Button>
-          <Button variant="secondary" onClick={() => setModal("IMPORT")}>
-            <FolderOpen className="mr-2 size-4" /> IMPORT GROUPS
-          </Button>
+        <section className={panelClass("space-y-3")}>
+          <div className="flex items-center justify-between gap-3">
+            <p className="font-semibold">Total Approved Groups: {data?.groups?.length ?? 0}</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => setModal("ADD")}>
+              <Plus className="mr-2 size-4" /> ADD GROUP
+            </Button>
+            <Button variant="secondary" onClick={() => setModal("IMPORT")}>
+              <FolderOpen className="mr-2 size-4" /> IMPORT GROUPS
+            </Button>
+          </div>
         </section>
       ) : null}
       <GroupRows
         groups={data?.groups ?? []}
         connections={data?.connections ?? []}
+        bulkJoin={data?.bulkJoin}
         auth={auth}
         actions={actions}
         reload={reload}
@@ -901,7 +978,7 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
                     data: { auth, folderLink },
                   });
                   setNotice(
-                    `Imported: ${result.imported}. Duplicates: ${result.duplicates}. Inaccessible: ${result.inaccessible}. Failed: ${result.failed}.`,
+                    `Total Groups: ${result.totalGroups}. Duplicates: ${result.duplicates}. Blocked/Inaccessible: ${result.inaccessible}. Cannot Send Messages: ${result.notWritable}. Already Saved: ${result.alreadySaved}. Successfully Imported: ${result.imported}. Failed: ${result.failed}.`,
                   );
                   setFolderLink("");
                   setModal("");
@@ -953,19 +1030,76 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
   );
 }
 
-function GroupRows({ groups, connections, auth, actions, reload, setNotice, actionBusy, runAction }: any) {
+function GroupRows({ groups, connections, bulkJoin, auth, actions, reload, setNotice, actionBusy, runAction }: any) {
   const [connectionId, setConnectionId] = useState("");
   const [confirmRemove, setConfirmRemove] = useState<any>(null);
   const needsJoinSession = groups.some((g: any) => ["APPROVED", "JOINED"].includes(g.status));
+  const approvedNotJoined = groups.filter((g: any) => g.status === "APPROVED").length;
+  const totalBulk = bulkJoin?.group_ids?.length ?? approvedNotJoined;
+  async function startAll() {
+    await runAction("join-all", async () => {
+      await actions.startBulkJoin({ data: { auth, connectionId } });
+      setNotice("Join all started.");
+      await reload();
+    });
+  }
   return (
     <div className="space-y-3">
       {needsJoinSession ? (
-        <SessionSelect
-          label="Select Join Session"
-          value={connectionId}
-          onChange={setConnectionId}
-          connections={connections}
-        />
+        <section className={panelClass("space-y-3")}>
+          <SessionSelect
+            label="Select Join Session"
+            value={connectionId}
+            onChange={setConnectionId}
+            connections={connections}
+          />
+          {connectionId ? (
+            <div className="space-y-3">
+              <Button className="w-full" disabled={!approvedNotJoined || actionBusy === "join-all"} onClick={startAll}>
+                {actionBusy === "join-all" ? "Starting..." : "JOIN ALL GROUPS"}
+              </Button>
+              <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-5">
+                <Stat label="Joining" value={`${bulkJoin?.current_index ?? 0} / ${totalBulk}`} />
+                <Stat label="Joined" value={bulkJoin?.joined ?? 0} />
+                <Stat label="Already Joined" value={bulkJoin?.already_joined ?? 0} />
+                <Stat label="Failed" value={bulkJoin?.failed ?? 0} />
+                <Stat label="Inaccessible" value={bulkJoin?.inaccessible ?? 0} />
+                <Stat label="Cooldown" value={bulkJoin?.cooldown ?? 0} />
+                <Stat label="Status" value={bulkJoin?.status ?? "IDLE"} />
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  className="flex-1"
+                  variant="secondary"
+                  disabled={actionBusy === "pause-joining"}
+                  onClick={() =>
+                    runAction("pause-joining", async () => {
+                      await actions.pauseBulkJoin({ data: { auth } });
+                      setNotice("Join all paused.");
+                      await reload();
+                    })
+                  }
+                >
+                  {actionBusy === "pause-joining" ? "Pausing..." : "PAUSE JOINING"}
+                </Button>
+                <Button
+                  className="flex-1"
+                  variant="secondary"
+                  disabled={actionBusy === "resume-joining"}
+                  onClick={() =>
+                    runAction("resume-joining", async () => {
+                      await actions.resumeBulkJoin({ data: { auth } });
+                      setNotice("Join all resumed.");
+                      await reload();
+                    })
+                  }
+                >
+                  {actionBusy === "resume-joining" ? "Resuming..." : "RESUME"}
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </section>
       ) : null}
       {groups.map((g: any) => (
         <article key={g.id} className={panelClass()}>
@@ -1251,18 +1385,26 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
   );
 }
 
-function DMAudience({ auth, data, actions, setNotice, actionBusy, runAction }: any) {
+function DMAudience({ auth, data, actions, reload, setNotice, actionBusy, runAction }: any) {
   const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
-  const [result, setResult] = useState<any>(null);
-  async function run() {
-    await runAction("discover-audience", async () => {
-      const response = await actions.discoverAudience({
-        data: { auth, groupIds: selectedGroups },
-      });
-      setResult(response);
-      setNotice(
-        `Groups processed: ${response.groupsProcessed}. Users found: ${response.usersFound}.`,
-      );
+  const discovery = data?.discovery ?? {};
+  const state = discovery.state ?? {};
+  const audience = discovery.audience ?? { users: [] };
+  const issues = discovery.issues ?? [];
+  const processed = state.processed_group_ids?.length ?? 0;
+  const selectedCount = selectedGroups.length || state.group_ids?.length || 0;
+  async function start() {
+    await runAction("start-finding", async () => {
+      await actions.startAudienceDiscovery({ data: { auth, groupIds: selectedGroups } });
+      setNotice("Find Users started.");
+      await reload();
+    });
+  }
+  async function pause() {
+    await runAction("pause-finding", async () => {
+      await actions.pauseAudienceDiscovery({ data: { auth } });
+      setNotice("Find Users paused.");
+      await reload();
     });
   }
   return (
@@ -1274,42 +1416,66 @@ function DMAudience({ auth, data, actions, setNotice, actionBusy, runAction }: a
           audience database.
         </p>
       </section>
-      <GroupPicker
-        groups={data?.groups ?? []}
-        selected={selectedGroups}
-        setSelected={setSelectedGroups}
-        allowAll
-      />
-      <Button
-        className="w-full"
-        onClick={run}
-        disabled={selectedGroups.length === 0 || actionBusy === "discover-audience"}
-      >
-        {actionBusy === "discover-audience" ? "Finding..." : "FIND USERS"}
-      </Button>
-      {result ? (
+      <section className={panelClass("flex gap-2")}>
+        <Button className="flex-1" disabled={!selectedGroups.length || actionBusy === "start-finding"} onClick={start}>
+          {actionBusy === "start-finding" ? "Starting..." : "START FINDING"}
+        </Button>
+        <Button className="flex-1" variant="secondary" disabled={actionBusy === "pause-finding"} onClick={pause}>
+          {actionBusy === "pause-finding" ? "Pausing..." : "PAUSE FINDING"}
+        </Button>
+      </section>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <section className={panelClass("space-y-3")}>
-          <div className="grid grid-cols-2 gap-2 text-sm">
-            <Stat label="Groups selected" value={result.groupsSelected} />
-            <Stat label="Groups processed" value={result.groupsProcessed} />
-            <Stat label="Users found" value={result.usersFound} />
-            <Stat label="Duplicates" value={result.duplicates} />
-            <Stat label="Already saved" value={result.alreadySaved} />
-            <Stat label="Unavailable" value={result.unavailable} />
+          <p className="font-semibold">Source Groups</p>
+          <GroupPicker
+            groups={data?.groups ?? []}
+            selected={selectedGroups}
+            setSelected={setSelectedGroups}
+            allowAll
+          />
+          <div className="grid grid-cols-3 gap-2 text-sm">
+            <Stat label="Selected Groups" value={selectedCount} />
+            <Stat label="Processed" value={processed} />
+            <Stat label="Remaining" value={Math.max(selectedCount - processed, 0)} />
           </div>
-          {(result.results ?? []).map((row: any) => (
-            <div key={row.groupId} className="border border-border bg-background p-3 text-sm">
+        </section>
+        <section className={panelClass("space-y-3")}>
+          <p className="font-semibold">Users Found</p>
+          <div className="grid grid-cols-2 gap-2 text-sm">
+            <Stat label="Users Found" value={audience.totalFound ?? 0} />
+            <Stat label="New Users" value={state.new_users ?? 0} />
+            <Stat label="Duplicates" value={state.duplicates ?? 0} />
+            <Stat label="Previously Saved" value={state.previously_saved ?? 0} />
+          </div>
+          <div className="max-h-72 space-y-2 overflow-auto">
+            {(audience.users ?? []).map((user: any, index: number) => (
+              <p key={user.id} className="border border-border bg-background p-2 text-sm">
+                {index + 1}. {user.username ? `@${user.username}` : (user.display_name ?? user.telegram_user_id)}
+              </p>
+            ))}
+            {!audience.users?.length ? <p className="text-sm text-muted-foreground">No saved users yet.</p> : null}
+          </div>
+        </section>
+      </div>
+      <details className={panelClass("space-y-3")}>
+        <summary className="cursor-pointer font-semibold">DISCOVERY ISSUES ({issues.length})</summary>
+        <div className="mt-3 space-y-2">
+          {issues.map((row: any) => {
+            const group = Array.isArray(row.discovered_groups) ? row.discovered_groups[0] : row.discovered_groups;
+            return (
+            <div key={row.id} className="border border-border bg-background p-3 text-sm">
               <div className="flex items-center justify-between gap-3">
-                <p className="font-medium">{row.groupName}</p>
+                <p className="font-medium">{group?.title ?? "Source group"}</p>
                 <span className={statusTone(row.status)}>
-                  {row.status === "FOUND" ? `FOUND: ${row.usersFound}` : row.status}
+                  {row.status === "FOUND" ? `FOUND: ${row.users_found}` : row.status}
                 </span>
               </div>
               {row.reason ? <p className="mt-2 text-xs text-warning">{row.reason}</p> : null}
             </div>
-          ))}
-        </section>
-      ) : null}
+          )})}
+          {!issues.length ? <p className="text-sm text-muted-foreground">No discovery issues yet.</p> : null}
+        </div>
+      </details>
     </div>
   );
 }

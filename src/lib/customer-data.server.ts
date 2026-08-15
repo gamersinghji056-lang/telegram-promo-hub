@@ -428,14 +428,19 @@ async function discoverGroupsForTenant(tenantId: string, connectionId: string, s
     tenant_id: tenantId,
     title: g.title,
     username: g.username.replace(/^@/, ""),
-    member_count: g.member_count ?? null,
-    matched_keywords: [...new Set(g.keywords ?? safeKeywords)],
-    status: "FOUND",
-    connection_id: connectionId,
-    telegram_group_id: g.telegram_group_id ?? null,
-    discovery_source: "AUTO",
-    last_seen_at: new Date().toISOString(),
-  }));
+        member_count: g.member_count ?? null,
+        matched_keywords: [...new Set(g.keywords ?? safeKeywords)],
+        status: "FOUND",
+        connection_id: connectionId,
+        telegram_group_id: g.telegram_group_id ?? null,
+        access_hash: g.accessHash ?? null,
+        entity_type: g.entityType ?? null,
+        can_send_messages: g.canSendMessages ?? null,
+        writable_status: g.canSendMessages === false ? "NOT_WRITABLE" : "UNKNOWN",
+        last_resolved_connection_id: connectionId,
+        discovery_source: "AUTO",
+        last_seen_at: new Date().toISOString(),
+      }));
   let added = 0;
   if (rows.length) {
     const client = db();
@@ -453,6 +458,11 @@ async function discoverGroupsForTenant(tenantId: string, connectionId: string, s
             title: row.title,
             member_count: row.member_count,
             telegram_group_id: row.telegram_group_id,
+            access_hash: row.access_hash,
+            entity_type: row.entity_type,
+            can_send_messages: row.can_send_messages,
+            writable_status: row.writable_status,
+            last_resolved_connection_id: connectionId,
             last_seen_at: row.last_seen_at,
             matched_keywords: [
               ...new Set([...(existing.matched_keywords ?? []), ...row.matched_keywords]),
@@ -606,6 +616,9 @@ export async function addGroupByUsername(
     connection.id as string,
     handle,
   );
+  if (group.canSendMessages === false) {
+    throw new Error("This group/channel is not writable by the selected default Telegram session.");
+  }
 
   const { data, error } = await db()
     .from("discovered_groups")
@@ -615,6 +628,11 @@ export async function addGroupByUsername(
         title: group.title,
         username: group.username,
         telegram_group_id: group.telegramGroupId,
+        access_hash: group.accessHash,
+        entity_type: group.entityType,
+        can_send_messages: group.canSendMessages,
+        writable_status: group.canSendMessages === false ? "NOT_WRITABLE" : "WRITABLE",
+        last_resolved_connection_id: connection.id,
         member_count: group.memberCount,
         matched_keywords: keywords,
         status: "FOUND",
@@ -649,6 +667,11 @@ export async function addApprovedGroupByUsername(
         title: group.title,
         username: group.username,
         telegram_group_id: group.telegramGroupId,
+        access_hash: group.accessHash,
+        entity_type: group.entityType,
+        can_send_messages: group.canSendMessages,
+        writable_status: group.canSendMessages === false ? "NOT_WRITABLE" : "WRITABLE",
+        last_resolved_connection_id: connection.id,
         member_count: group.memberCount,
         matched_keywords: [],
         status: "APPROVED",
@@ -677,10 +700,39 @@ export async function importApprovedGroups(
     connection.id as string,
     folderLink,
   );
-  const stats = { imported: 0, duplicates: 0, inaccessible: 0, failed: 0 };
+  const stats = {
+    totalGroups: groups.length,
+    imported: 0,
+    duplicates: 0,
+    inaccessible: 0,
+    notWritable: 0,
+    alreadySaved: 0,
+    failed: 0,
+    auditId: null as string | null,
+    details: [] as Record<string, unknown>[],
+  };
   const client = db();
   for (const group of groups) {
     try {
+      if (!group.username) {
+        stats.inaccessible += 1;
+        stats.details.push({
+          title: group.title,
+          status: group.status ?? "INACCESSIBLE",
+          reason: group.reason ?? "Folder entry is not a usable public group.",
+        });
+        continue;
+      }
+      if (!group.canSendMessages) {
+        stats.notWritable += 1;
+        stats.details.push({
+          title: group.title,
+          username: group.username,
+          status: "NOT_WRITABLE",
+          reason: group.reason ?? "Selected session cannot post messages to this folder entry.",
+        });
+        continue;
+      }
       const { data: existing } = await client
         .from("discovered_groups")
         .select("id, status")
@@ -688,14 +740,30 @@ export async function importApprovedGroups(
         .eq("username", group.username)
         .maybeSingle();
       if (existing) {
-        stats.duplicates += 1;
+        if (["APPROVED", "JOINED"].includes(String(existing.status))) stats.alreadySaved += 1;
+        else stats.duplicates += 1;
         if (!["APPROVED", "JOINED"].includes(String(existing.status))) {
           await client
             .from("discovered_groups")
-            .update({ status: "APPROVED", approved_at: new Date().toISOString() })
+            .update({
+              status: "APPROVED",
+              approved_at: new Date().toISOString(),
+              access_hash: group.accessHash,
+              entity_type: group.entityType,
+              can_send_messages: group.canSendMessages,
+              writable_status: group.writableStatus,
+              last_resolved_connection_id: connection.id,
+              updated_at: new Date().toISOString(),
+            })
             .eq("id", existing.id)
             .eq("tenant_id", ctx.tenantId);
         }
+        stats.details.push({
+          title: group.title,
+          username: group.username,
+          status: "DUPLICATE",
+          reason: "Group already exists for this tenant.",
+        });
         continue;
       }
       await client.from("discovered_groups").insert({
@@ -703,6 +771,11 @@ export async function importApprovedGroups(
         title: group.title,
         username: group.username,
         telegram_group_id: group.telegramGroupId,
+        access_hash: group.accessHash,
+        entity_type: group.entityType,
+        can_send_messages: group.canSendMessages,
+        writable_status: group.writableStatus,
+        last_resolved_connection_id: connection.id,
         member_count: group.memberCount,
         matched_keywords: [],
         status: "APPROVED",
@@ -712,11 +785,47 @@ export async function importApprovedGroups(
         last_seen_at: new Date().toISOString(),
       });
       stats.imported += 1;
-    } catch {
+      stats.details.push({
+        title: group.title,
+        username: group.username,
+        status: "IMPORTED",
+      });
+    } catch (error) {
       stats.failed += 1;
+      stats.details.push({
+        title: group.title,
+        username: group.username,
+        status: "FAILED",
+        reason: error instanceof Error ? error.message : "Import failed.",
+      });
     }
   }
+  const { data: audit } = await client
+    .from("group_import_audits")
+    .insert({
+      tenant_id: ctx.tenantId,
+      connection_id: connection.id,
+      folder_link: folderLink,
+      total_groups: stats.totalGroups,
+      duplicates: stats.duplicates,
+      inaccessible: stats.inaccessible,
+      not_writable: stats.notWritable,
+      already_saved: stats.alreadySaved,
+      imported: stats.imported,
+      failed: stats.failed,
+      details: stats.details,
+    })
+    .select("id")
+    .single();
+  stats.auditId = (audit?.id as string | undefined) ?? null;
   await clientConnectionUsed(ctx.tenantId, connection.id as string);
+  await notify(
+    ctx.tenantId,
+    "Import completed",
+    `Imported ${stats.imported} usable group(s). Skipped ${stats.notWritable + stats.alreadySaved + stats.duplicates + stats.failed}.`,
+    "INFO",
+    "/mini-app/groups-approved",
+  );
   return stats;
 }
 
@@ -727,7 +836,9 @@ export async function listGroups(ctx: AuthContext, status?: string) {
     q = q.eq("discovery_source", "AUTO").eq("status", "FOUND");
   else if (status && status !== "ALL") q = q.eq("status", status);
   const { data } = await q.order("discovered_at", { ascending: false });
-  return data ?? [];
+  const rows = data ?? [];
+  if (status === "APPROVED_ACTIVE") return Object.assign(rows, { totalApproved: rows.length });
+  return rows;
 }
 
 export async function groupDetail(ctx: AuthContext, groupId: string) {
@@ -859,6 +970,147 @@ export async function joinGroup(ctx: AuthContext, groupId: string, connectionId:
   return result;
 }
 
+export async function bulkJoinState(ctx: AuthContext) {
+  const { data } = await db()
+    .from("bulk_join_states")
+    .select("*")
+    .eq("tenant_id", ctx.tenantId)
+    .maybeSingle();
+  return (
+    data ?? {
+      tenant_id: ctx.tenantId,
+      status: "IDLE",
+      group_ids: [],
+      current_index: 0,
+      joined: 0,
+      already_joined: 0,
+      failed: 0,
+      inaccessible: 0,
+      cooldown: 0,
+      last_error: null,
+    }
+  );
+}
+
+export async function startBulkJoin(ctx: AuthContext, connectionId: string) {
+  const connection = await requireConnection(ctx, connectionId);
+  const { data: groups } = await db()
+    .from("discovered_groups")
+    .select("id, status")
+    .eq("tenant_id", ctx.tenantId)
+    .eq("status", "APPROVED");
+  const ids = (groups ?? []).map((g) => g.id as string);
+  await db().from("bulk_join_states").upsert(
+    {
+      tenant_id: ctx.tenantId,
+      connection_id: connection.id,
+      status: "RUNNING",
+      group_ids: ids,
+      current_index: 0,
+      joined: 0,
+      already_joined: 0,
+      failed: 0,
+      inaccessible: 0,
+      cooldown: 0,
+      last_error: null,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "tenant_id" },
+  );
+  await notify(ctx.tenantId, "Join all started", `${ids.length} approved group(s) queued.`, "INFO", "/mini-app/groups-approved");
+  return bulkJoinState(ctx);
+}
+
+export async function pauseBulkJoin(ctx: AuthContext) {
+  await db()
+    .from("bulk_join_states")
+    .update({ status: "PAUSED", updated_at: new Date().toISOString() })
+    .eq("tenant_id", ctx.tenantId);
+  return bulkJoinState(ctx);
+}
+
+export async function resumeBulkJoin(ctx: AuthContext) {
+  await db()
+    .from("bulk_join_states")
+    .update({ status: "RUNNING", updated_at: new Date().toISOString() })
+    .eq("tenant_id", ctx.tenantId);
+  return bulkJoinState(ctx);
+}
+
+export async function processBulkJoinJobs(limit = 2) {
+  const { data: states } = await db()
+    .from("bulk_join_states")
+    .select("*")
+    .eq("status", "RUNNING")
+    .limit(Math.max(1, Math.min(limit, 10)));
+  let processed = 0;
+  for (const state of states ?? []) {
+    const ids = (state.group_ids ?? []) as string[];
+    let index = Number(state.current_index ?? 0);
+    if (!state.connection_id || index >= ids.length) {
+      await db()
+        .from("bulk_join_states")
+        .update({ status: "COMPLETED", updated_at: new Date().toISOString() })
+        .eq("tenant_id", state.tenant_id);
+      await notify(state.tenant_id as string, "Join all completed", "Bulk group joining finished.", "SUCCESS", "/mini-app/groups-approved");
+      continue;
+    }
+    const ctx = {
+      tenantId: state.tenant_id as string,
+      customerId: "",
+      email: "",
+      name: null,
+      telegramUserId: null,
+    };
+    const groupId = ids[index];
+    const { data: group } = await db()
+      .from("discovered_groups")
+      .select("status")
+      .eq("tenant_id", ctx.tenantId)
+      .eq("id", groupId)
+      .maybeSingle();
+    try {
+      if (!group || group.status === "JOINED") {
+        await db()
+          .from("bulk_join_states")
+          .update({
+            current_index: index + 1,
+            already_joined: Number(state.already_joined ?? 0) + 1,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("tenant_id", ctx.tenantId);
+      } else {
+        const result = await joinGroup(ctx, groupId, state.connection_id as string);
+        const patch: Record<string, unknown> = {
+          current_index: index + 1,
+          updated_at: new Date().toISOString(),
+          last_error: result.error ?? null,
+        };
+        if (result.status === "JOINED") patch["joined"] = Number(state.joined ?? 0) + 1;
+        else if (result.status === "RESTRICTED") {
+          patch["status"] = "PAUSED";
+          patch["cooldown"] = Number(state.cooldown ?? 0) + 1;
+        } else if (result.status === "INVITE_REQUIRED") patch["inaccessible"] = Number(state.inaccessible ?? 0) + 1;
+        else patch["failed"] = Number(state.failed ?? 0) + 1;
+        await db().from("bulk_join_states").update(patch).eq("tenant_id", ctx.tenantId);
+      }
+      processed += 1;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Join failed.";
+      await db()
+        .from("bulk_join_states")
+        .update({
+          current_index: index + 1,
+          failed: Number(state.failed ?? 0) + 1,
+          last_error: message,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("tenant_id", ctx.tenantId);
+    }
+  }
+  return { processed };
+}
+
 /* --------------------------------- audience --------------------------------------- */
 
 export type AudienceUser = {
@@ -890,7 +1142,7 @@ export async function findAudience(
   let q = client
     .from("audience_contacts")
     .select(
-      "id, telegram_user_id, display_name, username, source_group_id, eligibility, status, contact_count, first_found_at, last_contacted_at",
+      "id, telegram_user_id, access_hash, display_name, username, source_group_id, eligibility, status, entity_status, contact_count, first_found_at, last_contacted_at",
     )
     .eq("tenant_id", ctx.tenantId);
   if (groupIds.length) q = q.in("source_group_id", groupIds);
@@ -923,6 +1175,7 @@ export async function findAudience(
 export async function discoverAudience(
   ctx: AuthContext,
   groupIds: string[],
+  connectionId?: string | null,
 ): Promise<{
   groupsSelected: number;
   groupsProcessed: number;
@@ -942,7 +1195,7 @@ export async function discoverAudience(
 }> {
   const ids = [...new Set(groupIds)].filter(Boolean);
   if (!ids.length) throw new Error("Select at least one approved source group.");
-  const connection = await defaultHealthyConnection(ctx);
+  const connection = connectionId ? await requireConnection(ctx, connectionId) : await defaultHealthyConnection(ctx);
   const { data: groups } = await db()
     .from("discovered_groups")
     .select("id, title, username, telegram_group_id, status")
@@ -1001,9 +1254,12 @@ export async function discoverAudience(
         const { error } = await db().from("audience_contacts").insert({
           tenant_id: ctx.tenantId,
           telegram_user_id: user.telegramUserId,
+          access_hash: user.accessHash,
           username: user.username,
           display_name: user.displayName,
           source_group_id: group.id,
+          source_connection_id: connection.id,
+          entity_status: user.accessHash || user.username ? "RESOLVABLE" : "ENTITY_UNAVAILABLE",
           eligibility: "OPTED_IN",
           status: "NEW",
         });
@@ -1034,6 +1290,128 @@ export async function discoverAudience(
   }
   await clientConnectionUsed(ctx.tenantId, connection.id as string);
   return summary;
+}
+
+export async function audienceDiscoveryState(ctx: AuthContext) {
+  const [{ data: state }, audience] = await Promise.all([
+    db().from("audience_discovery_states").select("*").eq("tenant_id", ctx.tenantId).maybeSingle(),
+    findAudience(ctx, [], true),
+  ]);
+  const { data: issues } = await db()
+    .from("audience_discovery_runs")
+    .select("*, discovered_groups(title, username)")
+    .eq("tenant_id", ctx.tenantId)
+    .order("created_at", { ascending: false })
+    .limit(50);
+  return {
+    state:
+      state ?? {
+        tenant_id: ctx.tenantId,
+        status: "IDLE",
+        group_ids: [],
+        processed_group_ids: [],
+        users_found: 0,
+        new_users: 0,
+        duplicates: 0,
+        previously_saved: 0,
+        unavailable: 0,
+        last_error: null,
+      },
+    audience,
+    issues: issues ?? [],
+  };
+}
+
+export async function startAudienceDiscovery(ctx: AuthContext, groupIds: string[]) {
+  const ids = [...new Set(groupIds)].filter(Boolean);
+  if (!ids.length) throw new Error("Select at least one approved source group.");
+  const connection = await defaultHealthyConnection(ctx);
+  await db().from("audience_discovery_states").upsert(
+    {
+      tenant_id: ctx.tenantId,
+      connection_id: connection.id,
+      status: "RUNNING",
+      group_ids: ids,
+      processed_group_ids: [],
+      users_found: 0,
+      new_users: 0,
+      duplicates: 0,
+      previously_saved: 0,
+      unavailable: 0,
+      last_error: null,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "tenant_id" },
+  );
+  await notify(ctx.tenantId, "Audience discovery started", `${ids.length} source group(s) queued.`, "INFO", "/mini-app/dm-audience");
+  return audienceDiscoveryState(ctx);
+}
+
+export async function pauseAudienceDiscovery(ctx: AuthContext) {
+  await db()
+    .from("audience_discovery_states")
+    .update({ status: "PAUSED", updated_at: new Date().toISOString() })
+    .eq("tenant_id", ctx.tenantId);
+  return audienceDiscoveryState(ctx);
+}
+
+export async function processAudienceDiscoveryJobs(limit = 2) {
+  const { data: states } = await db()
+    .from("audience_discovery_states")
+    .select("*")
+    .eq("status", "RUNNING")
+    .limit(Math.max(1, Math.min(limit, 10)));
+  let processed = 0;
+  for (const state of states ?? []) {
+    const groupIds = ((state.group_ids ?? []) as string[]).filter(Boolean);
+    const done = new Set(((state.processed_group_ids ?? []) as string[]).filter(Boolean));
+    const next = groupIds.find((id) => !done.has(id));
+    if (!next) {
+      await db()
+        .from("audience_discovery_states")
+        .update({ status: "COMPLETED", updated_at: new Date().toISOString() })
+        .eq("tenant_id", state.tenant_id);
+      await notify(state.tenant_id as string, "Audience discovery completed", "Find Users finished processing selected groups.", "SUCCESS", "/mini-app/dm-audience");
+      continue;
+    }
+    const ctx = {
+      tenantId: state.tenant_id as string,
+      customerId: "",
+      email: "",
+      name: null,
+      telegramUserId: null,
+    };
+    try {
+      const result = await discoverAudience(ctx, [next], state.connection_id as string | null);
+      done.add(next);
+      await db()
+        .from("audience_discovery_states")
+        .update({
+          processed_group_ids: [...done],
+          users_found: Number(state.users_found ?? 0) + result.usersFound,
+          new_users: Number(state.new_users ?? 0) + result.usersFound,
+          duplicates: Number(state.duplicates ?? 0) + result.duplicates,
+          previously_saved: Number(state.previously_saved ?? 0) + result.alreadySaved,
+          unavailable: Number(state.unavailable ?? 0) + result.unavailable,
+          last_error: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("tenant_id", state.tenant_id);
+      processed += 1;
+    } catch (error) {
+      done.add(next);
+      await db()
+        .from("audience_discovery_states")
+        .update({
+          processed_group_ids: [...done],
+          unavailable: Number(state.unavailable ?? 0) + 1,
+          last_error: error instanceof Error ? error.message : "Audience discovery failed.",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("tenant_id", state.tenant_id);
+    }
+  }
+  return { processed };
 }
 
 export async function contactHistory(ctx: AuthContext) {
