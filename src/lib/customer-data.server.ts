@@ -1179,60 +1179,175 @@ export async function processBulkJoinJobs(limit = 2) {
 export type AudienceUser = {
   id: string;
   telegram_user_id: number;
+  access_hash?: string | null;
   display_name: string | null;
   username: string | null;
   source_group_id: string | null;
   eligibility: string;
   status: string;
+  entity_status?: string | null;
   contact_count: number;
   first_found_at: string;
   last_contacted_at: string | null;
+  presence_status?: string | null;
+  last_seen_at?: string | null;
+  recent_activity_at?: string | null;
+  messages_observed?: number;
+  active_source_group_ids?: string[];
 };
+
+export type AudienceFilter =
+  | "ALL_ELIGIBLE"
+  | "ACTIVE_POSTERS"
+  | "ACTIVE_30_DAYS"
+  | "RECENTLY_ONLINE";
+
+type AudienceQueryOptions = {
+  groupIds?: string[];
+  onlyNew?: boolean;
+  filter?: AudienceFilter;
+  excludeInactive?: boolean;
+  page?: number;
+  pageSize?: number;
+};
+
+const ACTIVE_PRESENCE = ["ONLINE", "RECENTLY", "WITHIN_WEEK", "WITHIN_MONTH"];
+const RECENT_PRESENCE = ["ONLINE", "RECENTLY", "WITHIN_WEEK"];
+
+function audienceColumns() {
+  return "id, telegram_user_id, access_hash, display_name, username, source_group_id, eligibility, status, entity_status, contact_count, first_found_at, last_contacted_at, presence_status, last_seen_at, recent_activity_at, messages_observed, active_source_group_ids, discovered_groups(title, username)";
+}
+
+function normalizeAudienceOptions(
+  groupIdsOrOptions: string[] | AudienceQueryOptions,
+  onlyNew?: boolean,
+): Required<AudienceQueryOptions> {
+  const options = Array.isArray(groupIdsOrOptions)
+    ? { groupIds: groupIdsOrOptions, onlyNew }
+    : groupIdsOrOptions;
+  return {
+    groupIds: options.groupIds ?? [],
+    onlyNew: options.onlyNew ?? true,
+    filter: options.filter ?? "ALL_ELIGIBLE",
+    excludeInactive: options.excludeInactive ?? true,
+    page: Math.max(1, Number(options.page ?? 1)),
+    pageSize: Math.max(25, Math.min(100, Number(options.pageSize ?? 100))),
+  };
+}
+
+function applyAudienceFilters(query: any, options: Required<AudienceQueryOptions>) {
+  let q = query.eq("eligibility", "OPTED_IN");
+  if (options.groupIds.length) q = q.in("source_group_id", options.groupIds);
+  if (options.onlyNew) q = q.eq("contact_count", 0);
+  if (options.filter === "ACTIVE_POSTERS") q = q.gt("messages_observed", 0);
+  if (options.filter === "ACTIVE_30_DAYS") {
+    q = q.or(
+      `presence_status.in.(${ACTIVE_PRESENCE.join(",")}),recent_activity_at.gte.${new Date(Date.now() - 30 * 86_400_000).toISOString()}`,
+    );
+  }
+  if (options.filter === "RECENTLY_ONLINE") q = q.in("presence_status", RECENT_PRESENCE);
+  if (options.excludeInactive) {
+    q = q.neq("presence_status", "LONG_AGO");
+  }
+  return q;
+}
 
 export async function findAudience(
   ctx: AuthContext,
-  groupIds: string[],
-  onlyNew: boolean,
+  groupIdsOrOptions: string[] | AudienceQueryOptions,
+  onlyNew?: boolean,
 ): Promise<{
   totalFound: number;
   eligible: number;
   previouslyContacted: number;
   duplicates: number;
   excluded: number;
+  activePosters: number;
+  page: number;
+  pageSize: number;
+  showingFrom: number;
+  showingTo: number;
+  hasMore: boolean;
+  filter: AudienceFilter;
+  excludeInactive: boolean;
   users: AudienceUser[];
 }> {
   const client = db();
-  let q = client
+  const options = normalizeAudienceOptions(groupIdsOrOptions, onlyNew);
+  const base = client
     .from("audience_contacts")
-    .select(
-      "id, telegram_user_id, access_hash, display_name, username, source_group_id, eligibility, status, entity_status, contact_count, first_found_at, last_contacted_at",
-    )
+    .select(audienceColumns(), { count: "exact" })
     .eq("tenant_id", ctx.tenantId);
-  if (groupIds.length) q = q.in("source_group_id", groupIds);
-  const { data } = await q.order("first_found_at", { ascending: false }).limit(1000);
+  const from = (options.page - 1) * options.pageSize;
+  const to = from + options.pageSize - 1;
+  const { data, count } = await applyAudienceFilters(base, options)
+    .order("first_found_at", { ascending: false })
+    .range(from, to);
   const rows = (data ?? []) as unknown as AudienceUser[];
 
-  // Deduplicate by telegram_user_id (a user in three groups is still one user).
-  const seen = new Map<number, AudienceUser>();
-  let duplicates = 0;
-  for (const row of rows) {
-    if (seen.has(row.telegram_user_id)) duplicates += 1;
-    else seen.set(row.telegram_user_id, row);
-  }
-  const unique = [...seen.values()];
-  const contacted = unique.filter((u) => u.contact_count > 0);
-  const eligible = unique.filter((u) => u.eligibility === "OPTED_IN");
-  const excluded = unique.length - eligible.length;
-  const visible = onlyNew ? eligible.filter((u) => u.contact_count === 0) : eligible;
+  const [allRows, eligibleCount, contactedCount, activePosters] = await Promise.all([
+    client
+      .from("audience_contacts")
+      .select("telegram_user_id", { count: "exact", head: true })
+      .eq("tenant_id", ctx.tenantId),
+    client
+      .from("audience_contacts")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", ctx.tenantId)
+      .eq("eligibility", "OPTED_IN"),
+    client
+      .from("audience_contacts")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", ctx.tenantId)
+      .gt("contact_count", 0),
+    client
+      .from("audience_contacts")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", ctx.tenantId)
+      .gt("messages_observed", 0),
+  ]);
+  const totalAll = allRows.count ?? 0;
+  const eligibleTotal = eligibleCount.count ?? 0;
+  const contactedTotal = contactedCount.count ?? 0;
+  const total = count ?? 0;
 
   return {
-    totalFound: rows.length,
-    eligible: eligible.length,
-    previouslyContacted: contacted.length,
-    duplicates,
-    excluded,
-    users: visible,
+    totalFound: total,
+    eligible: eligibleTotal,
+    previouslyContacted: contactedTotal,
+    duplicates: 0,
+    excluded: Math.max(totalAll - eligibleTotal, 0),
+    activePosters: activePosters.count ?? 0,
+    page: options.page,
+    pageSize: options.pageSize,
+    showingFrom: total ? from + 1 : 0,
+    showingTo: Math.min(to + 1, total),
+    hasMore: to + 1 < total,
+    filter: options.filter,
+    excludeInactive: options.excludeInactive,
+    users: rows,
   };
+}
+
+export async function selectAudienceIds(
+  ctx: AuthContext,
+  input: AudienceQueryOptions & { rangeFrom?: number | null; rangeTo?: number | null },
+) {
+  const options = normalizeAudienceOptions(input);
+  const rangeFrom = input.rangeFrom ? Math.max(1, Number(input.rangeFrom)) : null;
+  const rangeTo = input.rangeTo ? Math.max(rangeFrom ?? 1, Number(input.rangeTo)) : null;
+  const from = rangeFrom ? rangeFrom - 1 : 0;
+  const to = rangeTo ? rangeTo - 1 : 4999;
+  const { data } = await applyAudienceFilters(
+    db()
+      .from("audience_contacts")
+      .select("id")
+      .eq("tenant_id", ctx.tenantId),
+    options,
+  )
+    .order("first_found_at", { ascending: false })
+    .range(from, Math.min(to, 4999));
+  return { ids: (data ?? []).map((row) => row.id as string) };
 }
 
 export async function discoverAudience(
@@ -1307,11 +1422,30 @@ export async function discoverAudience(
       for (const user of result.users) {
         const { data: existing } = await db()
           .from("audience_contacts")
-          .select("id")
+          .select("id, access_hash, username, display_name, messages_observed, active_source_group_ids, presence_status, last_seen_at, recent_activity_at")
           .eq("tenant_id", ctx.tenantId)
           .eq("telegram_user_id", user.telegramUserId)
           .maybeSingle();
         if (existing) {
+          const sourceIds = new Set<string>((existing.active_source_group_ids ?? []) as string[]);
+          if (user.activePoster) sourceIds.add(group.id as string);
+          await db()
+            .from("audience_contacts")
+            .update({
+              access_hash: user.accessHash ?? existing.access_hash,
+              username: user.username ?? existing.username,
+              display_name: user.displayName ?? existing.display_name,
+              presence_status:
+                user.presenceStatus === "UNKNOWN" ? existing.presence_status : user.presenceStatus,
+              last_seen_at: user.lastSeenAt ?? existing.last_seen_at,
+              recent_activity_at: user.recentActivityAt ?? existing.recent_activity_at,
+              messages_observed:
+                Number(existing.messages_observed ?? 0) + Number(user.messagesObserved ?? 0),
+              active_source_group_ids: [...sourceIds],
+              last_activity_checked_at: new Date().toISOString(),
+            })
+            .eq("id", existing.id)
+            .eq("tenant_id", ctx.tenantId);
           groupResult.alreadySaved += 1;
           summary.alreadySaved += 1;
           continue;
@@ -1327,6 +1461,12 @@ export async function discoverAudience(
           entity_status: user.accessHash || user.username ? "RESOLVABLE" : "ENTITY_UNAVAILABLE",
           eligibility: "OPTED_IN",
           status: "NEW",
+          presence_status: user.presenceStatus,
+          last_seen_at: user.lastSeenAt,
+          recent_activity_at: user.recentActivityAt,
+          messages_observed: user.messagesObserved,
+          active_source_group_ids: user.activePoster ? [group.id] : [],
+          last_activity_checked_at: new Date().toISOString(),
         });
         if (error) {
           groupResult.duplicates += 1;
@@ -1551,12 +1691,14 @@ export async function saveGroupCategory(
   if (!ids.length) throw new Error("Select at least one approved group.");
   const { data: groups } = await client
     .from("discovered_groups")
-    .select("id")
+    .select("id, can_send_messages, writable_status, entity_type")
     .eq("tenant_id", ctx.tenantId)
     .in("id", ids)
-    .in("status", ["APPROVED", "JOINED"]);
+    .in("status", ["APPROVED", "JOINED"])
+    .eq("can_send_messages", true)
+    .eq("writable_status", "WRITABLE");
   if ((groups ?? []).length !== ids.length) {
-    throw new Error("One or more selected groups are not usable approved groups.");
+    throw new Error("One or more selected groups are not confirmed writable.");
   }
 
   let categoryId = input.id ?? null;
@@ -1749,6 +1891,21 @@ export async function createCampaign(
     throw new Error("Select at least one recipient.");
   const connection = await requireConnection(ctx, input.connection_id);
 
+  let writableGroups: { id: string }[] = [];
+  if (input.type === "GROUP" && groupIds.length) {
+    const { data: groups } = await client
+      .from("discovered_groups")
+      .select("id")
+      .eq("tenant_id", ctx.tenantId)
+      .in("id", groupIds)
+      .in("status", ["APPROVED", "JOINED"])
+      .eq("can_send_messages", true)
+      .eq("writable_status", "WRITABLE");
+    writableGroups = ((groups ?? []) as { id: string }[]);
+    groupIds = writableGroups.map((g) => g.id);
+    if (!groupIds.length) throw new Error("Selected category has no confirmed writable groups.");
+  }
+
   const tenant = await tenantOverview(ctx);
   const plan = (tenant as { plans?: Record<string, number> } | null)?.plans ?? {};
   const messagesUsed = (tenant as { messages_used?: number } | null)?.messages_used ?? 0;
@@ -1785,19 +1942,8 @@ export async function createCampaign(
     .single();
   if (error || !campaign) throw new Error(error?.message ?? "Could not create the campaign.");
 
-  // Validate group ownership server-side, never trust the ids blindly.
   if (groupIds.length) {
-    const { data: groups } = await client
-      .from("discovered_groups")
-      .select("id")
-      .eq("tenant_id", ctx.tenantId)
-      .in("id", groupIds)
-      .in("status", ["APPROVED", "JOINED"]);
-    if ((groups ?? []).length !== new Set(groupIds).size) {
-      await client.from("campaigns").delete().eq("id", campaign.id).eq("tenant_id", ctx.tenantId);
-      throw new Error("One or more selected groups are not approved for this account.");
-    }
-    const rows = (groups ?? []).map((g) => ({
+    const rows = writableGroups.map((g) => ({
       campaign_id: campaign.id,
       tenant_id: ctx.tenantId,
       group_id: g.id,

@@ -84,6 +84,31 @@ function entityType(entity: unknown) {
   return "UNKNOWN";
 }
 
+function userPresence(user: Api.User) {
+  const status = user.status;
+  if (status instanceof Api.UserStatusOnline) {
+    return { presenceStatus: "ONLINE", lastSeenAt: null };
+  }
+  if (status instanceof Api.UserStatusRecently) {
+    return { presenceStatus: "RECENTLY", lastSeenAt: null };
+  }
+  if (status instanceof Api.UserStatusLastWeek) {
+    return { presenceStatus: "WITHIN_WEEK", lastSeenAt: null };
+  }
+  if (status instanceof Api.UserStatusLastMonth) {
+    return { presenceStatus: "WITHIN_MONTH", lastSeenAt: null };
+  }
+  if (status instanceof Api.UserStatusOffline) {
+    const value = status.wasOnline ? new Date(Number(status.wasOnline) * 1000) : null;
+    const days = value ? (Date.now() - value.getTime()) / 86_400_000 : null;
+    return {
+      presenceStatus: days != null && days > 30 ? "LONG_AGO" : "WITHIN_MONTH",
+      lastSeenAt: value?.toISOString() ?? null,
+    };
+  }
+  return { presenceStatus: "UNKNOWN", lastSeenAt: null };
+}
+
 function channelWritable(entity: Api.Channel) {
   const row = entity as Api.Channel & {
     creator?: boolean;
@@ -643,8 +668,55 @@ export async function discoverAudienceViaUserSession(
         accessHash: string | null;
         username: string | null;
         displayName: string | null;
+        presenceStatus: string;
+        lastSeenAt: string | null;
+        recentActivityAt: string | null;
+        messagesObserved: number;
+        activePoster: boolean;
       }[] = [];
-      const seen = new Set<number>();
+      const seen = new Map<number, {
+        telegramUserId: number;
+        accessHash: string | null;
+        username: string | null;
+        displayName: string | null;
+        presenceStatus: string;
+        lastSeenAt: string | null;
+        recentActivityAt: string | null;
+        messagesObserved: number;
+        activePoster: boolean;
+      }>();
+      const addUser = (
+        user: Api.User,
+        activity?: { recentActivityAt?: string | null; messagesObserved?: number },
+      ) => {
+        if (user.bot || user.deleted) return;
+        const id = Number(user.id);
+        if (!Number.isFinite(id)) return;
+        const displayName = [user.firstName, user.lastName].filter(Boolean).join(" ").trim();
+        const presence = userPresence(user);
+        const existing = seen.get(id);
+        if (existing) {
+          existing.messagesObserved += activity?.messagesObserved ?? 0;
+          existing.activePoster = existing.activePoster || !!activity?.messagesObserved;
+          if (activity?.recentActivityAt) existing.recentActivityAt = activity.recentActivityAt;
+          if (existing.presenceStatus === "UNKNOWN" && presence.presenceStatus !== "UNKNOWN") {
+            existing.presenceStatus = presence.presenceStatus;
+            existing.lastSeenAt = presence.lastSeenAt;
+          }
+          return;
+        }
+        seen.set(id, {
+          telegramUserId: id,
+          accessHash: accessHash(user),
+          username: user.username ?? null,
+          displayName: displayName || user.username || String(id),
+          presenceStatus: presence.presenceStatus,
+          lastSeenAt: presence.lastSeenAt,
+          recentActivityAt: activity?.recentActivityAt ?? null,
+          messagesObserved: activity?.messagesObserved ?? 0,
+          activePoster: !!activity?.messagesObserved,
+        });
+      };
       const limit = 100;
       let offset = 0;
       for (let page = 0; page < 20; page += 1) {
@@ -666,21 +738,59 @@ export async function discoverAudienceViaUserSession(
         }
         const pageUsers = response.users.filter((u): u is Api.User => u instanceof Api.User);
         for (const user of pageUsers) {
-          if (user.bot || user.deleted) continue;
-          const id = Number(user.id);
-          if (!Number.isFinite(id) || seen.has(id)) continue;
-          seen.add(id);
-          const displayName = [user.firstName, user.lastName].filter(Boolean).join(" ").trim();
-          users.push({
-            telegramUserId: id,
-            accessHash: accessHash(user),
-            username: user.username ?? null,
-            displayName: displayName || user.username || String(id),
-          });
+          addUser(user);
         }
         if (pageUsers.length < limit) break;
         offset += limit;
       }
+      try {
+        const history = await client.invoke(
+          new Api.messages.GetHistory({
+            peer: entity,
+            offsetId: 0,
+            offsetDate: 0,
+            addOffset: 0,
+            limit: 300,
+            maxId: 0,
+            minId: 0,
+            hash: bigInt(0),
+          }),
+        );
+        const historyUsers = new Map<number, Api.User>();
+        for (const user of "users" in history ? history.users : []) {
+          if (user instanceof Api.User) historyUsers.set(Number(user.id), user);
+        }
+        const activity = new Map<number, { count: number; recentActivityAt: string | null }>();
+        for (const message of "messages" in history ? history.messages : []) {
+          if (!(message instanceof Api.Message)) continue;
+          const peer = message.fromId;
+          if (!(peer instanceof Api.PeerUser)) continue;
+          const id = Number(peer.userId);
+          if (!Number.isFinite(id)) continue;
+          const row = activity.get(id) ?? { count: 0, recentActivityAt: null };
+          row.count += 1;
+          const at = message.date ? new Date(Number(message.date) * 1000).toISOString() : null;
+          if (at && (!row.recentActivityAt || at > row.recentActivityAt)) row.recentActivityAt = at;
+          activity.set(id, row);
+        }
+        for (const [id, row] of activity) {
+          const user = historyUsers.get(id);
+          if (user) {
+            addUser(user, {
+              recentActivityAt: row.recentActivityAt,
+              messagesObserved: row.count,
+            });
+          }
+        }
+      } catch (error) {
+        console.warn("AUDIENCE_ACTIVITY_HISTORY_FAILED", {
+          tenantId,
+          connectionId,
+          groupId: group.telegram_group_id ?? null,
+          reason: errorMessage(error),
+        });
+      }
+      users.push(...seen.values());
       console.info("AUDIENCE_GROUP_COMPLETE", {
         tenantId,
         connectionId,

@@ -210,9 +210,43 @@ export const deleteGroupCategory = createServerFn({ method: "POST" })
   .handler(async ({ data: i }) => data.deleteGroupCategory(await resolveAuth(i.auth), i.id));
 
 export const findAudience = createServerFn({ method: "POST" })
-  .inputValidator((i: Auth & { groupIds: string[]; onlyNew: boolean }) => i)
+  .inputValidator((i: Auth & {
+    groupIds?: string[];
+    onlyNew?: boolean;
+    filter?: "ALL_ELIGIBLE" | "ACTIVE_POSTERS" | "ACTIVE_30_DAYS" | "RECENTLY_ONLINE";
+    excludeInactive?: boolean;
+    page?: number;
+    pageSize?: number;
+  }) => i)
   .handler(async ({ data: i }) =>
-    data.findAudience(await resolveAuth(i.auth), i.groupIds, i.onlyNew),
+    data.findAudience(await resolveAuth(i.auth), {
+      groupIds: i.groupIds ?? [],
+      onlyNew: i.onlyNew ?? true,
+      filter: i.filter,
+      excludeInactive: i.excludeInactive,
+      page: i.page,
+      pageSize: i.pageSize,
+    }),
+  );
+
+export const selectAudienceIds = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & {
+    groupIds?: string[];
+    onlyNew?: boolean;
+    filter?: "ALL_ELIGIBLE" | "ACTIVE_POSTERS" | "ACTIVE_30_DAYS" | "RECENTLY_ONLINE";
+    excludeInactive?: boolean;
+    rangeFrom?: number | null;
+    rangeTo?: number | null;
+  }) => i)
+  .handler(async ({ data: i }) =>
+    data.selectAudienceIds(await resolveAuth(i.auth), {
+      groupIds: i.groupIds ?? [],
+      onlyNew: i.onlyNew ?? true,
+      filter: i.filter,
+      excludeInactive: i.excludeInactive,
+      rangeFrom: i.rangeFrom,
+      rangeTo: i.rangeTo,
+    }),
   );
 
 export const discoverAudience = createServerFn({ method: "POST" })

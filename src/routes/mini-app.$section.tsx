@@ -65,10 +65,12 @@ import {
   importApprovedGroups,
   joinGroup,
   logout as logoutCustomer,
+  markNotificationsRead,
   pauseAudienceDiscovery,
   pauseBulkJoin,
   saveGroupCategory,
   resumeBulkJoin,
+  selectAudienceIds,
   startAudienceDiscovery,
   startBulkJoin,
   startGroupDiscovery,
@@ -190,6 +192,7 @@ function MiniAppSection() {
   const billingFn = useServerFn(getBilling);
   const logsFn = useServerFn(getOwnActivity);
   const notificationsFn = useServerFn(getNotifications);
+  const markNotificationsReadFn = useServerFn(markNotificationsRead);
   const logoutFn = useServerFn(logoutCustomer);
   const discoveryStateFn = useServerFn(getGroupDiscoveryState);
   const audienceFn = useServerFn(findAudience);
@@ -226,6 +229,7 @@ function MiniAppSection() {
     deleteGroupCategory: useServerFn(deleteGroupCategory),
     getCampaignDetail: useServerFn(getCampaignDetail),
     findAudience: useServerFn(findAudience),
+    selectAudienceIds: useServerFn(selectAudienceIds),
     discoverAudience: useServerFn(discoverAudience),
     getAudienceDiscoveryState: useServerFn(getAudienceDiscoveryState),
     startAudienceDiscovery: useServerFn(startAudienceDiscovery),
@@ -370,6 +374,14 @@ function MiniAppSection() {
     }
   }
 
+  async function markAllNotifications() {
+    const readAt = new Date().toISOString();
+    setNotifications((current) => current.map((note) => ({ ...note, read_at: note.read_at ?? readAt })));
+    await runAction("mark-notifications-read", async () => {
+      await markNotificationsReadFn({ data: { auth: auth ?? "" } });
+    });
+  }
+
   useEffect(() => {
     sectionRef.current = section;
     void load();
@@ -448,6 +460,15 @@ function MiniAppSection() {
                 <X className="size-4" />
               </button>
             </div>
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              disabled={!unread || actionBusy === "mark-notifications-read"}
+              onClick={markAllNotifications}
+            >
+              {actionBusy === "mark-notifications-read" ? "Marking..." : "MARK ALL AS READ"}
+            </Button>
             {notifications.map((note) => (
               <a
                 key={note.id}
@@ -1265,6 +1286,9 @@ function GroupRows({ groups, connections, bulkJoin, auth, actions, reload, setNo
 
 function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, runAction }: any) {
   const groups = data?.groups ?? [];
+  const writableGroups = groups.filter(
+    (g: any) => g.can_send_messages === true && g.writable_status === "WRITABLE",
+  );
   const categories = data?.categories ?? [];
   const [editing, setEditing] = useState<any>(null);
   const [name, setName] = useState("");
@@ -1279,7 +1303,11 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
     if (category?.id) {
       void runAction(`open-category-${category.id}`, async () => {
         const response = await actions.getGroupCategoryDetail({ data: { auth, id: category.id } });
-        setSelected((response.groups ?? []).map((g: any) => g.id));
+        setSelected(
+          (response.groups ?? [])
+            .filter((g: any) => g.can_send_messages === true && g.writable_status === "WRITABLE")
+            .map((g: any) => g.id),
+        );
         setDetail(response);
       });
     }
@@ -1390,9 +1418,11 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
               <input className={inputClass()} value={name} onChange={(e) => setName(e.target.value)} />
             </label>
             <div className="flex items-center justify-between gap-2">
-              <p className="text-sm font-semibold">Selected Groups: {selected.length}</p>
+              <p className="text-sm font-semibold">
+                Writable Groups: {writableGroups.length} | Selected Groups: {selected.length}
+              </p>
               <div className="flex gap-2">
-                <Button type="button" size="sm" variant="secondary" onClick={() => setSelected(groups.map((g: any) => g.id))}>
+                <Button type="button" size="sm" variant="secondary" onClick={() => setSelected(writableGroups.map((g: any) => g.id))}>
                   SELECT ALL
                 </Button>
                 <Button type="button" size="sm" variant="secondary" onClick={() => setSelected([])}>
@@ -1401,7 +1431,7 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
               </div>
             </div>
             <div className="max-h-72 space-y-2 overflow-auto">
-              {groups.map((g: any) => (
+              {writableGroups.map((g: any) => (
                 <label key={g.id} className="flex items-center gap-3 border border-border bg-background p-3 text-sm">
                   <input
                     type="checkbox"
@@ -1417,6 +1447,9 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
                   <span>{g.title}</span>
                 </label>
               ))}
+              {!writableGroups.length ? (
+                <p className="text-sm text-muted-foreground">No confirmed writable groups available.</p>
+              ) : null}
             </div>
             <Button className="w-full" type="submit" disabled={!name || !selected.length || actionBusy === "save-category"}>
               {actionBusy === "save-category" ? "Saving..." : editing.id ? "SAVE" : "CREATE CATEGORY"}
@@ -1428,14 +1461,61 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
   );
 }
 
+function presenceLabel(value?: string | null) {
+  if (value === "ONLINE") return "Online";
+  if (value === "RECENTLY") return "Recently";
+  if (value === "WITHIN_WEEK") return "Within Week";
+  if (value === "WITHIN_MONTH") return "Within Month";
+  if (value === "LONG_AGO") return "Long Ago";
+  return "Unknown";
+}
+
+function sourceGroupLabel(row: any) {
+  const group = Array.isArray(row.discovered_groups) ? row.discovered_groups[0] : row.discovered_groups;
+  if (!group) return "Unknown source";
+  return group.username ? `@${group.username}` : (group.title ?? "Source group");
+}
+
 function DMAudience({ auth, data, actions, reload, setNotice, actionBusy, runAction }: any) {
   const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
+  const [filter, setFilter] = useState("ALL_ELIGIBLE");
+  const [excludeInactive, setExcludeInactive] = useState(true);
+  const [audiencePage, setAudiencePage] = useState<any>(data?.discovery?.audience ?? { users: [] });
   const discovery = data?.discovery ?? {};
   const state = discovery.state ?? {};
-  const audience = discovery.audience ?? { users: [] };
+  const audience = audiencePage ?? { users: [] };
   const issues = discovery.issues ?? [];
   const processed = state.processed_group_ids?.length ?? 0;
   const selectedCount = selectedGroups.length || state.group_ids?.length || 0;
+  useEffect(() => {
+    setAudiencePage(data?.discovery?.audience ?? { users: [] });
+  }, [data?.discovery?.audience]);
+  async function loadAudience(nextPage = 1, append = false, nextFilter = filter, nextExclude = excludeInactive) {
+    await runAction(append ? "load-more-audience" : "filter-audience", async () => {
+      const response = await actions.findAudience({
+        data: {
+          auth,
+          groupIds: [],
+          onlyNew: true,
+          filter: nextFilter,
+          excludeInactive: nextExclude,
+          page: nextPage,
+          pageSize: 100,
+        },
+      });
+      setAudiencePage((current: any) =>
+        append ? { ...response, users: [...(current?.users ?? []), ...(response.users ?? [])] } : response,
+      );
+    });
+  }
+  async function changeFilter(nextFilter: string) {
+    setFilter(nextFilter);
+    await loadAudience(1, false, nextFilter, excludeInactive);
+  }
+  async function changeExcludeInactive(nextValue: boolean) {
+    setExcludeInactive(nextValue);
+    await loadAudience(1, false, filter, nextValue);
+  }
   async function start() {
     await runAction("start-finding", async () => {
       await actions.startAudienceDiscovery({ data: { auth, groupIds: selectedGroups } });
@@ -1467,6 +1547,35 @@ function DMAudience({ auth, data, actions, reload, setNotice, actionBusy, runAct
           {actionBusy === "pause-finding" ? "Pausing..." : "PAUSE FINDING"}
         </Button>
       </section>
+      <section className={panelClass("space-y-3")}>
+        <div className="flex flex-wrap gap-2">
+          {[
+            ["ALL_ELIGIBLE", "ALL ELIGIBLE"],
+            ["ACTIVE_POSTERS", "ACTIVE POSTERS"],
+            ["ACTIVE_30_DAYS", "ACTIVE < 30 DAYS"],
+            ["RECENTLY_ONLINE", "RECENTLY ONLINE"],
+          ].map(([value, label]) => (
+            <Button
+              key={value}
+              type="button"
+              size="sm"
+              variant={filter === value ? "default" : "secondary"}
+              disabled={actionBusy === "filter-audience"}
+              onClick={() => void changeFilter(value)}
+            >
+              {label}
+            </Button>
+          ))}
+        </div>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={excludeInactive}
+            onChange={(e) => void changeExcludeInactive(e.target.checked)}
+          />
+          Exclude inactive &gt;30 days
+        </label>
+      </section>
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <section className={panelClass("space-y-3")}>
           <p className="font-semibold">Source Groups</p>
@@ -1486,7 +1595,9 @@ function DMAudience({ auth, data, actions, reload, setNotice, actionBusy, runAct
           <p className="font-semibold">Users Found</p>
           <div className="grid grid-cols-2 gap-2 text-sm">
             <Stat label="Users Found" value={audience.totalFound ?? 0} />
+            <Stat label="Showing" value={`${audience.showingFrom ?? 0}-${audience.showingTo ?? 0}`} />
             <Stat label="New Users" value={state.new_users ?? 0} />
+            <Stat label="Active Posters" value={audience.activePosters ?? 0} />
             <Stat label="Duplicates" value={state.duplicates ?? 0} />
             <Stat label="Previously Saved" value={state.previously_saved ?? 0} />
           </div>
@@ -1494,10 +1605,29 @@ function DMAudience({ auth, data, actions, reload, setNotice, actionBusy, runAct
             {(audience.users ?? []).map((user: any, index: number) => (
               <p key={user.id} className="border border-border bg-background p-2 text-sm">
                 {index + 1}. {user.username ? `@${user.username}` : (user.display_name ?? user.telegram_user_id)}
+                <span className="mt-1 block text-xs text-muted-foreground">
+                  Source: {sourceGroupLabel(user)}
+                  {" | "}
+                  Presence: {presenceLabel(user.presence_status)}{" "}
+                  {user.last_seen_at ? `| Last seen ${new Date(user.last_seen_at).toLocaleDateString()}` : ""}
+                  {user.recent_activity_at ? `| Recent group activity ${new Date(user.recent_activity_at).toLocaleDateString()}` : ""}
+                  {` | Messages observed ${user.messages_observed ?? 0}`}
+                </span>
               </p>
             ))}
             {!audience.users?.length ? <p className="text-sm text-muted-foreground">No saved users yet.</p> : null}
           </div>
+          {audience.hasMore ? (
+            <Button
+              type="button"
+              variant="secondary"
+              className="w-full"
+              disabled={actionBusy === "load-more-audience"}
+              onClick={() => void loadAudience((audience.page ?? 1) + 1, true)}
+            >
+              {actionBusy === "load-more-audience" ? "Loading..." : "LOAD MORE"}
+            </Button>
+          ) : null}
         </section>
       </div>
       <details className={panelClass("space-y-3")}>
@@ -1628,6 +1758,10 @@ function DMCampaign({ auth, data, actions, reload, setNotice, actionBusy, runAct
           selectable
           selected={selected}
           setSelected={setSelected}
+          auth={auth}
+          actions={actions}
+          actionBusy={actionBusy}
+          runAction={runAction}
         />
       ) : (
         <Empty message="No saved audience yet. Use Find Users before creating a DM campaign." />
@@ -1987,21 +2121,49 @@ function GroupPicker({ groups, selected, setSelected, allowAll }: any) {
   );
 }
 
-function AudienceSummary({ result, selectable, selected, setSelected }: any) {
+function AudienceSummary({ result, selectable, selected, setSelected, auth, actions, actionBusy, runAction }: any) {
   const users = result.users ?? [];
   const choose = (count: number) => setSelected(users.slice(0, count).map((u: any) => u.id));
   const [rangeFrom, setRangeFrom] = useState(1);
   const [rangeTo, setRangeTo] = useState(Math.min(10, users.length || 10));
-  const selectRange = () => {
-    const from = Math.max(1, Math.min(rangeFrom, users.length));
-    const to = Math.max(from, Math.min(rangeTo, users.length));
-    setSelected(users.slice(from - 1, to).map((u: any) => u.id));
+  const selectionRequest = {
+    auth,
+    groupIds: [],
+    onlyNew: true,
+    filter: result.filter ?? "ALL_ELIGIBLE",
+    excludeInactive: result.excludeInactive ?? true,
+  };
+  const selectAll = async () => {
+    if (!actions?.selectAudienceIds) {
+      setSelected(users.map((u: any) => u.id));
+      return;
+    }
+    await runAction?.("select-all-audience", async () => {
+      const response = await actions.selectAudienceIds({ data: selectionRequest });
+      setSelected(response.ids ?? []);
+    });
+  };
+  const selectRange = async () => {
+    const from = Math.max(1, rangeFrom);
+    const to = Math.max(from, rangeTo);
+    if (!actions?.selectAudienceIds) {
+      setSelected(users.slice(from - 1, to).map((u: any) => u.id));
+      return;
+    }
+    await runAction?.("select-range-audience", async () => {
+      const response = await actions.selectAudienceIds({
+        data: { ...selectionRequest, rangeFrom: from, rangeTo: to },
+      });
+      setSelected(response.ids ?? []);
+    });
   };
   return (
     <section className={panelClass("space-y-3")}>
       <div className="grid grid-cols-2 gap-2 text-sm">
         <Stat label="Total Found" value={result.totalFound} />
+        <Stat label="Showing" value={`${result.showingFrom ?? 0}-${result.showingTo ?? users.length}`} />
         <Stat label="Eligible" value={result.eligible} />
+        <Stat label="Active Posters" value={result.activePosters ?? 0} />
         <Stat label="Previously Contacted" value={result.previouslyContacted} />
         <Stat label="Duplicates" value={result.duplicates} />
         <Stat label="Excluded" value={result.excluded} />
@@ -2013,9 +2175,10 @@ function AudienceSummary({ result, selectable, selected, setSelected }: any) {
               type="button"
               size="sm"
               variant="secondary"
-              onClick={() => setSelected(users.map((u: any) => u.id))}
+              disabled={actionBusy === "select-all-audience"}
+              onClick={() => void selectAll()}
             >
-              SELECT ALL
+              {actionBusy === "select-all-audience" ? "Selecting..." : "SELECT ALL"}
             </Button>
             <Button type="button" size="sm" variant="secondary" onClick={() => setSelected([])}>
               SELECT NONE
@@ -2029,8 +2192,8 @@ function AudienceSummary({ result, selectable, selected, setSelected }: any) {
           <div className="grid grid-cols-[1fr_1fr_auto] gap-2">
             <input className={inputClass()} type="number" min={1} value={rangeFrom} onChange={(e) => setRangeFrom(Number(e.target.value))} placeholder="From" />
             <input className={inputClass()} type="number" min={1} value={rangeTo} onChange={(e) => setRangeTo(Number(e.target.value))} placeholder="To" />
-            <Button type="button" variant="secondary" onClick={selectRange}>
-              SELECT RANGE
+            <Button type="button" variant="secondary" disabled={actionBusy === "select-range-audience"} onClick={() => void selectRange()}>
+              {actionBusy === "select-range-audience" ? "Selecting..." : "SELECT RANGE"}
             </Button>
           </div>
           <p className="text-sm font-semibold">Selected Users: {selected.length}</p>
@@ -2053,6 +2216,12 @@ function AudienceSummary({ result, selectable, selected, setSelected }: any) {
           >
             <span>
               {index + 1}. {u.username ? `@${u.username}` : (u.display_name ?? u.telegram_user_id)}
+              <span className="mt-1 block text-xs text-muted-foreground">
+                Presence: {presenceLabel(u.presence_status)}
+                {" | "}Source: {sourceGroupLabel(u)}
+                {u.recent_activity_at ? ` | Recent group activity ${new Date(u.recent_activity_at).toLocaleDateString()}` : ""}
+                {` | Messages observed ${u.messages_observed ?? 0}`}
+              </span>
             </span>
             <span className={statusTone(u.eligibility)}>
               {selectable && selected.includes(u.id) ? "SELECTED" : u.eligibility}
