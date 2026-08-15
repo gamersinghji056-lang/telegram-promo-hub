@@ -1,4 +1,12 @@
-import { createHash, createHmac, pbkdf2, randomBytes, timingSafeEqual } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  createHmac,
+  pbkdf2,
+  randomBytes,
+  timingSafeEqual,
+} from "node:crypto";
 import { promisify } from "node:util";
 
 const pbkdf2Async = promisify(pbkdf2);
@@ -19,7 +27,9 @@ export async function verifyPassword(password: string, stored: string): Promise<
   const iterations = Number(parts[1]);
   const salt = Buffer.from(parts[2] ?? "", "base64");
   const expected = Buffer.from(parts[3] ?? "", "base64");
-  const derived = Buffer.from(await pbkdf2Async(password, salt, iterations, expected.length, DIGEST));
+  const derived = Buffer.from(
+    await pbkdf2Async(password, salt, iterations, expected.length, DIGEST),
+  );
   return derived.length === expected.length && timingSafeEqual(derived, expected);
 }
 
@@ -76,4 +86,38 @@ export function verifyTelegramInitData(
 
 export function deriveWebhookSecret(botToken: string): string {
   return createHash("sha256").update(`telegram-webhook:${botToken}`).digest("base64url");
+}
+
+function encryptionKey(): Buffer {
+  const raw = process.env["TELEGRAM_SESSION_ENCRYPTION_KEY"]?.trim();
+  if (!raw) throw new Error("TELEGRAM_SESSION_ENCRYPTION_KEY is not configured.");
+  const key = /^[a-f0-9]{64}$/i.test(raw) ? Buffer.from(raw, "hex") : Buffer.from(raw, "base64");
+  if (key.length !== 32) throw new Error("TELEGRAM_SESSION_ENCRYPTION_KEY must be 32 bytes.");
+  return key;
+}
+
+export function encryptSecret(value: string): string {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", encryptionKey(), iv);
+  const ciphertext = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `v1.${iv.toString("base64url")}.${tag.toString("base64url")}.${ciphertext.toString("base64url")}`;
+}
+
+export function decryptSecret(value: string | null | undefined): string {
+  if (!value) return "";
+  const [version, ivRaw, tagRaw, cipherRaw] = value.split(".");
+  if (version !== "v1" || !ivRaw || !tagRaw || !cipherRaw) {
+    throw new Error("Encrypted secret format is invalid.");
+  }
+  const decipher = createDecipheriv(
+    "aes-256-gcm",
+    encryptionKey(),
+    Buffer.from(ivRaw, "base64url"),
+  );
+  decipher.setAuthTag(Buffer.from(tagRaw, "base64url"));
+  return Buffer.concat([
+    decipher.update(Buffer.from(cipherRaw, "base64url")),
+    decipher.final(),
+  ]).toString("utf8");
 }

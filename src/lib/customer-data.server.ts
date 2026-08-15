@@ -1,6 +1,57 @@
 import { db, getSetting, logSystem, notify } from "./db.server";
 import type { AuthContext } from "./customer-auth.server";
 import { callBot, botToken } from "./telegram.server";
+import { createHash, randomBytes } from "node:crypto";
+import {
+  checkUserSession,
+  completeUserSessionCode,
+  completeUserSessionPassword,
+  disconnectUserSession,
+  joinGroupViaUserSession,
+  resolvePublicGroupViaUserSession,
+  searchPublicGroupsViaUserSession,
+  startUserSessionLogin,
+} from "./telegram-user-session.server";
+
+const MAX_TELEGRAM_SESSIONS = 20;
+const LINK_CODE_TTL_MS = 15 * 60_000;
+
+export function hashConnectionLinkCode(code: string) {
+  return createHash("sha256")
+    .update(`telegram-connection:${code.trim().toUpperCase()}`)
+    .digest("hex");
+}
+
+function newLinkCode() {
+  return randomBytes(4).toString("hex").toUpperCase();
+}
+
+async function requireConnection(ctx: AuthContext, connectionId?: string | null) {
+  if (!connectionId) throw new Error("Select a connected Telegram session.");
+  const { data: connection } = await db()
+    .from("telegram_connections")
+    .select("*")
+    .eq("id", connectionId)
+    .eq("tenant_id", ctx.tenantId)
+    .maybeSingle();
+  if (!connection) throw new Error("Telegram session not found.");
+  if (connection.status !== "CONNECTED") throw new Error("Select a connected Telegram session.");
+  if (connection.cooldown_until && new Date(connection.cooldown_until as string) > new Date()) {
+    throw new Error("Selected Telegram session is cooling down.");
+  }
+  if (["RESTRICTED", "REQUIRES_ACTION"].includes(String(connection.restriction_status ?? ""))) {
+    throw new Error("Selected Telegram session requires attention.");
+  }
+  return connection;
+}
+
+async function clientConnectionUsed(tenantId: string, connectionId: string) {
+  await db()
+    .from("telegram_connections")
+    .update({ last_used_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq("id", connectionId)
+    .eq("tenant_id", tenantId);
+}
 
 /* ---------------------------------- plan / usage --------------------------------- */
 
@@ -23,11 +74,21 @@ export async function dashboard(ctx: AuthContext) {
     const { count: c } = await q;
     return c ?? 0;
   };
+  const countIn = async (table: string, column: string, values: string[]) => {
+    const { count: c } = await client
+      .from(table)
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", t)
+      .in(column, values);
+    return c ?? 0;
+  };
 
   const [
     connections,
     activeConnections,
     issueConnections,
+    restrictedConnections,
+    keywords,
     groupsFound,
     groupsPending,
     groupsApproved,
@@ -38,13 +99,21 @@ export async function dashboard(ctx: AuthContext) {
     scheduled,
     completed,
     failed,
+    dmCampaigns,
+    groupCampaigns,
     unread,
   ] = await Promise.all([
     count("telegram_connections"),
     count("telegram_connections", { status: "CONNECTED" }),
     count("telegram_connections", { status: "ERROR" }),
+    countIn("telegram_connections", "restriction_status", [
+      "COOLDOWN",
+      "RESTRICTED",
+      "REQUIRES_ACTION",
+    ]),
+    count("keywords"),
     count("discovered_groups"),
-    count("discovered_groups", { status: "PENDING" }),
+    count("discovered_groups", { status: "FOUND" }),
     count("discovered_groups", { status: "APPROVED" }),
     count("discovered_groups", { status: "JOINED" }),
     count("audience_contacts"),
@@ -53,6 +122,8 @@ export async function dashboard(ctx: AuthContext) {
     count("campaigns", { status: "SCHEDULED" }),
     count("campaigns", { status: "COMPLETED" }),
     count("campaigns", { status: "FAILED" }),
+    count("campaigns", { type: "DM" }),
+    count("campaigns", { type: "GROUP" }),
     client
       .from("notifications")
       .select("id", { count: "exact", head: true })
@@ -65,14 +136,25 @@ export async function dashboard(ctx: AuthContext) {
   const plan = (tenant as { plans?: Record<string, number | string> } | null)?.plans ?? null;
 
   return {
-    connections: { total: connections, active: activeConnections, issues: issueConnections },
-    groups: { found: groupsFound, pending: groupsPending, approved: groupsApproved, joined: groupsJoined },
+    connections: {
+      total: connections,
+      active: activeConnections,
+      issues: issueConnections,
+      restricted: restrictedConnections,
+    },
+    keywords,
+    groups: {
+      found: groupsFound,
+      pending: groupsPending,
+      approved: groupsApproved,
+      joined: groupsJoined,
+    },
     audience: {
       total: audienceTotal,
       contacted: audienceContacted,
       available: Math.max(audienceTotal - audienceContacted, 0),
     },
-    campaigns: { running, scheduled, completed, failed },
+    campaigns: { running, scheduled, completed, failed, dm: dmCampaigns, group: groupCampaigns },
     usage: {
       messagesUsed: (tenant as { messages_used?: number } | null)?.messages_used ?? 0,
       messageLimit: Number(plan?.["monthly_message_limit"] ?? 0),
@@ -97,93 +179,109 @@ export async function dashboard(ctx: AuthContext) {
 export async function listConnections(ctx: AuthContext) {
   const { data } = await db()
     .from("telegram_connections")
-    .select("*")
+    .select(
+      "id, tenant_id, label, account_name, username, telegram_id, telegram_user_id, phone_masked, status, health, error_message, restriction_status, restriction_reason, last_active_at, last_used_at, last_sync_at, link_expires_at, cooldown_until, auth_step, created_at, updated_at",
+    )
     .eq("tenant_id", ctx.tenantId)
     .order("created_at", { ascending: false });
   return data ?? [];
 }
 
 export async function createConnection(ctx: AuthContext, label: string) {
-  const client = db();
-  const tenant = await tenantOverview(ctx);
-  const limit = Number(
-    (tenant as { plans?: Record<string, number> } | null)?.plans?.["max_connections"] ?? 0,
-  );
-  const { count } = await client
-    .from("telegram_connections")
-    .select("id", { count: "exact", head: true })
-    .eq("tenant_id", ctx.tenantId);
-  if (limit && (count ?? 0) >= limit) throw new Error(`Your plan allows ${limit} connection(s).`);
-
-  const { data, error } = await client
-    .from("telegram_connections")
-    .insert({ tenant_id: ctx.tenantId, label: label.trim() || "Telegram account", status: "REQUIRES_ACTION" })
-    .select("*")
-    .single();
-  if (error) throw new Error(error.message);
-  await logSystem({ tenant_id: ctx.tenantId, customer_id: ctx.customerId, action: "CONNECTION_CREATED" });
-  return data;
+  throw new Error("Use ADD SESSION with phone verification inside the Mini App.");
 }
 
-/**
- * Verifies the connection against Telegram. The authorized mechanism here is the platform bot:
- * the customer sends /link <code> to the bot from the Telegram account they want to connect,
- * or the bot identity is checked. No credentials are ever collected from the customer.
- */
 export async function checkConnection(ctx: AuthContext, connectionId: string) {
-  const client = db();
-  const { data: conn } = await client
-    .from("telegram_connections")
-    .select("*")
-    .eq("id", connectionId)
-    .eq("tenant_id", ctx.tenantId)
-    .maybeSingle();
-  if (!conn) throw new Error("Connection not found.");
+  return checkUserSession(ctx, connectionId);
+}
 
-  if (!botToken()) {
-    await client
-      .from("telegram_connections")
-      .update({ status: "ERROR", error_message: "Telegram bot token is not configured", last_sync_at: new Date().toISOString() })
-      .eq("id", connectionId);
-    return { ok: false, error: "Telegram bot token is not configured" };
-  }
+export async function startConnectionLogin(
+  ctx: AuthContext,
+  input: { label: string; phone: string },
+) {
+  return startUserSessionLogin(ctx, input);
+}
 
-  if (!conn.telegram_id) {
-    await client
-      .from("telegram_connections")
-      .update({
-        status: "REQUIRES_ACTION",
-        error_message: "Send /link to the bot from the Telegram account you want to connect.",
-        last_sync_at: new Date().toISOString(),
-      })
-      .eq("id", connectionId);
-    return { ok: false, error: "Awaiting authorization from Telegram." };
-  }
+export async function verifyConnectionCode(
+  ctx: AuthContext,
+  input: { connectionId: string; code: string },
+) {
+  return completeUserSessionCode(ctx, input);
+}
 
-  const res = await callBot<{ status: string }>("getChat", { chat_id: conn.telegram_id });
-  await client
-    .from("telegram_connections")
-    .update({
-      status: res.ok ? "CONNECTED" : "ERROR",
-      error_message: res.ok ? null : res.error,
-      last_sync_at: new Date().toISOString(),
-      last_active_at: res.ok ? new Date().toISOString() : conn.last_active_at,
-    })
-    .eq("id", connectionId);
-  return res.ok ? { ok: true } : { ok: false, error: res.error };
+export async function verifyConnectionPassword(
+  ctx: AuthContext,
+  input: { connectionId: string; password: string },
+) {
+  return completeUserSessionPassword(ctx, input);
 }
 
 export async function disconnectConnection(ctx: AuthContext, connectionId: string) {
-  await db()
-    .from("telegram_connections")
-    .update({ status: "DISCONNECTED", error_message: null })
-    .eq("id", connectionId)
-    .eq("tenant_id", ctx.tenantId);
-  await logSystem({ tenant_id: ctx.tenantId, customer_id: ctx.customerId, action: "CONNECTION_DISCONNECTED" });
+  await disconnectUserSession(ctx, connectionId);
+  await logSystem({
+    tenant_id: ctx.tenantId,
+    customer_id: ctx.customerId,
+    action: "CONNECTION_DISCONNECTED",
+  });
 }
 
 export async function deleteConnection(ctx: AuthContext, connectionId: string) {
-  await db().from("telegram_connections").delete().eq("id", connectionId).eq("tenant_id", ctx.tenantId);
+  await db()
+    .from("telegram_connections")
+    .delete()
+    .eq("id", connectionId)
+    .eq("tenant_id", ctx.tenantId);
+}
+
+export async function linkConnectionFromBot(input: {
+  code: string;
+  telegramUserId: number;
+  username?: string | null;
+  firstName?: string | null;
+}) {
+  const client = db();
+  const codeHash = hashConnectionLinkCode(input.code);
+  const { data: connection } = await client
+    .from("telegram_connections")
+    .select("*")
+    .eq("link_code_hash", codeHash)
+    .gt("link_expires_at", new Date().toISOString())
+    .maybeSingle();
+  if (!connection) return { ok: false as const, error: "This link code is invalid or expired." };
+
+  const { data: existing } = await client
+    .from("telegram_connections")
+    .select("id, tenant_id")
+    .eq("telegram_id", input.telegramUserId)
+    .eq("status", "CONNECTED")
+    .neq("id", connection.id)
+    .maybeSingle();
+  if (existing) return { ok: false as const, error: "This Telegram account is already connected." };
+
+  const { error } = await client
+    .from("telegram_connections")
+    .update({
+      account_name: input.firstName ?? input.username ?? "Telegram account",
+      username: input.username ?? null,
+      telegram_id: input.telegramUserId,
+      status: "CONNECTED",
+      restriction_status: "NONE",
+      error_message: null,
+      link_code_hash: null,
+      link_expires_at: null,
+      last_active_at: new Date().toISOString(),
+      last_sync_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", connection.id);
+  if (error) return { ok: false as const, error: error.message };
+
+  await logSystem({
+    tenant_id: connection.tenant_id as string,
+    action: "CONNECTION_LINKED",
+    resource: input.username ? `@${input.username}` : String(input.telegramUserId),
+  });
+  return { ok: true as const };
 }
 
 /* ---------------------------------- keywords -------------------------------------- */
@@ -200,10 +298,12 @@ export async function listKeywords(ctx: AuthContext) {
 export async function addKeyword(ctx: AuthContext, keyword: string) {
   const value = keyword.trim().toLowerCase();
   if (!value) throw new Error("Keyword cannot be empty.");
-  await db().from("keywords").upsert(
-    { tenant_id: ctx.tenantId, keyword: value },
-    { onConflict: "tenant_id,keyword", ignoreDuplicates: true },
-  );
+  await db()
+    .from("keywords")
+    .upsert(
+      { tenant_id: ctx.tenantId, keyword: value },
+      { onConflict: "tenant_id,keyword", ignoreDuplicates: true },
+    );
   return listKeywords(ctx);
 }
 
@@ -220,74 +320,123 @@ export async function discoveryStatus() {
 }
 
 /**
- * Group discovery. A public-directory provider must be configured by the platform admin;
- * without it we do NOT fake results - the customer adds public groups by @username instead,
- * which is resolved through the official Bot API.
+ * Group discovery uses the selected authorized Telegram user session. If a provider is
+ * configured, provider results are merged with Telegram contacts/public search results.
  */
-export async function discoverGroups(ctx: AuthContext, keywords: string[]) {
+export async function discoverGroups(ctx: AuthContext, connectionId: string, keywords: string[]) {
+  const connection = await requireConnection(ctx, connectionId);
   const s = await getSetting<{ provider_url?: string; provider_key?: string }>("discovery");
-  if (!s.provider_url) {
-    return { configured: false as const, added: 0, results: [] };
+  let providerRows: {
+    title: string;
+    username: string;
+    member_count?: number | null;
+    keywords?: string[];
+  }[] = [];
+  if (s.provider_url) {
+    const res = await fetch(s.provider_url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(s.provider_key ? { Authorization: `Bearer ${s.provider_key}` } : {}),
+      },
+      body: JSON.stringify({ keywords }),
+    });
+    if (!res.ok) throw new Error(`Discovery provider failed [${res.status}]: ${await res.text()}`);
+    const payload = (await res.json()) as {
+      groups?: { title: string; username: string; member_count?: number; keywords?: string[] }[];
+    };
+    providerRows = payload.groups ?? [];
   }
-  const res = await fetch(s.provider_url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(s.provider_key ? { Authorization: `Bearer ${s.provider_key}` } : {}),
-    },
-    body: JSON.stringify({ keywords }),
-  });
-  if (!res.ok) throw new Error(`Discovery provider failed [${res.status}]: ${await res.text()}`);
-  const payload = (await res.json()) as {
-    groups?: { title: string; username: string; member_count?: number; keywords?: string[] }[];
-  };
-  const rows = (payload.groups ?? []).map((g) => ({
+
+  const sessionRows = await searchPublicGroupsViaUserSession(
+    ctx.tenantId,
+    connection.id as string,
+    keywords,
+  );
+  const merged = new Map<
+    string,
+    {
+      title: string;
+      username: string;
+      member_count?: number | null;
+      keywords?: string[];
+      telegram_group_id?: number | null;
+    }
+  >();
+  for (const g of providerRows) {
+    const username = g.username.replace(/^@/, "");
+    if (username) merged.set(username.toLowerCase(), { ...g, username });
+  }
+  for (const g of sessionRows) {
+    const existing = merged.get(g.username.toLowerCase());
+    merged.set(g.username.toLowerCase(), {
+      title: existing?.title ?? g.title,
+      username: g.username,
+      member_count: existing?.member_count ?? g.memberCount,
+      keywords: [...new Set([...(existing?.keywords ?? []), ...g.matchedKeywords])],
+      telegram_group_id: g.telegramGroupId,
+    });
+  }
+
+  const rows = [...merged.values()].map((g) => ({
     tenant_id: ctx.tenantId,
     title: g.title,
     username: g.username.replace(/^@/, ""),
     member_count: g.member_count ?? null,
     matched_keywords: g.keywords ?? keywords,
-    status: "PENDING",
+    status: "FOUND",
+    connection_id: connection.id,
+    telegram_group_id: g.telegram_group_id ?? null,
   }));
   if (rows.length)
-    await db().from("discovered_groups").upsert(rows, { onConflict: "tenant_id,username", ignoreDuplicates: true });
-  await logSystem({ tenant_id: ctx.tenantId, action: "GROUP_DISCOVERY", details: { keywords, found: rows.length } });
-  return { configured: true as const, added: rows.length, results: rows };
+    await db()
+      .from("discovered_groups")
+      .upsert(rows, { onConflict: "tenant_id,username", ignoreDuplicates: true });
+  await clientConnectionUsed(ctx.tenantId, connection.id as string);
+  await logSystem({
+    tenant_id: ctx.tenantId,
+    action: "GROUP_DISCOVERY",
+    details: { keywords, found: rows.length },
+  });
+  return { configured: !!s.provider_url, added: rows.length, results: rows };
 }
 
-/** Resolves a public group by @username through the official Bot API. */
-export async function addGroupByUsername(ctx: AuthContext, username: string, keywords: string[]) {
+/** Resolves a public group by @username through the selected authorized user session. */
+export async function addGroupByUsername(
+  ctx: AuthContext,
+  connectionId: string,
+  username: string,
+  keywords: string[],
+) {
+  const connection = await requireConnection(ctx, connectionId);
   const handle = username.trim().replace(/^@/, "");
   if (!handle) throw new Error("Enter a group @username.");
-  if (!botToken()) throw new Error("Telegram bot token is not configured.");
-
-  const chat = await callBot<{ id: number; title: string; type: string; username?: string }>("getChat", {
-    chat_id: `@${handle}`,
-  });
-  if (!chat.ok) throw new Error(chat.error);
-  if (!["group", "supergroup", "channel"].includes(chat.result.type))
-    throw new Error("That username is not a public group or channel.");
-
-  const members = await callBot<number>("getChatMemberCount", { chat_id: chat.result.id });
+  const group = await resolvePublicGroupViaUserSession(
+    ctx.tenantId,
+    connection.id as string,
+    handle,
+  );
 
   const { data, error } = await db()
     .from("discovered_groups")
     .upsert(
       {
         tenant_id: ctx.tenantId,
-        title: chat.result.title,
-        username: handle,
-        telegram_group_id: chat.result.id,
-        member_count: members.ok ? members.result : null,
+        title: group.title,
+        username: group.username,
+        telegram_group_id: group.telegramGroupId,
+        member_count: group.memberCount,
         matched_keywords: keywords,
-        status: "PENDING",
+        status: "FOUND",
+        connection_id: connection.id,
       },
       { onConflict: "tenant_id,username" },
     )
     .select("*")
     .single();
   if (error) throw new Error(error.message);
-  await logSystem({ tenant_id: ctx.tenantId, action: "GROUP_FOUND", resource: handle });
+  await clientConnectionUsed(ctx.tenantId, connection.id as string);
+  await logSystem({ tenant_id: ctx.tenantId, action: "GROUP_FOUND", resource: group.username });
   return data;
 }
 
@@ -329,11 +478,11 @@ export async function removeGroup(ctx: AuthContext, groupId: string) {
   await db().from("discovered_groups").delete().eq("id", groupId).eq("tenant_id", ctx.tenantId);
 }
 
-/**
- * Approves a group and verifies real access: the platform bot must be a member of the group
- * (added by a group admin). We never silently join and never bypass Telegram permissions.
- */
-export async function approveGroup(ctx: AuthContext, groupId: string, connectionId?: string | null) {
+export async function approveGroup(
+  ctx: AuthContext,
+  groupId: string,
+  connectionId?: string | null,
+) {
   const client = db();
   const { data: group } = await client
     .from("discovered_groups")
@@ -344,7 +493,9 @@ export async function approveGroup(ctx: AuthContext, groupId: string, connection
   if (!group) throw new Error("Group not found.");
 
   const tenant = await tenantOverview(ctx);
-  const limit = Number((tenant as { plans?: Record<string, number> } | null)?.plans?.["max_groups"] ?? 0);
+  const limit = Number(
+    (tenant as { plans?: Record<string, number> } | null)?.plans?.["max_groups"] ?? 0,
+  );
   const { count } = await client
     .from("discovered_groups")
     .select("id", { count: "exact", head: true })
@@ -354,45 +505,71 @@ export async function approveGroup(ctx: AuthContext, groupId: string, connection
 
   await client
     .from("discovered_groups")
-    .update({ status: "APPROVED", approved_at: new Date().toISOString(), connection_id: connectionId ?? null })
+    .update({
+      status: "APPROVED",
+      approved_at: new Date().toISOString(),
+      connection_id: connectionId ?? null,
+    })
     .eq("id", groupId);
 
-  const me = await callBot<{ id: number }>("getMe", {});
-  if (!me.ok) {
-    await client.from("discovered_groups").update({ status: "REQUIRES_ACTION", join_error: me.error }).eq("id", groupId);
-    await notify(ctx.tenantId, "Group approval needs attention", `${group.title}: ${me.error}`, "WARNING");
-    return { status: "REQUIRES_ACTION", error: me.error };
-  }
+  await notify(ctx.tenantId, "Group approved", `${group.title} is approved.`, "SUCCESS");
+  await logSystem({ tenant_id: ctx.tenantId, action: "GROUP_APPROVED", resource: group.username });
+  return { status: "APPROVED" };
+}
 
-  const chatId = group.telegram_group_id ?? `@${group.username}`;
-  const member = await callBot<{ status: string }>("getChatMember", { chat_id: chatId, user_id: me.result.id });
+export async function joinGroup(ctx: AuthContext, groupId: string, connectionId: string) {
+  const connection = await requireConnection(ctx, connectionId);
+  const client = db();
+  const { data: group } = await client
+    .from("discovered_groups")
+    .select("*")
+    .eq("id", groupId)
+    .eq("tenant_id", ctx.tenantId)
+    .maybeSingle();
+  if (!group) throw new Error("Group not found.");
+  if (!group.username) throw new Error("Only public @username groups can be joined automatically.");
 
-  if (member.ok && ["member", "administrator", "creator"].includes(member.result.status)) {
-    await client
-      .from("discovered_groups")
-      .update({ status: "JOINED", joined_at: new Date().toISOString(), join_error: null })
-      .eq("id", groupId);
-    await client.from("group_memberships").upsert(
-      {
-        tenant_id: ctx.tenantId,
-        group_id: groupId,
-        connection_id: connectionId ?? null,
-        status: "JOINED",
-        joined_at: new Date().toISOString(),
-      },
-      { onConflict: "group_id,connection_id" },
-    );
-    await notify(ctx.tenantId, "Group ready", `${group.title} is connected and ready for promotion.`, "SUCCESS");
-    await logSystem({ tenant_id: ctx.tenantId, action: "GROUP_JOINED", resource: group.username });
-    return { status: "JOINED" };
-  }
+  const result = await joinGroupViaUserSession(
+    ctx.tenantId,
+    connection.id as string,
+    group.username as string,
+  );
+  const status =
+    result.status === "JOINED"
+      ? "JOINED"
+      : result.status === "INVITE_REQUIRED"
+        ? "REQUIRES_ACTION"
+        : result.status;
 
-  const reason = member.ok
-    ? "The bot is not a member of this group. Ask a group admin to add it."
-    : member.error;
-  await client.from("discovered_groups").update({ status: "REQUIRES_ACTION", join_error: reason }).eq("id", groupId);
-  await notify(ctx.tenantId, "Action required", `${group.title}: ${reason}`, "WARNING");
-  return { status: "REQUIRES_ACTION", error: reason };
+  await client
+    .from("discovered_groups")
+    .update({
+      status,
+      joined_at: result.status === "JOINED" ? new Date().toISOString() : null,
+      join_error: result.error ?? null,
+      connection_id: connection.id,
+    })
+    .eq("id", groupId)
+    .eq("tenant_id", ctx.tenantId);
+
+  await client.from("group_memberships").upsert(
+    {
+      tenant_id: ctx.tenantId,
+      group_id: groupId,
+      connection_id: connection.id,
+      status,
+      error: result.error ?? null,
+      joined_at: result.status === "JOINED" ? new Date().toISOString() : null,
+    },
+    { onConflict: "group_id,connection_id" },
+  );
+  await clientConnectionUsed(ctx.tenantId, connection.id as string);
+  await logSystem({
+    tenant_id: ctx.tenantId,
+    action: "GROUP_JOIN_ATTEMPT",
+    resource: group.username,
+  });
+  return result;
 }
 
 /* --------------------------------- audience --------------------------------------- */
@@ -425,7 +602,9 @@ export async function findAudience(
   const client = db();
   let q = client
     .from("audience_contacts")
-    .select("id, telegram_user_id, display_name, username, source_group_id, eligibility, status, contact_count, first_found_at, last_contacted_at")
+    .select(
+      "id, telegram_user_id, display_name, username, source_group_id, eligibility, status, contact_count, first_found_at, last_contacted_at",
+    )
     .eq("tenant_id", ctx.tenantId);
   if (groupIds.length) q = q.in("source_group_id", groupIds);
   const { data } = await q.order("first_found_at", { ascending: false }).limit(1000);
@@ -440,7 +619,7 @@ export async function findAudience(
   }
   const unique = [...seen.values()];
   const contacted = unique.filter((u) => u.contact_count > 0);
-  const eligible = unique.filter((u) => u.eligibility === "ELIGIBLE" || u.eligibility === "OPTED_IN");
+  const eligible = unique.filter((u) => u.eligibility === "OPTED_IN");
   const excluded = unique.length - eligible.length;
   const visible = onlyNew ? eligible.filter((u) => u.contact_count === 0) : eligible;
 
@@ -537,9 +716,17 @@ export async function campaignDetail(ctx: AuthContext, id: string) {
     .maybeSingle();
   if (!campaign) throw new Error("Campaign not found.");
   const [{ data: groups }, { data: recipients }, { data: logs }] = await Promise.all([
-    client.from("campaign_groups").select("*, discovered_groups(title, username)").eq("campaign_id", id),
+    client
+      .from("campaign_groups")
+      .select("*, discovered_groups(title, username)")
+      .eq("campaign_id", id),
     client.from("campaign_recipients").select("*").eq("campaign_id", id).limit(500),
-    client.from("campaign_logs").select("*").eq("campaign_id", id).order("created_at", { ascending: false }).limit(100),
+    client
+      .from("campaign_logs")
+      .select("*")
+      .eq("campaign_id", id)
+      .order("created_at", { ascending: false })
+      .limit(100),
   ]);
   return { campaign, groups: groups ?? [], recipients: recipients ?? [], logs: logs ?? [] };
 }
@@ -551,18 +738,28 @@ export async function createCampaign(
     type: "GROUP" | "DM" | "GROUP_DM";
     connection_id?: string | null;
     template_id?: string | null;
-    message: { text?: string; media_type?: string | null; media_url?: string | null; buttons?: { text: string; url: string }[] };
+    message: {
+      text?: string;
+      media_type?: string | null;
+      media_url?: string | null;
+      buttons?: { text: string; url: string }[];
+    };
     group_ids: string[];
     contact_ids: string[];
     scheduled_at?: string | null;
     start_now: boolean;
+    exclude_previously_contacted?: boolean;
   },
 ) {
   const client = db();
   if (!input.name.trim()) throw new Error("Give the campaign a name.");
-  if (!input.message.text && !input.message.media_url) throw new Error("The message cannot be empty.");
-  if (input.type !== "DM" && input.group_ids.length === 0) throw new Error("Select at least one group.");
-  if (input.type !== "GROUP" && input.contact_ids.length === 0) throw new Error("Select at least one recipient.");
+  if (!input.message.text && !input.message.media_url)
+    throw new Error("The message cannot be empty.");
+  if (input.type !== "DM" && input.group_ids.length === 0)
+    throw new Error("Select at least one group.");
+  if (input.type !== "GROUP" && input.contact_ids.length === 0)
+    throw new Error("Select at least one recipient.");
+  const connection = await requireConnection(ctx, input.connection_id);
 
   const tenant = await tenantOverview(ctx);
   const plan = (tenant as { plans?: Record<string, number> } | null)?.plans ?? {};
@@ -572,7 +769,11 @@ export async function createCampaign(
   if (limit && messagesUsed + targetCount > limit)
     throw new Error(`This campaign exceeds your monthly message limit (${limit}).`);
 
-  const status = input.start_now ? "RUNNING" : input.scheduled_at ? "SCHEDULED" : "PENDING_APPROVAL";
+  const status = input.start_now
+    ? "RUNNING"
+    : input.scheduled_at
+      ? "SCHEDULED"
+      : "PENDING_APPROVAL";
 
   const { data: campaign, error } = await client
     .from("campaigns")
@@ -600,25 +801,37 @@ export async function createCampaign(
       .eq("tenant_id", ctx.tenantId)
       .in("id", input.group_ids)
       .in("status", ["APPROVED", "JOINED"]);
+    if ((groups ?? []).length !== new Set(input.group_ids).size) {
+      await client.from("campaigns").delete().eq("id", campaign.id).eq("tenant_id", ctx.tenantId);
+      throw new Error("One or more selected groups are not approved for this account.");
+    }
     const rows = (groups ?? []).map((g) => ({
       campaign_id: campaign.id,
       tenant_id: ctx.tenantId,
       group_id: g.id,
       status: "PENDING",
     }));
-    if (rows.length) await client.from("campaign_groups").upsert(rows, { onConflict: "campaign_id,group_id" });
+    if (rows.length)
+      await client.from("campaign_groups").upsert(rows, { onConflict: "campaign_id,group_id" });
   }
 
   if (input.contact_ids.length) {
-    const { data: contacts } = await client
+    let contactQuery = client
       .from("audience_contacts")
       .select("id, telegram_user_id")
       .eq("tenant_id", ctx.tenantId)
       .in("id", input.contact_ids)
-      .in("eligibility", ["ELIGIBLE", "OPTED_IN"]);
+      .eq("eligibility", "OPTED_IN");
+    if (input.exclude_previously_contacted !== false)
+      contactQuery = contactQuery.eq("contact_count", 0);
+    const { data: contacts } = await contactQuery;
     // Dedupe by telegram user id so a user in several groups is contacted once.
     const unique = new Map<number, { id: string; telegram_user_id: number }>();
     for (const c of contacts ?? []) unique.set(c.telegram_user_id as number, c as never);
+    if (unique.size === 0) {
+      await client.from("campaigns").delete().eq("id", campaign.id).eq("tenant_id", ctx.tenantId);
+      throw new Error("No selected recipients are eligible for DM promotion.");
+    }
     const rows = [...unique.values()].map((c) => ({
       campaign_id: campaign.id,
       tenant_id: ctx.tenantId,
@@ -627,25 +840,59 @@ export async function createCampaign(
       status: "PENDING",
     }));
     if (rows.length)
-      await client.from("campaign_recipients").upsert(rows, { onConflict: "campaign_id,telegram_user_id" });
+      await client
+        .from("campaign_recipients")
+        .upsert(rows, { onConflict: "campaign_id,telegram_user_id" });
   }
 
   await enqueueCampaignJobs(campaign.id as string, ctx.tenantId, input.start_now);
 
   const groupCount =
-    (await client.from("campaign_groups").select("id", { count: "exact", head: true }).eq("campaign_id", campaign.id)).count ?? 0;
+    (
+      await client
+        .from("campaign_groups")
+        .select("id", { count: "exact", head: true })
+        .eq("campaign_id", campaign.id)
+    ).count ?? 0;
   const recipientCount =
-    (await client.from("campaign_recipients").select("id", { count: "exact", head: true }).eq("campaign_id", campaign.id)).count ?? 0;
-  await client.from("campaigns").update({ total_targets: groupCount + recipientCount }).eq("id", campaign.id);
+    (
+      await client
+        .from("campaign_recipients")
+        .select("id", { count: "exact", head: true })
+        .eq("campaign_id", campaign.id)
+    ).count ?? 0;
+  await client
+    .from("campaigns")
+    .update({ total_targets: groupCount + recipientCount })
+    .eq("id", campaign.id);
+  await client.from("campaign_logs").insert({
+    tenant_id: ctx.tenantId,
+    campaign_id: campaign.id,
+    level: "INFO",
+    message: "Campaign approved and jobs created.",
+    details: { groups: groupCount, recipients: recipientCount, connection_id: connection.id },
+  });
+  await clientConnectionUsed(ctx.tenantId, connection.id as string);
 
-  await logSystem({ tenant_id: ctx.tenantId, customer_id: ctx.customerId, action: "CAMPAIGN_CREATED", resource: campaign.name });
+  await logSystem({
+    tenant_id: ctx.tenantId,
+    customer_id: ctx.customerId,
+    action: "CAMPAIGN_CREATED",
+    resource: campaign.name,
+  });
   await notify(ctx.tenantId, "Campaign created", `${campaign.name} is ${status.toLowerCase()}.`);
   return campaign;
 }
 
 export async function enqueueCampaignJobs(campaignId: string, tenantId: string, startNow: boolean) {
   const client = db();
-  const [{ data: groups }, { data: recipients }] = await Promise.all([
+  const [{ data: campaign }, { data: groups }, { data: recipients }] = await Promise.all([
+    client
+      .from("campaigns")
+      .select("connection_id")
+      .eq("id", campaignId)
+      .eq("tenant_id", tenantId)
+      .maybeSingle(),
     client.from("campaign_groups").select("id").eq("campaign_id", campaignId),
     client.from("campaign_recipients").select("id").eq("campaign_id", campaignId),
   ]);
@@ -655,15 +902,22 @@ export async function enqueueCampaignJobs(campaignId: string, tenantId: string, 
   ].map((j) => ({
     campaign_id: campaignId,
     tenant_id: tenantId,
+    connection_id: campaign?.connection_id ?? null,
     job_type: j.job_type,
     target_id: j.target_id,
     status: startNow ? "QUEUED" : "HELD",
   }));
   if (jobs.length)
-    await client.from("campaign_jobs").upsert(jobs, { onConflict: "campaign_id,job_type,target_id", ignoreDuplicates: true });
+    await client
+      .from("campaign_jobs")
+      .upsert(jobs, { onConflict: "campaign_id,job_type,target_id", ignoreDuplicates: true });
 }
 
-export async function controlCampaign(ctx: AuthContext, id: string, action: "START" | "PAUSE" | "RESUME" | "STOP") {
+export async function controlCampaign(
+  ctx: AuthContext,
+  id: string,
+  action: "START" | "PAUSE" | "RESUME" | "STOP",
+) {
   const client = db();
   const { data: campaign } = await client
     .from("campaigns")
@@ -686,13 +940,30 @@ export async function controlCampaign(ctx: AuthContext, id: string, action: "STA
     .eq("id", id);
 
   if (status === "RUNNING") {
-    await client.from("campaign_jobs").update({ status: "QUEUED" }).eq("campaign_id", id).in("status", ["HELD", "PAUSED"]);
+    await client
+      .from("campaign_jobs")
+      .update({ status: "QUEUED" })
+      .eq("campaign_id", id)
+      .in("status", ["HELD", "PAUSED"]);
   } else if (status === "PAUSED") {
-    await client.from("campaign_jobs").update({ status: "PAUSED" }).eq("campaign_id", id).eq("status", "QUEUED");
+    await client
+      .from("campaign_jobs")
+      .update({ status: "PAUSED" })
+      .eq("campaign_id", id)
+      .eq("status", "QUEUED");
   } else {
-    await client.from("campaign_jobs").update({ status: "CANCELLED" }).eq("campaign_id", id).in("status", ["QUEUED", "PAUSED", "HELD"]);
+    await client
+      .from("campaign_jobs")
+      .update({ status: "CANCELLED" })
+      .eq("campaign_id", id)
+      .in("status", ["QUEUED", "PAUSED", "HELD"]);
   }
-  await logSystem({ tenant_id: ctx.tenantId, customer_id: ctx.customerId, action: `CAMPAIGN_${action}`, resource: campaign.name });
+  await logSystem({
+    tenant_id: ctx.tenantId,
+    customer_id: ctx.customerId,
+    action: `CAMPAIGN_${action}`,
+    resource: campaign.name,
+  });
   return { status };
 }
 
@@ -702,9 +973,15 @@ export async function analytics(ctx: AuthContext) {
   const client = db();
   const t = ctx.tenantId;
   const [{ data: campaigns }, { data: groups }, { data: contacts }] = await Promise.all([
-    client.from("campaigns").select("created_at, status, completed_count, failed_count, total_targets").eq("tenant_id", t),
+    client
+      .from("campaigns")
+      .select("created_at, status, completed_count, failed_count, total_targets")
+      .eq("tenant_id", t),
     client.from("discovered_groups").select("status, discovered_at").eq("tenant_id", t),
-    client.from("audience_contacts").select("contact_count, first_found_at, last_contacted_at").eq("tenant_id", t),
+    client
+      .from("audience_contacts")
+      .select("contact_count, first_found_at, last_contacted_at")
+      .eq("tenant_id", t),
   ]);
 
   const days = [...Array(14)].map((_, i) => {
@@ -712,7 +989,10 @@ export async function analytics(ctx: AuthContext) {
     return d.toISOString().slice(0, 10);
   });
   const byDay = (rows: { at: string | null }[]) =>
-    days.map((day) => ({ day: day.slice(5), value: rows.filter((r) => r.at?.slice(0, 10) === day).length }));
+    days.map((day) => ({
+      day: day.slice(5),
+      value: rows.filter((r) => r.at?.slice(0, 10) === day).length,
+    }));
 
   return {
     totals: {
@@ -720,7 +1000,8 @@ export async function analytics(ctx: AuthContext) {
       groupsApproved: groups?.filter((g) => g.status === "APPROVED").length ?? 0,
       groupsJoined: groups?.filter((g) => g.status === "JOINED").length ?? 0,
       campaigns: campaigns?.length ?? 0,
-      processed: campaigns?.reduce((a, c) => a + (c.completed_count ?? 0) + (c.failed_count ?? 0), 0) ?? 0,
+      processed:
+        campaigns?.reduce((a, c) => a + (c.completed_count ?? 0) + (c.failed_count ?? 0), 0) ?? 0,
       successful: campaigns?.reduce((a, c) => a + (c.completed_count ?? 0), 0) ?? 0,
       failed: campaigns?.reduce((a, c) => a + (c.failed_count ?? 0), 0) ?? 0,
       audience: contacts?.length ?? 0,
@@ -739,13 +1020,27 @@ export async function analytics(ctx: AuthContext) {
 
 export async function billing(ctx: AuthContext) {
   const client = db();
-  const [tenant, { data: plans }, { data: subscription }, { data: transactions }, payments] = await Promise.all([
-    tenantOverview(ctx),
-    client.from("plans").select("*").eq("is_active", true).order("sort_order"),
-    client.from("subscriptions").select("*, plans(name, price_usd)").eq("tenant_id", ctx.tenantId).order("created_at", { ascending: false }).limit(1).maybeSingle(),
-    client.from("billing_transactions").select("*, plans(name)").eq("tenant_id", ctx.tenantId).order("created_at", { ascending: false }).limit(50),
-    getSetting<{ payment_enabled?: boolean; network?: string; wallet_address?: string }>("payments"),
-  ]);
+  const [tenant, { data: plans }, { data: subscription }, { data: transactions }, payments] =
+    await Promise.all([
+      tenantOverview(ctx),
+      client.from("plans").select("*").eq("is_active", true).order("sort_order"),
+      client
+        .from("subscriptions")
+        .select("*, plans(name, price_usd)")
+        .eq("tenant_id", ctx.tenantId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      client
+        .from("billing_transactions")
+        .select("*, plans(name)")
+        .eq("tenant_id", ctx.tenantId)
+        .order("created_at", { ascending: false })
+        .limit(50),
+      getSetting<{ payment_enabled?: boolean; network?: string; wallet_address?: string }>(
+        "payments",
+      ),
+    ]);
   return {
     tenant,
     plans: plans ?? [],
@@ -760,7 +1055,11 @@ export async function billing(ctx: AuthContext) {
 }
 
 export async function requestPayment(ctx: AuthContext, planId: string) {
-  const payments = await getSetting<{ payment_enabled?: boolean; network?: string; wallet_address?: string }>("payments");
+  const payments = await getSetting<{
+    payment_enabled?: boolean;
+    network?: string;
+    wallet_address?: string;
+  }>("payments");
   if (!payments.payment_enabled || !payments.wallet_address)
     throw new Error("Payments are not configured yet. Contact support to upgrade.");
   const client = db();

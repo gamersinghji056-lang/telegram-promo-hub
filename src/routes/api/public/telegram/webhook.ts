@@ -330,10 +330,7 @@ async function processUpdate(update: Update) {
       } else if (cq.data === "help") {
         await send(chatId, "Register, log in, then open the Mini App to manage everything.");
       } else if (cq.data === "miniapp_missing") {
-        await send(
-          chatId,
-          "The Mini App URL has not been configured by the platform admin yet.",
-        );
+        await send(chatId, "The Mini App URL has not been configured by the platform admin yet.");
       }
       return;
     }

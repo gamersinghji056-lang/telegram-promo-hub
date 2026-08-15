@@ -41,6 +41,30 @@ export const addConnection = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { label: string }) => i)
   .handler(async ({ data: i }) => data.createConnection(await resolveAuth(i.auth), i.label));
 
+export const startConnectionLogin = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { label: string; phone: string }) => i)
+  .handler(async ({ data: i }) =>
+    data.startConnectionLogin(await resolveAuth(i.auth), { label: i.label, phone: i.phone }),
+  );
+
+export const verifyConnectionCode = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { connectionId: string; code: string }) => i)
+  .handler(async ({ data: i }) =>
+    data.verifyConnectionCode(await resolveAuth(i.auth), {
+      connectionId: i.connectionId,
+      code: i.code,
+    }),
+  );
+
+export const verifyConnectionPassword = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { connectionId: string; password: string }) => i)
+  .handler(async ({ data: i }) =>
+    data.verifyConnectionPassword(await resolveAuth(i.auth), {
+      connectionId: i.connectionId,
+      password: i.password,
+    }),
+  );
+
 export const checkConnection = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { id: string }) => i)
   .handler(async ({ data: i }) => data.checkConnection(await resolveAuth(i.auth), i.id));
@@ -72,13 +96,15 @@ export const removeKeyword = createServerFn({ method: "POST" })
   .handler(async ({ data: i }) => data.removeKeyword(await resolveAuth(i.auth), i.id));
 
 export const runGroupDiscovery = createServerFn({ method: "POST" })
-  .inputValidator((i: Auth & { keywords: string[] }) => i)
-  .handler(async ({ data: i }) => data.discoverGroups(await resolveAuth(i.auth), i.keywords));
+  .inputValidator((i: Auth & { connectionId: string; keywords: string[] }) => i)
+  .handler(async ({ data: i }) =>
+    data.discoverGroups(await resolveAuth(i.auth), i.connectionId, i.keywords),
+  );
 
 export const addGroupByUsername = createServerFn({ method: "POST" })
-  .inputValidator((i: Auth & { username: string; keywords: string[] }) => i)
+  .inputValidator((i: Auth & { connectionId: string; username: string; keywords: string[] }) => i)
   .handler(async ({ data: i }) =>
-    data.addGroupByUsername(await resolveAuth(i.auth), i.username, i.keywords),
+    data.addGroupByUsername(await resolveAuth(i.auth), i.connectionId, i.username, i.keywords),
   );
 
 export const getGroups = createServerFn({ method: "POST" })
@@ -94,6 +120,10 @@ export const approveGroup = createServerFn({ method: "POST" })
   .handler(async ({ data: i }) =>
     data.approveGroup(await resolveAuth(i.auth), i.id, i.connectionId ?? null),
   );
+
+export const joinGroup = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { id: string; connectionId: string }) => i)
+  .handler(async ({ data: i }) => data.joinGroup(await resolveAuth(i.auth), i.id, i.connectionId));
 
 export const rejectGroup = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { id: string }) => i)
@@ -171,6 +201,7 @@ export const createCampaign = createServerFn({ method: "POST" })
         contact_ids: string[];
         scheduled_at?: string | null;
         start_now: boolean;
+        exclude_previously_contacted?: boolean;
       },
     ) => i,
   )
