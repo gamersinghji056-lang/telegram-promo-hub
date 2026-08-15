@@ -9,6 +9,7 @@ import {
   Search,
   Settings,
   Send,
+  Users,
 } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -19,6 +20,7 @@ const items = [
   ["groups-approved", "Approved Groups", FolderOpen],
   ["group-categories", "Categories", FolderOpen],
   ["campaigns", "Campaigns", Megaphone],
+  ["dm-audience", "Find Users", Users],
   ["dm-create", "DM Promotion", Send],
   ["group-create", "Group Promotion", Megaphone],
   ["analytics", "Analytics", BarChart3],

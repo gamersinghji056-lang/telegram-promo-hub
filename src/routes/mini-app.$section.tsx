@@ -38,6 +38,7 @@ import {
   createCampaign,
   deleteCampaign,
   deleteGroupCategory,
+  discoverAudience,
   disconnectConnection,
   findAudience,
   getAnalytics,
@@ -45,6 +46,7 @@ import {
   getCampaignDetail,
   getCampaigns,
   getConnections,
+  getGroupDiscoveryState,
   getDashboard,
   getGroupCategories,
   getGroupCategoryDetail,
@@ -56,10 +58,13 @@ import {
   removeKeyword,
   removeGroup,
   runGroupDiscovery,
+  pauseGroupDiscovery,
+  searchGroupDiscoveryNow,
   importApprovedGroups,
   joinGroup,
   logout as logoutCustomer,
   saveGroupCategory,
+  startGroupDiscovery,
   startConnectionLogin,
   updateCampaign,
   verifyConnectionCode,
@@ -179,6 +184,8 @@ function MiniAppSection() {
   const logsFn = useServerFn(getOwnActivity);
   const notificationsFn = useServerFn(getNotifications);
   const logoutFn = useServerFn(logoutCustomer);
+  const discoveryStateFn = useServerFn(getGroupDiscoveryState);
+  const audienceFn = useServerFn(findAudience);
 
   const actions = {
     addConnection: useServerFn(addConnection),
@@ -190,6 +197,10 @@ function MiniAppSection() {
     addKeyword: useServerFn(addKeyword),
     removeKeyword: useServerFn(removeKeyword),
     runGroupDiscovery: useServerFn(runGroupDiscovery),
+    getGroupDiscoveryState: useServerFn(getGroupDiscoveryState),
+    startGroupDiscovery: useServerFn(startGroupDiscovery),
+    pauseGroupDiscovery: useServerFn(pauseGroupDiscovery),
+    searchGroupDiscoveryNow: useServerFn(searchGroupDiscoveryNow),
     addGroupByUsername: useServerFn(addGroupByUsername),
     addApprovedGroupByUsername: useServerFn(addApprovedGroupByUsername),
     importApprovedGroups: useServerFn(importApprovedGroups),
@@ -202,6 +213,7 @@ function MiniAppSection() {
     deleteGroupCategory: useServerFn(deleteGroupCategory),
     getCampaignDetail: useServerFn(getCampaignDetail),
     findAudience: useServerFn(findAudience),
+    discoverAudience: useServerFn(discoverAudience),
     createCampaign: useServerFn(createCampaign),
     updateCampaign: useServerFn(updateCampaign),
     deleteCampaign: useServerFn(deleteCampaign),
@@ -210,6 +222,7 @@ function MiniAppSection() {
 
   const [auth, setAuth] = useState<string | null>(null);
   const [data, setData] = useState<any>(null);
+  const [loadedSection, setLoadedSection] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
@@ -222,7 +235,8 @@ function MiniAppSection() {
       "groups-find": async (a) => ({
         connections: await connectionsFn({ data: { auth: a } }),
         keywords: await keywordsFn({ data: { auth: a } }),
-        groups: await groupsFn({ data: { auth: a, status: "ALL" } }),
+        groups: await groupsFn({ data: { auth: a, status: "AUTO_PENDING" } }),
+        discovery: await discoveryStateFn({ data: { auth: a } }),
       }),
       "groups-found": async (a) => ({
         connections: await connectionsFn({ data: { auth: a } }),
@@ -241,7 +255,7 @@ function MiniAppSection() {
       }),
       "dm-create": async (a) => ({
         connections: await connectionsFn({ data: { auth: a } }),
-        groups: await groupsFn({ data: { auth: a, status: "APPROVED_ACTIVE" } }),
+        audience: await audienceFn({ data: { auth: a, groupIds: [], onlyNew: true } }),
         campaigns: await campaignsFn({ data: { auth: a, filter: "DM" } }),
       }),
       "dm-history": (a) => campaignsFn({ data: { auth: a, filter: "DM" } }),
@@ -270,7 +284,10 @@ function MiniAppSection() {
   );
 
   async function load() {
+    const targetSection = section;
     setBusy(true);
+    setLoadedSection("");
+    setData(null);
     setError("");
     setNotice("");
     const nextAuth = await telegramAuthReady();
@@ -286,9 +303,10 @@ function MiniAppSection() {
       return;
     }
     try {
-      const result = await loaders[section]?.(nextAuth);
+      const result = await loaders[targetSection]?.(nextAuth);
       setData(result);
-      if (section === "dashboard") void notificationsFn({ data: { auth: nextAuth } });
+      setLoadedSection(targetSection);
+      if (targetSection === "dashboard") void notificationsFn({ data: { auth: nextAuth } });
     } catch (e) {
       setError(
         e instanceof Error && e.message.includes("NO_ACCOUNT")
@@ -365,7 +383,7 @@ function MiniAppSection() {
       ) : null}
       {error ? (
         <SessionWarning error={error} />
-      ) : busy && !data ? (
+      ) : busy || loadedSection !== section ? (
         <p className="py-10 text-center text-muted-foreground">Loading workspace...</p>
       ) : (
         <CustomerContent
@@ -515,6 +533,7 @@ function QuickLink({ href, label }: { href: string; label: string }) {
 }
 
 function Sessions({ auth, data, actions, reload, setNotice, actionBusy, runAction }: any) {
+  const rows = Array.isArray(data) ? data : [];
   const [label, setLabel] = useState("");
   const [phone, setPhone] = useState("");
   const [connectionId, setConnectionId] = useState("");
@@ -627,7 +646,7 @@ function Sessions({ auth, data, actions, reload, setNotice, actionBusy, runActio
         </form>
       ) : null}
       <div className="space-y-3">
-        {(data ?? []).map((row: any) => (
+        {rows.map((row: any) => (
           <article key={row.id} className={panelClass()}>
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -680,7 +699,7 @@ function Sessions({ auth, data, actions, reload, setNotice, actionBusy, runActio
             </div>
           </article>
         ))}
-        {!data?.length ? <Empty message="No Telegram sessions connected yet." /> : null}
+        {!rows.length ? <Empty message="No Telegram sessions connected yet." /> : null}
       </div>
     </div>
   );
@@ -705,9 +724,9 @@ function SessionSelect({ value, onChange, connections, label }: any) {
 
 function GroupFinder({ auth, data, actions, reload, setNotice, actionBusy, runAction }: any) {
   const [keyword, setKeyword] = useState("");
-  const [username, setUsername] = useState("");
   const [connectionId, setConnectionId] = useState("");
   const keywords = (data?.keywords ?? []).map((k: any) => k.keyword);
+  const discovery = data?.discovery ?? {};
   async function addKey(e: FormEvent) {
     e.preventDefault();
     await runAction("add-keyword", async () => {
@@ -719,19 +738,24 @@ function GroupFinder({ auth, data, actions, reload, setNotice, actionBusy, runAc
   }
   async function searchGroups() {
     await runAction("search-groups", async () => {
-      const result = await actions.runGroupDiscovery({ data: { auth, connectionId, keywords } });
-      setNotice(`${result.added} group(s) found or updated.`);
+      const result = await actions.searchGroupDiscoveryNow({
+        data: { auth, connectionId: connectionId || null },
+      });
+      setNotice(`${result.added} new group(s) found. Discovery progress saved.`);
       await reload();
     });
   }
-  async function addManual(e: FormEvent) {
-    e.preventDefault();
-    await runAction("lookup-group", async () => {
-      const row = await actions.addGroupByUsername({
-        data: { auth, connectionId, username, keywords },
-      });
-      setUsername("");
-      setNotice(`Found ${row.title}. Review it before approval.`);
+  async function startDiscovery() {
+    await runAction("start-discovery", async () => {
+      await actions.startGroupDiscovery({ data: { auth, connectionId } });
+      setNotice("Group discovery started.");
+      await reload();
+    });
+  }
+  async function pauseDiscovery() {
+    await runAction("pause-discovery", async () => {
+      await actions.pauseGroupDiscovery({ data: { auth } });
+      setNotice("Group discovery paused.");
       await reload();
     });
   }
@@ -770,32 +794,51 @@ function GroupFinder({ auth, data, actions, reload, setNotice, actionBusy, runAc
         </div>
       </form>
       <section className={panelClass("space-y-3")}>
+        <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-5">
+          <Stat label="Status" value={discovery.status ?? "IDLE"} />
+          <Stat label="Groups Found" value={data?.groups?.length ?? 0} />
+          <Stat
+            label="Last Search"
+            value={discovery.last_search_at ? new Date(discovery.last_search_at).toLocaleString() : "never"}
+          />
+          <Stat label="New Groups Found" value={discovery.new_groups_found ?? 0} />
+          <Stat
+            label="Next Search"
+            value={discovery.next_search_at ? new Date(discovery.next_search_at).toLocaleString() : "not scheduled"}
+          />
+        </div>
+        {discovery.last_error ? (
+          <p className="text-sm text-warning">{discovery.last_error}</p>
+        ) : null}
         <SessionSelect
           label="Select Search Session"
           value={connectionId}
           onChange={setConnectionId}
           connections={data?.connections}
         />
-        <Button
-          className="w-full"
-          onClick={searchGroups}
-          disabled={!connectionId || keywords.length === 0 || actionBusy === "search-groups"}
-        >
-          <Search className="mr-2 size-4" /> {actionBusy === "search-groups" ? "Searching..." : "SEARCH GROUPS"}
-        </Button>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          <Button
+            onClick={startDiscovery}
+            disabled={!connectionId || keywords.length === 0 || actionBusy === "start-discovery"}
+          >
+            {actionBusy === "start-discovery" ? "Starting..." : "START DISCOVERY"}
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={pauseDiscovery}
+            disabled={actionBusy === "pause-discovery"}
+          >
+            {actionBusy === "pause-discovery" ? "Pausing..." : "PAUSE DISCOVERY"}
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={searchGroups}
+            disabled={!connectionId || keywords.length === 0 || actionBusy === "search-groups"}
+          >
+            <Search className="mr-2 size-4" /> {actionBusy === "search-groups" ? "Searching..." : "SEARCH NOW"}
+          </Button>
+        </div>
       </section>
-      <form onSubmit={addManual} className={panelClass("space-y-3")}>
-        <p className="font-semibold">Add Public Group</p>
-        <input
-          className={inputClass()}
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          placeholder="@public_group"
-        />
-        <Button type="submit" className="w-full" disabled={!connectionId || !username || actionBusy === "lookup-group"}>
-          {actionBusy === "lookup-group" ? "Resolving..." : "VIEW PUBLIC GROUP"}
-        </Button>
-      </form>
       <GroupRows
         groups={data?.groups ?? []}
         connections={data?.connections ?? []}
@@ -814,7 +857,6 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
   const [modal, setModal] = useState<"" | "ADD" | "IMPORT">("");
   const [username, setUsername] = useState("");
   const [folderLink, setFolderLink] = useState("");
-  const [connectionId, setConnectionId] = useState("");
   return (
     <div className="space-y-4">
       {section === "groups-approved" ? (
@@ -846,7 +888,7 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
               if (modal === "ADD") {
                 void runAction("add-approved-group", async () => {
                   await actions.addApprovedGroupByUsername({
-                    data: { auth, connectionId, username },
+                    data: { auth, username },
                   });
                   setNotice("Group approved successfully.");
                   setUsername("");
@@ -856,7 +898,7 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
               } else {
                 void runAction("import-groups", async () => {
                   const result = await actions.importApprovedGroups({
-                    data: { auth, connectionId, folderLink },
+                    data: { auth, folderLink },
                   });
                   setNotice(
                     `Imported: ${result.imported}. Duplicates: ${result.duplicates}. Inaccessible: ${result.inaccessible}. Failed: ${result.failed}.`,
@@ -874,12 +916,6 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
                 <X className="size-4" />
               </button>
             </div>
-            <SessionSelect
-              label="Select Healthy Session"
-              value={connectionId}
-              onChange={setConnectionId}
-              connections={data?.connections}
-            />
             {modal === "ADD" ? (
               <input
                 className={inputClass()}
@@ -899,7 +935,6 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
               className="w-full"
               type="submit"
               disabled={
-                !connectionId ||
                 (modal === "ADD" ? !username : !folderLink) ||
                 actionBusy === "add-approved-group" ||
                 actionBusy === "import-groups"
@@ -921,14 +956,17 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
 function GroupRows({ groups, connections, auth, actions, reload, setNotice, actionBusy, runAction }: any) {
   const [connectionId, setConnectionId] = useState("");
   const [confirmRemove, setConfirmRemove] = useState<any>(null);
+  const needsJoinSession = groups.some((g: any) => ["APPROVED", "JOINED"].includes(g.status));
   return (
     <div className="space-y-3">
-      <SessionSelect
-        label="Select Join Session"
-        value={connectionId}
-        onChange={setConnectionId}
-        connections={connections}
-      />
+      {needsJoinSession ? (
+        <SessionSelect
+          label="Select Join Session"
+          value={connectionId}
+          onChange={setConnectionId}
+          connections={connections}
+        />
+      ) : null}
       {groups.map((g: any) => (
         <article key={g.id} className={panelClass()}>
           <div className="flex items-start justify-between gap-3">
@@ -958,48 +996,54 @@ function GroupRows({ groups, connections, auth, actions, reload, setNotice, acti
                 VIEW
               </a>
             ) : null}
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={!connectionId || actionBusy === `approve-${g.id}`}
-              onClick={() =>
-                runAction(`approve-${g.id}`, async () => {
-                  await actions.approveGroup({ data: { auth, id: g.id, connectionId } });
-                  setNotice("Group approved successfully.");
-                  await reload();
-                })
-              }
-            >
-              {actionBusy === `approve-${g.id}` ? "Approving..." : "APPROVE"}
-            </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={!connectionId || actionBusy === `join-${g.id}`}
-              onClick={() =>
-                runAction(`join-${g.id}`, async () => {
-                  const result = await actions.joinGroup({ data: { auth, id: g.id, connectionId } });
-                  setNotice(result.status === "JOINED" ? "Group joined." : `Join result: ${result.status}.`);
-                  await reload();
-                })
-              }
-            >
-              {actionBusy === `join-${g.id}` ? "Joining..." : "JOIN"}
-            </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={actionBusy === `reject-${g.id}`}
-              onClick={() =>
-                runAction(`reject-${g.id}`, async () => {
-                  await actions.rejectGroup({ data: { auth, id: g.id } });
-                  setNotice("Group rejected.");
-                  await reload();
-                })
-              }
-            >
-              {actionBusy === `reject-${g.id}` ? "Rejecting..." : "REJECT"}
-            </Button>
+            {g.status === "FOUND" ? (
+              <>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={actionBusy === `approve-${g.id}`}
+                  onClick={() =>
+                    runAction(`approve-${g.id}`, async () => {
+                      await actions.approveGroup({ data: { auth, id: g.id, connectionId: null } });
+                      setNotice("Group approved successfully.");
+                      await reload();
+                    })
+                  }
+                >
+                  {actionBusy === `approve-${g.id}` ? "Approving..." : "APPROVE"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={actionBusy === `reject-${g.id}`}
+                  onClick={() =>
+                    runAction(`reject-${g.id}`, async () => {
+                      await actions.rejectGroup({ data: { auth, id: g.id } });
+                      setNotice("Group rejected.");
+                      await reload();
+                    })
+                  }
+                >
+                  {actionBusy === `reject-${g.id}` ? "Rejecting..." : "REJECT"}
+                </Button>
+              </>
+            ) : null}
+            {["APPROVED", "JOINED"].includes(g.status) ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={!connectionId || actionBusy === `join-${g.id}`}
+                onClick={() =>
+                  runAction(`join-${g.id}`, async () => {
+                    const result = await actions.joinGroup({ data: { auth, id: g.id, connectionId } });
+                    setNotice(result.status === "JOINED" ? "Group joined." : `Join result: ${result.status}.`);
+                    await reload();
+                  })
+                }
+              >
+                {actionBusy === `join-${g.id}` ? "Joining..." : "JOIN"}
+              </Button>
+            ) : null}
             {["APPROVED", "JOINED"].includes(g.status) ? (
               <Button size="sm" variant="secondary" onClick={() => setConfirmRemove(g)}>
                 REMOVE
@@ -1207,41 +1251,64 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
   );
 }
 
-function DMAudience({ auth, data, actions, setNotice }: any) {
+function DMAudience({ auth, data, actions, setNotice, actionBusy, runAction }: any) {
   const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
-  const [onlyNew, setOnlyNew] = useState(true);
   const [result, setResult] = useState<any>(null);
   async function run() {
-    const response = await actions.findAudience({
-      data: { auth, groupIds: selectedGroups, onlyNew },
+    await runAction("discover-audience", async () => {
+      const response = await actions.discoverAudience({
+        data: { auth, groupIds: selectedGroups },
+      });
+      setResult(response);
+      setNotice(
+        `Groups processed: ${response.groupsProcessed}. Users found: ${response.usersFound}.`,
+      );
     });
-    setResult(response);
-    setNotice(
-      `Eligible: ${response.eligible}. Previously contacted: ${response.previouslyContacted}.`,
-    );
   }
   return (
     <div className="space-y-4">
+      <section className={panelClass()}>
+        <p className="text-lg font-semibold">Find Users</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Select approved source groups and save legitimately discoverable/contactable users to your
+          audience database.
+        </p>
+      </section>
       <GroupPicker
         groups={data?.groups ?? []}
         selected={selectedGroups}
         setSelected={setSelectedGroups}
-        allowAll={false}
+        allowAll
       />
-      <label className="flex items-center gap-2 text-sm">
-        <input type="checkbox" checked={onlyNew} onChange={(e) => setOnlyNew(e.target.checked)} />
-        Exclude previously contacted
-      </label>
-      <Button className="w-full" onClick={run} disabled={selectedGroups.length === 0}>
-        FIND ELIGIBLE USERS
+      <Button
+        className="w-full"
+        onClick={run}
+        disabled={selectedGroups.length === 0 || actionBusy === "discover-audience"}
+      >
+        {actionBusy === "discover-audience" ? "Finding..." : "FIND USERS"}
       </Button>
       {result ? (
-        <AudienceSummary
-          result={result}
-          selectable={false}
-          selected={[]}
-          setSelected={() => undefined}
-        />
+        <section className={panelClass("space-y-3")}>
+          <div className="grid grid-cols-2 gap-2 text-sm">
+            <Stat label="Groups selected" value={result.groupsSelected} />
+            <Stat label="Groups processed" value={result.groupsProcessed} />
+            <Stat label="Users found" value={result.usersFound} />
+            <Stat label="Duplicates" value={result.duplicates} />
+            <Stat label="Already saved" value={result.alreadySaved} />
+            <Stat label="Unavailable" value={result.unavailable} />
+          </div>
+          {(result.results ?? []).map((row: any) => (
+            <div key={row.groupId} className="border border-border bg-background p-3 text-sm">
+              <div className="flex items-center justify-between gap-3">
+                <p className="font-medium">{row.groupName}</p>
+                <span className={statusTone(row.status)}>
+                  {row.status === "FOUND" ? `FOUND: ${row.usersFound}` : row.status}
+                </span>
+              </div>
+              {row.reason ? <p className="mt-2 text-xs text-warning">{row.reason}</p> : null}
+            </div>
+          ))}
+        </section>
       ) : null}
     </div>
   );
@@ -1280,8 +1347,7 @@ function CampaignsPage({ auth, data, actions, reload, setNotice, actionBusy, run
 
 function DMCampaign({ auth, data, actions, reload, setNotice, actionBusy, runAction }: any) {
   const [createMode, setCreateMode] = useState(false);
-  const [sourceGroups, setSourceGroups] = useState<string[]>([]);
-  const [audience, setAudience] = useState<any>(null);
+  const audience = data?.audience ?? null;
   const [selected, setSelected] = useState<string[]>([]);
   const [connectionId, setConnectionId] = useState("");
   const [message, setMessage] = useState("");
@@ -1293,16 +1359,6 @@ function DMCampaign({ auth, data, actions, reload, setNotice, actionBusy, runAct
   const [minDelay, setMinDelay] = useState(30);
   const [maxDelay, setMaxDelay] = useState(60);
 
-  async function loadAudience() {
-    await runAction("find-dm-audience", async () => {
-      const response = await actions.findAudience({
-        data: { auth, groupIds: sourceGroups, onlyNew: true },
-      });
-      setAudience(response);
-      setSelected([]);
-      setNotice(`Eligible users found: ${response.eligible}.`);
-    });
-  }
   async function submit(e: FormEvent) {
     e.preventDefault();
     const buttons = buttonText && buttonUrl ? [{ text: buttonText, url: buttonUrl }] : [];
@@ -1357,20 +1413,6 @@ function DMCampaign({ auth, data, actions, reload, setNotice, actionBusy, runAct
       <Button type="button" variant="secondary" onClick={() => setCreateMode(false)}>
         BACK TO DM CAMPAIGNS
       </Button>
-      <GroupPicker
-        groups={data?.groups ?? []}
-        selected={sourceGroups}
-        setSelected={setSourceGroups}
-        allowAll={false}
-      />
-      <Button
-        type="button"
-        className="w-full"
-        onClick={loadAudience}
-        disabled={sourceGroups.length === 0 || actionBusy === "find-dm-audience"}
-      >
-        {actionBusy === "find-dm-audience" ? "Finding..." : "FIND ELIGIBLE USERS"}
-      </Button>
       {audience ? (
         <AudienceSummary
           result={audience}
@@ -1378,7 +1420,9 @@ function DMCampaign({ auth, data, actions, reload, setNotice, actionBusy, runAct
           selected={selected}
           setSelected={setSelected}
         />
-      ) : null}
+      ) : (
+        <Empty message="No saved audience yet. Use Find Users before creating a DM campaign." />
+      )}
       <SessionSelect
         label="Select Sending Session"
         value={connectionId}
@@ -1695,14 +1739,19 @@ function GroupPicker({ groups, selected, setSelected, allowAll }: any) {
       <div className="flex items-center justify-between">
         <p className="font-semibold">Approved Groups</p>
         {allowAll ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            onClick={() => setSelected(groups.map((g: any) => g.id))}
-          >
-            ALL
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              onClick={() => setSelected(groups.map((g: any) => g.id))}
+            >
+              SELECT ALL
+            </Button>
+            <Button type="button" size="sm" variant="secondary" onClick={() => setSelected([])}>
+              CLEAR ALL
+            </Button>
+          </div>
         ) : null}
       </div>
       <div className="space-y-2">

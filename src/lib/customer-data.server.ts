@@ -7,6 +7,7 @@ import {
   completeUserSessionCode,
   completeUserSessionPassword,
   disconnectUserSession,
+  discoverAudienceViaUserSession,
   importGroupsFromFolderViaUserSession,
   joinGroupViaUserSession,
   resolvePublicGroupViaUserSession,
@@ -43,6 +44,27 @@ async function requireConnection(ctx: AuthContext, connectionId?: string | null)
   if (["RESTRICTED", "REQUIRES_ACTION"].includes(String(connection.restriction_status ?? ""))) {
     throw new Error("Selected Telegram session requires attention.");
   }
+  return connection;
+}
+
+async function defaultHealthyConnection(ctx: AuthContext) {
+  const { data } = await db()
+    .from("telegram_connections")
+    .select("*")
+    .eq("tenant_id", ctx.tenantId)
+    .eq("status", "CONNECTED")
+    .order("last_used_at", { ascending: true, nullsFirst: true })
+    .order("created_at", { ascending: true })
+    .limit(10);
+  const now = Date.now();
+  const connection = (data ?? []).find((row) => {
+    const cooldown = row.cooldown_until ? new Date(row.cooldown_until as string).getTime() : 0;
+    return (
+      (!cooldown || cooldown <= now) &&
+      !["RESTRICTED", "REQUIRES_ACTION"].includes(String(row.restriction_status ?? ""))
+    );
+  });
+  if (!connection) throw new Error("Connect a Telegram session first.");
   return connection;
 }
 
@@ -338,6 +360,17 @@ export async function discoverGroups(ctx: AuthContext, connectionId: string, key
   const connection = await requireConnection(ctx, connectionId);
   const safeKeywords = [...new Set(keywords.map((k) => k.trim().toLowerCase()).filter(Boolean))];
   if (!safeKeywords.length) throw new Error("Add at least one keyword before searching.");
+  const result = await discoverGroupsForTenant(ctx.tenantId, connection.id as string, safeKeywords);
+  await clientConnectionUsed(ctx.tenantId, connection.id as string);
+  await logSystem({
+    tenant_id: ctx.tenantId,
+    action: "GROUP_DISCOVERY",
+    details: { keywords: safeKeywords, found: result.results.length, added: result.added },
+  });
+  return result;
+}
+
+async function discoverGroupsForTenant(tenantId: string, connectionId: string, safeKeywords: string[]) {
   const s = await getSetting<{ provider_url?: string; provider_key?: string }>("discovery");
   let providerRows: {
     title: string;
@@ -362,8 +395,8 @@ export async function discoverGroups(ctx: AuthContext, connectionId: string, key
   }
 
   const sessionRows = await searchPublicGroupsViaUserSession(
-    ctx.tenantId,
-    connection.id as string,
+    tenantId,
+    connectionId,
     safeKeywords,
   );
   const merged = new Map<
@@ -392,22 +425,25 @@ export async function discoverGroups(ctx: AuthContext, connectionId: string, key
   }
 
   const rows = [...merged.values()].map((g) => ({
-    tenant_id: ctx.tenantId,
+    tenant_id: tenantId,
     title: g.title,
     username: g.username.replace(/^@/, ""),
     member_count: g.member_count ?? null,
     matched_keywords: [...new Set(g.keywords ?? safeKeywords)],
     status: "FOUND",
-    connection_id: connection.id,
+    connection_id: connectionId,
     telegram_group_id: g.telegram_group_id ?? null,
+    discovery_source: "AUTO",
+    last_seen_at: new Date().toISOString(),
   }));
+  let added = 0;
   if (rows.length) {
     const client = db();
     for (const row of rows) {
       const { data: existing } = await client
         .from("discovered_groups")
-        .select("id, matched_keywords, status")
-        .eq("tenant_id", ctx.tenantId)
+        .select("id, matched_keywords, status, discovery_source")
+        .eq("tenant_id", tenantId)
         .eq("username", row.username)
         .maybeSingle();
       if (existing) {
@@ -417,25 +453,143 @@ export async function discoverGroups(ctx: AuthContext, connectionId: string, key
             title: row.title,
             member_count: row.member_count,
             telegram_group_id: row.telegram_group_id,
+            last_seen_at: row.last_seen_at,
             matched_keywords: [
               ...new Set([...(existing.matched_keywords ?? []), ...row.matched_keywords]),
             ],
             updated_at: new Date().toISOString(),
           })
           .eq("id", existing.id)
-          .eq("tenant_id", ctx.tenantId);
+          .eq("tenant_id", tenantId);
       } else {
         await client.from("discovered_groups").insert(row);
+        added += 1;
       }
     }
   }
+  return { configured: !!s.provider_url, added, results: rows };
+}
+
+export async function groupDiscoveryState(ctx: AuthContext) {
+  const { data } = await db()
+    .from("group_discovery_states")
+    .select("*")
+    .eq("tenant_id", ctx.tenantId)
+    .maybeSingle();
+  return (
+    data ?? {
+      tenant_id: ctx.tenantId,
+      status: "IDLE",
+      keywords: [],
+      total_found: 0,
+      new_groups_found: 0,
+      last_search_at: null,
+      next_search_at: null,
+      last_error: null,
+      batches_completed: 0,
+    }
+  );
+}
+
+export async function startGroupDiscovery(ctx: AuthContext, connectionId: string) {
+  const connection = await requireConnection(ctx, connectionId);
+  const keywords = (await listKeywords(ctx)).map((k) => String(k.keyword));
+  if (!keywords.length) throw new Error("Add at least one keyword before starting discovery.");
+  await db().from("group_discovery_states").upsert(
+    {
+      tenant_id: ctx.tenantId,
+      connection_id: connection.id,
+      status: "RUNNING",
+      keywords,
+      next_search_at: new Date().toISOString(),
+      last_error: null,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "tenant_id" },
+  );
+  return groupDiscoveryState(ctx);
+}
+
+export async function pauseGroupDiscovery(ctx: AuthContext) {
+  await db()
+    .from("group_discovery_states")
+    .upsert(
+      { tenant_id: ctx.tenantId, status: "PAUSED", updated_at: new Date().toISOString() },
+      { onConflict: "tenant_id" },
+    );
+  return groupDiscoveryState(ctx);
+}
+
+export async function searchGroupDiscoveryNow(ctx: AuthContext, connectionId?: string | null) {
+  const existing = await groupDiscoveryState(ctx);
+  const selectedConnection = connectionId || existing.connection_id;
+  const connection = await requireConnection(ctx, selectedConnection);
+  const keywords = (await listKeywords(ctx)).map((k) => String(k.keyword));
+  if (!keywords.length) throw new Error("Add at least one keyword before searching.");
+  const result = await discoverGroupsForTenant(ctx.tenantId, connection.id as string, keywords);
+  const nextSearch = new Date(Date.now() + 15 * 60_000).toISOString();
+  await db().from("group_discovery_states").upsert(
+    {
+      tenant_id: ctx.tenantId,
+      connection_id: connection.id,
+      status: existing.status === "RUNNING" ? "RUNNING" : "IDLE",
+      keywords,
+      total_found: (existing.total_found ?? 0) + result.results.length,
+      new_groups_found: result.added,
+      last_search_at: new Date().toISOString(),
+      next_search_at: existing.status === "RUNNING" ? nextSearch : null,
+      last_error: null,
+      batches_completed: Number(existing.batches_completed ?? 0) + 1,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "tenant_id" },
+  );
   await clientConnectionUsed(ctx.tenantId, connection.id as string);
-  await logSystem({
-    tenant_id: ctx.tenantId,
-    action: "GROUP_DISCOVERY",
-    details: { keywords: safeKeywords, found: rows.length },
-  });
-  return { configured: !!s.provider_url, added: rows.length, results: rows };
+  return { ...result, state: await groupDiscoveryState(ctx) };
+}
+
+export async function processGroupDiscoveryJobs(limit = 5) {
+  const { data: states } = await db()
+    .from("group_discovery_states")
+    .select("*")
+    .eq("status", "RUNNING")
+    .lte("next_search_at", new Date().toISOString())
+    .limit(Math.max(1, Math.min(limit, 20)));
+  let processed = 0;
+  for (const state of states ?? []) {
+    try {
+      const keywords = (state.keywords ?? []).map(String).filter(Boolean);
+      if (!state.connection_id || !keywords.length) throw new Error("Discovery needs keywords and a healthy session.");
+      const result = await discoverGroupsForTenant(
+        state.tenant_id as string,
+        state.connection_id as string,
+        keywords,
+      );
+      await db()
+        .from("group_discovery_states")
+        .update({
+          total_found: Number(state.total_found ?? 0) + result.results.length,
+          new_groups_found: result.added,
+          last_search_at: new Date().toISOString(),
+          next_search_at: new Date(Date.now() + 15 * 60_000).toISOString(),
+          batches_completed: Number(state.batches_completed ?? 0) + 1,
+          last_error: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("tenant_id", state.tenant_id);
+      processed += 1;
+    } catch (error) {
+      await db()
+        .from("group_discovery_states")
+        .update({
+          status: "PAUSED",
+          last_error: error instanceof Error ? error.message : "Discovery failed.",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("tenant_id", state.tenant_id);
+    }
+  }
+  return { processed };
 }
 
 /** Resolves a public group by @username through the selected authorized user session. */
@@ -478,20 +632,46 @@ export async function addGroupByUsername(
 
 export async function addApprovedGroupByUsername(
   ctx: AuthContext,
-  connectionId: string,
   username: string,
 ) {
-  const row = await addGroupByUsername(ctx, connectionId, username, []);
-  await approveGroup(ctx, row.id as string, connectionId);
-  return { ...row, status: "APPROVED" };
+  const connection = await defaultHealthyConnection(ctx);
+  const handle = normalizePublicGroupInput(username);
+  const group = await resolvePublicGroupViaUserSession(
+    ctx.tenantId,
+    connection.id as string,
+    handle,
+  );
+  const { data, error } = await db()
+    .from("discovered_groups")
+    .upsert(
+      {
+        tenant_id: ctx.tenantId,
+        title: group.title,
+        username: group.username,
+        telegram_group_id: group.telegramGroupId,
+        member_count: group.memberCount,
+        matched_keywords: [],
+        status: "APPROVED",
+        approved_at: new Date().toISOString(),
+        connection_id: connection.id,
+        discovery_source: "MANUAL",
+        last_seen_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "tenant_id,username" },
+    )
+    .select("*")
+    .single();
+  if (error) throw new Error(error.message);
+  await clientConnectionUsed(ctx.tenantId, connection.id as string);
+  return data;
 }
 
 export async function importApprovedGroups(
   ctx: AuthContext,
-  connectionId: string,
   folderLink: string,
 ) {
-  const connection = await requireConnection(ctx, connectionId);
+  const connection = await defaultHealthyConnection(ctx);
   const groups = await importGroupsFromFolderViaUserSession(
     ctx.tenantId,
     connection.id as string,
@@ -528,6 +708,8 @@ export async function importApprovedGroups(
         status: "APPROVED",
         approved_at: new Date().toISOString(),
         connection_id: connection.id,
+        discovery_source: "IMPORT",
+        last_seen_at: new Date().toISOString(),
       });
       stats.imported += 1;
     } catch {
@@ -541,6 +723,8 @@ export async function importApprovedGroups(
 export async function listGroups(ctx: AuthContext, status?: string) {
   let q = db().from("discovered_groups").select("*").eq("tenant_id", ctx.tenantId);
   if (status === "APPROVED_ACTIVE") q = q.in("status", ["APPROVED", "JOINED"]);
+  else if (status === "AUTO_PENDING")
+    q = q.eq("discovery_source", "AUTO").eq("status", "FOUND");
   else if (status && status !== "ALL") q = q.eq("status", status);
   const { data } = await q.order("discovered_at", { ascending: false });
   return data ?? [];
@@ -734,6 +918,122 @@ export async function findAudience(
     excluded,
     users: visible,
   };
+}
+
+export async function discoverAudience(
+  ctx: AuthContext,
+  groupIds: string[],
+): Promise<{
+  groupsSelected: number;
+  groupsProcessed: number;
+  usersFound: number;
+  duplicates: number;
+  alreadySaved: number;
+  unavailable: number;
+  results: {
+    groupId: string;
+    groupName: string;
+    status: string;
+    usersFound: number;
+    duplicates: number;
+    alreadySaved: number;
+    reason?: string | null;
+  }[];
+}> {
+  const ids = [...new Set(groupIds)].filter(Boolean);
+  if (!ids.length) throw new Error("Select at least one approved source group.");
+  const connection = await defaultHealthyConnection(ctx);
+  const { data: groups } = await db()
+    .from("discovered_groups")
+    .select("id, title, username, telegram_group_id, status")
+    .eq("tenant_id", ctx.tenantId)
+    .in("id", ids)
+    .in("status", ["APPROVED", "JOINED"]);
+  const rows = groups ?? [];
+  if (!rows.length) throw new Error("Select approved groups before finding users.");
+
+  const summary = {
+    groupsSelected: ids.length,
+    groupsProcessed: 0,
+    usersFound: 0,
+    duplicates: 0,
+    alreadySaved: 0,
+    unavailable: 0,
+    results: [] as {
+      groupId: string;
+      groupName: string;
+      status: string;
+      usersFound: number;
+      duplicates: number;
+      alreadySaved: number;
+      reason?: string | null;
+    }[],
+  };
+
+  for (const group of rows) {
+    const result = await discoverAudienceViaUserSession(ctx.tenantId, connection.id as string, {
+      username: group.username as string | null,
+      telegram_group_id: group.telegram_group_id as number | null,
+    });
+    const groupResult = {
+      groupId: group.id as string,
+      groupName: String(group.title ?? group.username ?? group.id),
+      status: result.status,
+      usersFound: result.users.length,
+      duplicates: 0,
+      alreadySaved: 0,
+      reason: result.reason,
+    };
+
+    if (result.status === "FOUND") {
+      for (const user of result.users) {
+        const { data: existing } = await db()
+          .from("audience_contacts")
+          .select("id")
+          .eq("tenant_id", ctx.tenantId)
+          .eq("telegram_user_id", user.telegramUserId)
+          .maybeSingle();
+        if (existing) {
+          groupResult.alreadySaved += 1;
+          summary.alreadySaved += 1;
+          continue;
+        }
+        const { error } = await db().from("audience_contacts").insert({
+          tenant_id: ctx.tenantId,
+          telegram_user_id: user.telegramUserId,
+          username: user.username,
+          display_name: user.displayName,
+          source_group_id: group.id,
+          eligibility: "OPTED_IN",
+          status: "NEW",
+        });
+        if (error) {
+          groupResult.duplicates += 1;
+          summary.duplicates += 1;
+        } else {
+          summary.usersFound += 1;
+        }
+      }
+    } else {
+      summary.unavailable += 1;
+    }
+
+    await db().from("audience_discovery_runs").insert({
+      tenant_id: ctx.tenantId,
+      source_group_id: group.id,
+      connection_id: connection.id,
+      status: groupResult.status,
+      users_found: groupResult.usersFound,
+      duplicates: groupResult.duplicates,
+      already_saved: groupResult.alreadySaved,
+      unavailable: result.status === "FOUND" ? 0 : 1,
+      reason: result.reason ?? null,
+    });
+    summary.groupsProcessed += 1;
+    summary.results.push(groupResult);
+  }
+  await clientConnectionUsed(ctx.tenantId, connection.id as string);
+  return summary;
 }
 
 export async function contactHistory(ctx: AuthContext) {

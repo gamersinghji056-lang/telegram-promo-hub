@@ -1,7 +1,10 @@
 import "./lib/error-capture";
 
+import { startBackgroundWorkers } from "./lib/background-workers.server";
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
+
+startBackgroundWorkers();
 
 type ServerEntry = {
   fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> | Response;

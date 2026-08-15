@@ -101,6 +101,26 @@ export const runGroupDiscovery = createServerFn({ method: "POST" })
     data.discoverGroups(await resolveAuth(i.auth), i.connectionId, i.keywords),
   );
 
+export const getGroupDiscoveryState = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth) => i)
+  .handler(async ({ data: i }) => data.groupDiscoveryState(await resolveAuth(i.auth)));
+
+export const startGroupDiscovery = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { connectionId: string }) => i)
+  .handler(async ({ data: i }) =>
+    data.startGroupDiscovery(await resolveAuth(i.auth), i.connectionId),
+  );
+
+export const pauseGroupDiscovery = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth) => i)
+  .handler(async ({ data: i }) => data.pauseGroupDiscovery(await resolveAuth(i.auth)));
+
+export const searchGroupDiscoveryNow = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { connectionId?: string | null }) => i)
+  .handler(async ({ data: i }) =>
+    data.searchGroupDiscoveryNow(await resolveAuth(i.auth), i.connectionId ?? null),
+  );
+
 export const addGroupByUsername = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { connectionId: string; username: string; keywords: string[] }) => i)
   .handler(async ({ data: i }) =>
@@ -108,15 +128,15 @@ export const addGroupByUsername = createServerFn({ method: "POST" })
   );
 
 export const addApprovedGroupByUsername = createServerFn({ method: "POST" })
-  .inputValidator((i: Auth & { connectionId: string; username: string }) => i)
+  .inputValidator((i: Auth & { username: string }) => i)
   .handler(async ({ data: i }) =>
-    data.addApprovedGroupByUsername(await resolveAuth(i.auth), i.connectionId, i.username),
+    data.addApprovedGroupByUsername(await resolveAuth(i.auth), i.username),
   );
 
 export const importApprovedGroups = createServerFn({ method: "POST" })
-  .inputValidator((i: Auth & { connectionId: string; folderLink: string }) => i)
+  .inputValidator((i: Auth & { folderLink: string }) => i)
   .handler(async ({ data: i }) =>
-    data.importApprovedGroups(await resolveAuth(i.auth), i.connectionId, i.folderLink),
+    data.importApprovedGroups(await resolveAuth(i.auth), i.folderLink),
   );
 
 export const getGroups = createServerFn({ method: "POST" })
@@ -178,6 +198,10 @@ export const findAudience = createServerFn({ method: "POST" })
   .handler(async ({ data: i }) =>
     data.findAudience(await resolveAuth(i.auth), i.groupIds, i.onlyNew),
   );
+
+export const discoverAudience = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { groupIds: string[] }) => i)
+  .handler(async ({ data: i }) => data.discoverAudience(await resolveAuth(i.auth), i.groupIds));
 
 export const getContactHistory = createServerFn({ method: "POST" })
   .inputValidator((i: Auth) => i)

@@ -1,6 +1,7 @@
 import { TelegramClient } from "telegram";
 import { Api } from "telegram/tl";
 import { StringSession } from "telegram/sessions";
+import bigInt from "big-integer";
 import type { AuthContext } from "./customer-auth.server";
 import { db, logSystem } from "./db.server";
 import { decryptSecret, encryptSecret } from "./security.server";
@@ -73,6 +74,30 @@ function errorCode(error: unknown) {
     return String((error as { errorMessage?: string }).errorMessage);
   }
   return errorMessage(error);
+}
+
+function classifyAudienceError(error: unknown) {
+  const message = errorMessage(error);
+  const upper = message.toUpperCase();
+  if (upper.includes("CHAT_ADMIN_REQUIRED") || upper.includes("USER_NOT_PARTICIPANT")) {
+    return { status: "PERMISSION_REQUIRED" as const, reason: message };
+  }
+  if (
+    upper.includes("CHANNEL_PRIVATE") ||
+    upper.includes("INVITE") ||
+    upper.includes("USERNAME_NOT_OCCUPIED") ||
+    upper.includes("NOT FOUND")
+  ) {
+    return { status: "NOT_ACCESSIBLE" as const, reason: message };
+  }
+  if (
+    upper.includes("PARTICIPANTS") ||
+    upper.includes("HIDDEN") ||
+    upper.includes("FORBIDDEN")
+  ) {
+    return { status: "MEMBERS_NOT_EXPOSED" as const, reason: message };
+  }
+  return { status: "FAILED" as const, reason: message };
 }
 
 function publicFields() {
@@ -383,33 +408,123 @@ export async function searchPublicGroupsViaUserSession(
       memberCount: number | null;
       matchedKeywords: string[];
     }[] = [];
-    for (const keyword of keywords.slice(0, 8)) {
+    const addChat = (chat: unknown, keyword: string) => {
+      if (!(chat instanceof Api.Channel) && !(chat instanceof Api.Chat)) return;
+      const username = "username" in chat && chat.username ? String(chat.username) : "";
+      if (!username) return;
+      const title = "title" in chat ? String(chat.title) : username;
+      const exists = results.find((r) => r.username.toLowerCase() === username.toLowerCase());
+      if (exists) {
+        if (!exists.matchedKeywords.includes(keyword)) exists.matchedKeywords.push(keyword);
+        return;
+      }
+      results.push({
+        title,
+        username,
+        telegramGroupId: Number(chat.id),
+        memberCount:
+          "participantsCount" in chat && chat.participantsCount
+            ? Number(chat.participantsCount)
+            : null,
+        matchedKeywords: [keyword],
+      });
+    };
+
+    for (const keyword of keywords.slice(0, 12)) {
       const search = await client.invoke(
         new Api.contacts.Search({
           q: keyword,
-          limit: 20,
+          limit: 50,
         }),
       );
-      for (const chat of search.chats) {
-        if (!(chat instanceof Api.Channel) && !(chat instanceof Api.Chat)) continue;
-        const username = "username" in chat && chat.username ? String(chat.username) : "";
-        if (!username) continue;
-        const title = "title" in chat ? String(chat.title) : username;
-        const exists = results.find((r) => r.username.toLowerCase() === username.toLowerCase());
-        if (exists) {
-          if (!exists.matchedKeywords.includes(keyword)) exists.matchedKeywords.push(keyword);
-          continue;
-        }
-        results.push({
-          title,
-          username,
-          telegramGroupId: Number(chat.id),
-          memberCount: null,
-          matchedKeywords: [keyword],
-        });
+      for (const chat of search.chats) addChat(chat, keyword);
+
+      try {
+        const global = await client.invoke(
+          new Api.messages.SearchGlobal({
+            groupsOnly: true,
+            q: keyword,
+            filter: new Api.InputMessagesFilterEmpty(),
+            minDate: 0,
+            maxDate: 0,
+            offsetRate: 0,
+            offsetPeer: new Api.InputPeerEmpty(),
+            offsetId: 0,
+            limit: 50,
+          }),
+        );
+        for (const chat of "chats" in global ? global.chats : []) addChat(chat, keyword);
+      } catch {
+        // contacts.Search is the fallback when Telegram global search is unavailable.
       }
     }
     return results;
+  });
+}
+
+export async function discoverAudienceViaUserSession(
+  tenantId: string,
+  connectionId: string,
+  group: { username?: string | null; telegram_group_id?: number | null },
+) {
+  return withAuthorizedUserClient(tenantId, connectionId, async (client) => {
+    try {
+      const entity = await client.getEntity(
+        group.username ? group.username.replace(/^@/, "") : Number(group.telegram_group_id),
+      );
+      if (!(entity instanceof Api.Channel)) {
+        return {
+          status: "MEMBERS_NOT_EXPOSED" as const,
+          reason: "Telegram member enumeration is only available for eligible channels/supergroups.",
+          users: [],
+        };
+      }
+      const users: {
+        telegramUserId: number;
+        username: string | null;
+        displayName: string | null;
+      }[] = [];
+      const seen = new Set<number>();
+      const limit = 100;
+      let offset = 0;
+      for (let page = 0; page < 20; page += 1) {
+        const response = await client.invoke(
+          new Api.channels.GetParticipants({
+            channel: entity,
+            filter: new Api.ChannelParticipantsSearch({ q: "" }),
+            offset,
+            limit,
+            hash: bigInt(0),
+          }),
+        );
+        if (!(response instanceof Api.channels.ChannelParticipants)) {
+          return {
+            status: "MEMBERS_NOT_EXPOSED" as const,
+            reason: "Telegram did not expose members for this group.",
+            users,
+          };
+        }
+        const pageUsers = response.users.filter((u): u is Api.User => u instanceof Api.User);
+        for (const user of pageUsers) {
+          if (user.bot || user.deleted) continue;
+          const id = Number(user.id);
+          if (!Number.isFinite(id) || seen.has(id)) continue;
+          seen.add(id);
+          const displayName = [user.firstName, user.lastName].filter(Boolean).join(" ").trim();
+          users.push({
+            telegramUserId: id,
+            username: user.username ?? null,
+            displayName: displayName || user.username || String(id),
+          });
+        }
+        if (pageUsers.length < limit) break;
+        offset += limit;
+      }
+      return { status: "FOUND" as const, reason: null, users };
+    } catch (error) {
+      const classified = classifyAudienceError(error);
+      return { ...classified, users: [] };
+    }
   });
 }
 
