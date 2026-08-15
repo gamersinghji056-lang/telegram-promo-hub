@@ -107,6 +107,18 @@ export const addGroupByUsername = createServerFn({ method: "POST" })
     data.addGroupByUsername(await resolveAuth(i.auth), i.connectionId, i.username, i.keywords),
   );
 
+export const addApprovedGroupByUsername = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { connectionId: string; username: string }) => i)
+  .handler(async ({ data: i }) =>
+    data.addApprovedGroupByUsername(await resolveAuth(i.auth), i.connectionId, i.username),
+  );
+
+export const importApprovedGroups = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { connectionId: string; folderLink: string }) => i)
+  .handler(async ({ data: i }) =>
+    data.importApprovedGroups(await resolveAuth(i.auth), i.connectionId, i.folderLink),
+  );
+
 export const getGroups = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { status?: string }) => i)
   .handler(async ({ data: i }) => data.listGroups(await resolveAuth(i.auth), i.status));
@@ -138,6 +150,28 @@ export const removeGroup = createServerFn({ method: "POST" })
     await data.removeGroup(await resolveAuth(i.auth), i.id);
     return { ok: true };
   });
+
+export const getGroupCategories = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth) => i)
+  .handler(async ({ data: i }) => data.listGroupCategories(await resolveAuth(i.auth)));
+
+export const getGroupCategoryDetail = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { id: string }) => i)
+  .handler(async ({ data: i }) => data.groupCategoryDetail(await resolveAuth(i.auth), i.id));
+
+export const saveGroupCategory = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { id?: string | null; name: string; group_ids: string[] }) => i)
+  .handler(async ({ data: i }) =>
+    data.saveGroupCategory(await resolveAuth(i.auth), {
+      id: i.id ?? null,
+      name: i.name,
+      group_ids: i.group_ids,
+    }),
+  );
+
+export const deleteGroupCategory = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { id: string }) => i)
+  .handler(async ({ data: i }) => data.deleteGroupCategory(await resolveAuth(i.auth), i.id));
 
 export const findAudience = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { groupIds: string[]; onlyNew: boolean }) => i)
@@ -198,18 +232,60 @@ export const createCampaign = createServerFn({ method: "POST" })
           buttons?: { text: string; url: string }[];
         };
         group_ids: string[];
+        group_category_id?: string | null;
         contact_ids: string[];
         scheduled_at?: string | null;
         start_now: boolean;
         exclude_previously_contacted?: boolean;
+        min_delay_seconds?: number | null;
+        max_delay_seconds?: number | null;
+        cycle_delay_minutes?: number | null;
       },
     ) => i,
   )
   .handler(async ({ data: i }) => data.createCampaign(await resolveAuth(i.auth), i));
 
 export const controlCampaign = createServerFn({ method: "POST" })
-  .inputValidator((i: Auth & { id: string; action: "START" | "PAUSE" | "RESUME" | "STOP" }) => i)
+  .inputValidator(
+    (i: Auth & { id: string; action: "START" | "PAUSE" | "RESUME" | "RESTART" | "STOP" }) => i,
+  )
   .handler(async ({ data: i }) => data.controlCampaign(await resolveAuth(i.auth), i.id, i.action));
+
+export const updateCampaign = createServerFn({ method: "POST" })
+  .inputValidator(
+    (
+      i: Auth & {
+        id: string;
+        name: string;
+        connection_id?: string | null;
+        group_category_id?: string | null;
+        message: {
+          text?: string;
+          media_type?: string | null;
+          media_url?: string | null;
+          buttons?: { text: string; url: string }[];
+        };
+        min_delay_seconds?: number | null;
+        max_delay_seconds?: number | null;
+        cycle_delay_minutes?: number | null;
+      },
+    ) => i,
+  )
+  .handler(async ({ data: i }) =>
+    data.updateCampaign(await resolveAuth(i.auth), i.id, {
+      name: i.name,
+      connection_id: i.connection_id ?? null,
+      group_category_id: i.group_category_id ?? null,
+      message: i.message,
+      min_delay_seconds: i.min_delay_seconds ?? null,
+      max_delay_seconds: i.max_delay_seconds ?? null,
+      cycle_delay_minutes: i.cycle_delay_minutes ?? null,
+    }),
+  );
+
+export const deleteCampaign = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { id: string }) => i)
+  .handler(async ({ data: i }) => data.deleteCampaign(await resolveAuth(i.auth), i.id));
 
 export const getAnalytics = createServerFn({ method: "POST" })
   .inputValidator((i: Auth) => i)

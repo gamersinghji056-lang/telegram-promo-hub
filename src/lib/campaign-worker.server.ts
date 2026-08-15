@@ -48,7 +48,7 @@ function backoffMinutes(attempts: number) {
 async function campaignMessage(campaignId: string, tenantId: string) {
   const { data } = await db()
     .from("campaigns")
-    .select("id, tenant_id, status, message, connection_id")
+    .select("id, tenant_id, status, type, message, connection_id, min_delay_seconds, max_delay_seconds, cycle_delay_minutes")
     .eq("id", campaignId)
     .eq("tenant_id", tenantId)
     .maybeSingle();
@@ -57,9 +57,20 @@ async function campaignMessage(campaignId: string, tenantId: string) {
   return data as {
     id: string;
     status: string;
+    type: string;
     message: MessagePayload;
     connection_id: string | null;
+    min_delay_seconds?: number | null;
+    max_delay_seconds?: number | null;
+    cycle_delay_minutes?: number | null;
   };
+}
+
+function campaignDelayMs(campaign: { min_delay_seconds?: number | null; max_delay_seconds?: number | null }) {
+  const min = Math.max(1, Number(campaign.min_delay_seconds ?? 0));
+  const max = Math.max(min, Number(campaign.max_delay_seconds ?? min));
+  const seconds = min + Math.floor(Math.random() * (max - min + 1));
+  return Math.max(sendDelayMs(), seconds * 1000);
 }
 
 async function verifyConnection(tenantId: string, connectionId: string | null) {
@@ -124,7 +135,13 @@ async function resolveTarget(job: JobRow) {
 
 async function markCampaignCounts(campaignId: string, tenantId: string) {
   const client = db();
-  const [sent, failed, remaining] = await Promise.all([
+  const [campaign, sent, failed, remaining] = await Promise.all([
+    client
+      .from("campaigns")
+      .select("id, type, status, cycle_delay_minutes, cycles_completed")
+      .eq("id", campaignId)
+      .eq("tenant_id", tenantId)
+      .maybeSingle(),
     client
       .from("campaign_jobs")
       .select("id", { count: "exact", head: true })
@@ -148,9 +165,30 @@ async function markCampaignCounts(campaignId: string, tenantId: string) {
     failed_count: failedCount,
     updated_at: new Date().toISOString(),
   };
-  if ((remaining.count ?? 0) === 0) {
-    update.status = failedCount > 0 ? "COMPLETED_WITH_ERRORS" : "COMPLETED";
-    update.completed_at = new Date().toISOString();
+  if ((remaining.count ?? 0) === 0 && campaign.data?.type === "GROUP" && campaign.data?.status === "RUNNING") {
+    const nextRun = new Date(
+      Date.now() + Math.max(1, Number(campaign.data.cycle_delay_minutes ?? 20)) * 60_000,
+    ).toISOString();
+    update["cycles_completed"] = Number(campaign.data.cycles_completed ?? 0) + 1;
+    update["last_run_at"] = new Date().toISOString();
+    update["next_run_at"] = nextRun;
+    await client
+      .from("campaign_jobs")
+      .update({
+        status: "QUEUED",
+        attempts: 0,
+        run_after: nextRun,
+        locked_at: null,
+        started_at: null,
+        completed_at: null,
+        last_error: null,
+      })
+      .eq("campaign_id", campaignId)
+      .eq("tenant_id", tenantId)
+      .eq("job_type", "GROUP");
+  } else if ((remaining.count ?? 0) === 0) {
+    update["status"] = failedCount > 0 ? "COMPLETED_WITH_ERRORS" : "COMPLETED";
+    update["completed_at"] = new Date().toISOString();
   }
   await client.from("campaigns").update(update).eq("id", campaignId).eq("tenant_id", tenantId);
 }
@@ -278,7 +316,7 @@ async function processJob(job: JobRow) {
         .from("telegram_connections")
         .update({
           last_used_at: new Date().toISOString(),
-          cooldown_until: new Date(Date.now() + sendDelayMs()).toISOString(),
+          cooldown_until: new Date(Date.now() + campaignDelayMs(campaign)).toISOString(),
           restriction_status: "NONE",
           error_message: null,
         })

@@ -7,6 +7,7 @@ import {
   completeUserSessionCode,
   completeUserSessionPassword,
   disconnectUserSession,
+  importGroupsFromFolderViaUserSession,
   joinGroupViaUserSession,
   resolvePublicGroupViaUserSession,
   searchPublicGroupsViaUserSession,
@@ -51,6 +52,16 @@ async function clientConnectionUsed(tenantId: string, connectionId: string) {
     .update({ last_used_at: new Date().toISOString(), updated_at: new Date().toISOString() })
     .eq("id", connectionId)
     .eq("tenant_id", tenantId);
+}
+
+function normalizePublicGroupInput(value: string) {
+  const raw = value.trim();
+  const match = raw.match(/(?:https?:\/\/)?t\.me\/([A-Za-z0-9_]+)/i);
+  const handle = (match?.[1] ?? raw).replace(/^@/, "").trim();
+  if (!/^[A-Za-z0-9_]{4,32}$/.test(handle)) {
+    throw new Error("Enter a valid public Telegram group username or t.me link.");
+  }
+  return handle;
 }
 
 /* ---------------------------------- plan / usage --------------------------------- */
@@ -325,6 +336,8 @@ export async function discoveryStatus() {
  */
 export async function discoverGroups(ctx: AuthContext, connectionId: string, keywords: string[]) {
   const connection = await requireConnection(ctx, connectionId);
+  const safeKeywords = [...new Set(keywords.map((k) => k.trim().toLowerCase()).filter(Boolean))];
+  if (!safeKeywords.length) throw new Error("Add at least one keyword before searching.");
   const s = await getSetting<{ provider_url?: string; provider_key?: string }>("discovery");
   let providerRows: {
     title: string;
@@ -339,7 +352,7 @@ export async function discoverGroups(ctx: AuthContext, connectionId: string, key
         "Content-Type": "application/json",
         ...(s.provider_key ? { Authorization: `Bearer ${s.provider_key}` } : {}),
       },
-      body: JSON.stringify({ keywords }),
+      body: JSON.stringify({ keywords: safeKeywords }),
     });
     if (!res.ok) throw new Error(`Discovery provider failed [${res.status}]: ${await res.text()}`);
     const payload = (await res.json()) as {
@@ -351,7 +364,7 @@ export async function discoverGroups(ctx: AuthContext, connectionId: string, key
   const sessionRows = await searchPublicGroupsViaUserSession(
     ctx.tenantId,
     connection.id as string,
-    keywords,
+    safeKeywords,
   );
   const merged = new Map<
     string,
@@ -383,20 +396,44 @@ export async function discoverGroups(ctx: AuthContext, connectionId: string, key
     title: g.title,
     username: g.username.replace(/^@/, ""),
     member_count: g.member_count ?? null,
-    matched_keywords: g.keywords ?? keywords,
+    matched_keywords: [...new Set(g.keywords ?? safeKeywords)],
     status: "FOUND",
     connection_id: connection.id,
     telegram_group_id: g.telegram_group_id ?? null,
   }));
-  if (rows.length)
-    await db()
-      .from("discovered_groups")
-      .upsert(rows, { onConflict: "tenant_id,username", ignoreDuplicates: true });
+  if (rows.length) {
+    const client = db();
+    for (const row of rows) {
+      const { data: existing } = await client
+        .from("discovered_groups")
+        .select("id, matched_keywords, status")
+        .eq("tenant_id", ctx.tenantId)
+        .eq("username", row.username)
+        .maybeSingle();
+      if (existing) {
+        await client
+          .from("discovered_groups")
+          .update({
+            title: row.title,
+            member_count: row.member_count,
+            telegram_group_id: row.telegram_group_id,
+            matched_keywords: [
+              ...new Set([...(existing.matched_keywords ?? []), ...row.matched_keywords]),
+            ],
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", existing.id)
+          .eq("tenant_id", ctx.tenantId);
+      } else {
+        await client.from("discovered_groups").insert(row);
+      }
+    }
+  }
   await clientConnectionUsed(ctx.tenantId, connection.id as string);
   await logSystem({
     tenant_id: ctx.tenantId,
     action: "GROUP_DISCOVERY",
-    details: { keywords, found: rows.length },
+    details: { keywords: safeKeywords, found: rows.length },
   });
   return { configured: !!s.provider_url, added: rows.length, results: rows };
 }
@@ -409,8 +446,7 @@ export async function addGroupByUsername(
   keywords: string[],
 ) {
   const connection = await requireConnection(ctx, connectionId);
-  const handle = username.trim().replace(/^@/, "");
-  if (!handle) throw new Error("Enter a group @username.");
+  const handle = normalizePublicGroupInput(username);
   const group = await resolvePublicGroupViaUserSession(
     ctx.tenantId,
     connection.id as string,
@@ -440,9 +476,72 @@ export async function addGroupByUsername(
   return data;
 }
 
+export async function addApprovedGroupByUsername(
+  ctx: AuthContext,
+  connectionId: string,
+  username: string,
+) {
+  const row = await addGroupByUsername(ctx, connectionId, username, []);
+  await approveGroup(ctx, row.id as string, connectionId);
+  return { ...row, status: "APPROVED" };
+}
+
+export async function importApprovedGroups(
+  ctx: AuthContext,
+  connectionId: string,
+  folderLink: string,
+) {
+  const connection = await requireConnection(ctx, connectionId);
+  const groups = await importGroupsFromFolderViaUserSession(
+    ctx.tenantId,
+    connection.id as string,
+    folderLink,
+  );
+  const stats = { imported: 0, duplicates: 0, inaccessible: 0, failed: 0 };
+  const client = db();
+  for (const group of groups) {
+    try {
+      const { data: existing } = await client
+        .from("discovered_groups")
+        .select("id, status")
+        .eq("tenant_id", ctx.tenantId)
+        .eq("username", group.username)
+        .maybeSingle();
+      if (existing) {
+        stats.duplicates += 1;
+        if (!["APPROVED", "JOINED"].includes(String(existing.status))) {
+          await client
+            .from("discovered_groups")
+            .update({ status: "APPROVED", approved_at: new Date().toISOString() })
+            .eq("id", existing.id)
+            .eq("tenant_id", ctx.tenantId);
+        }
+        continue;
+      }
+      await client.from("discovered_groups").insert({
+        tenant_id: ctx.tenantId,
+        title: group.title,
+        username: group.username,
+        telegram_group_id: group.telegramGroupId,
+        member_count: group.memberCount,
+        matched_keywords: [],
+        status: "APPROVED",
+        approved_at: new Date().toISOString(),
+        connection_id: connection.id,
+      });
+      stats.imported += 1;
+    } catch {
+      stats.failed += 1;
+    }
+  }
+  await clientConnectionUsed(ctx.tenantId, connection.id as string);
+  return stats;
+}
+
 export async function listGroups(ctx: AuthContext, status?: string) {
   let q = db().from("discovered_groups").select("*").eq("tenant_id", ctx.tenantId);
-  if (status && status !== "ALL") q = q.eq("status", status);
+  if (status === "APPROVED_ACTIVE") q = q.in("status", ["APPROVED", "JOINED"]);
+  else if (status && status !== "ALL") q = q.eq("status", status);
   const { data } = await q.order("discovered_at", { ascending: false });
   return data ?? [];
 }
@@ -475,7 +574,11 @@ export async function rejectGroup(ctx: AuthContext, groupId: string) {
 }
 
 export async function removeGroup(ctx: AuthContext, groupId: string) {
-  await db().from("discovered_groups").delete().eq("id", groupId).eq("tenant_id", ctx.tenantId);
+  await db()
+    .from("discovered_groups")
+    .update({ status: "REMOVED", updated_at: new Date().toISOString() })
+    .eq("id", groupId)
+    .eq("tenant_id", ctx.tenantId);
 }
 
 export async function approveGroup(
@@ -644,6 +747,113 @@ export async function contactHistory(ctx: AuthContext) {
   return data ?? [];
 }
 
+/* -------------------------------- categories -------------------------------------- */
+
+export async function listGroupCategories(ctx: AuthContext) {
+  const client = db();
+  const { data: categories } = await client
+    .from("group_categories")
+    .select("*")
+    .eq("tenant_id", ctx.tenantId)
+    .order("created_at", { ascending: false });
+  if (!categories?.length) return [];
+  const { data: members } = await client
+    .from("group_category_members")
+    .select("category_id, group_id")
+    .eq("tenant_id", ctx.tenantId)
+    .in(
+      "category_id",
+      categories.map((c) => c.id),
+    );
+  const counts = new Map<string, number>();
+  for (const member of members ?? []) {
+    counts.set(member.category_id as string, (counts.get(member.category_id as string) ?? 0) + 1);
+  }
+  return categories.map((category) => ({
+    ...category,
+    group_count: counts.get(category.id as string) ?? 0,
+  }));
+}
+
+export async function groupCategoryDetail(ctx: AuthContext, id: string) {
+  const client = db();
+  const { data: category } = await client
+    .from("group_categories")
+    .select("*")
+    .eq("id", id)
+    .eq("tenant_id", ctx.tenantId)
+    .maybeSingle();
+  if (!category) throw new Error("Category not found.");
+  const { data: members } = await client
+    .from("group_category_members")
+    .select("group_id, discovered_groups(*)")
+    .eq("tenant_id", ctx.tenantId)
+    .eq("category_id", id);
+  const groups = (members ?? [])
+    .map((m) =>
+      Array.isArray(m.discovered_groups) ? m.discovered_groups[0] : m.discovered_groups,
+    )
+    .filter(Boolean);
+  return { category, groups };
+}
+
+export async function saveGroupCategory(
+  ctx: AuthContext,
+  input: { id?: string | null; name: string; group_ids: string[] },
+) {
+  const client = db();
+  const name = input.name.trim();
+  if (!name) throw new Error("Category name is required.");
+  const ids = [...new Set(input.group_ids)];
+  if (!ids.length) throw new Error("Select at least one approved group.");
+  const { data: groups } = await client
+    .from("discovered_groups")
+    .select("id")
+    .eq("tenant_id", ctx.tenantId)
+    .in("id", ids)
+    .in("status", ["APPROVED", "JOINED"]);
+  if ((groups ?? []).length !== ids.length) {
+    throw new Error("One or more selected groups are not usable approved groups.");
+  }
+
+  let categoryId = input.id ?? null;
+  if (categoryId) {
+    const { error } = await client
+      .from("group_categories")
+      .update({ name, updated_at: new Date().toISOString() })
+      .eq("id", categoryId)
+      .eq("tenant_id", ctx.tenantId);
+    if (error) throw new Error(error.message);
+  } else {
+    const { data: category, error } = await client
+      .from("group_categories")
+      .insert({ tenant_id: ctx.tenantId, name })
+      .select("*")
+      .single();
+    if (error || !category) throw new Error(error?.message ?? "Could not create category.");
+    categoryId = category.id as string;
+  }
+
+  await client
+    .from("group_category_members")
+    .delete()
+    .eq("tenant_id", ctx.tenantId)
+    .eq("category_id", categoryId);
+  await client.from("group_category_members").insert(
+    ids.map((groupId) => ({
+      tenant_id: ctx.tenantId,
+      category_id: categoryId,
+      group_id: groupId,
+    })),
+  );
+  return groupCategoryDetail(ctx, categoryId);
+}
+
+export async function deleteGroupCategory(ctx: AuthContext, id: string) {
+  await db().from("group_categories").delete().eq("id", id).eq("tenant_id", ctx.tenantId);
+  return { ok: true };
+}
+
 /* --------------------------------- templates -------------------------------------- */
 
 export async function listTemplates(ctx: AuthContext) {
@@ -699,7 +909,11 @@ export async function deleteTemplate(ctx: AuthContext, id: string) {
 /* --------------------------------- campaigns -------------------------------------- */
 
 export async function listCampaigns(ctx: AuthContext, filter?: string) {
-  let q = db().from("campaigns").select("*").eq("tenant_id", ctx.tenantId);
+  let q = db()
+    .from("campaigns")
+    .select("*, group_categories(name)")
+    .eq("tenant_id", ctx.tenantId)
+    .is("deleted_at", null);
   if (filter && ["GROUP", "DM", "GROUP_DM"].includes(filter)) q = q.eq("type", filter);
   else if (filter && filter !== "ALL") q = q.eq("status", filter);
   const { data } = await q.order("created_at", { ascending: false }).limit(200);
@@ -719,11 +933,18 @@ export async function campaignDetail(ctx: AuthContext, id: string) {
     client
       .from("campaign_groups")
       .select("*, discovered_groups(title, username)")
+      .eq("tenant_id", ctx.tenantId)
       .eq("campaign_id", id),
-    client.from("campaign_recipients").select("*").eq("campaign_id", id).limit(500),
+    client
+      .from("campaign_recipients")
+      .select("*")
+      .eq("tenant_id", ctx.tenantId)
+      .eq("campaign_id", id)
+      .limit(500),
     client
       .from("campaign_logs")
       .select("*")
+      .eq("tenant_id", ctx.tenantId)
       .eq("campaign_id", id)
       .order("created_at", { ascending: false })
       .limit(100),
@@ -745,17 +966,41 @@ export async function createCampaign(
       buttons?: { text: string; url: string }[];
     };
     group_ids: string[];
+    group_category_id?: string | null;
     contact_ids: string[];
     scheduled_at?: string | null;
     start_now: boolean;
     exclude_previously_contacted?: boolean;
+    min_delay_seconds?: number | null;
+    max_delay_seconds?: number | null;
+    cycle_delay_minutes?: number | null;
   },
 ) {
   const client = db();
+  let groupIds = [...new Set(input.group_ids ?? [])];
+  if (input.group_category_id) {
+    const { data: category } = await client
+      .from("group_categories")
+      .select("id")
+      .eq("id", input.group_category_id)
+      .eq("tenant_id", ctx.tenantId)
+      .maybeSingle();
+    if (!category) throw new Error("Selected group category was not found.");
+    const { data: members } = await client
+      .from("group_category_members")
+      .select("group_id")
+      .eq("tenant_id", ctx.tenantId)
+      .eq("category_id", input.group_category_id);
+    groupIds = [...new Set((members ?? []).map((m) => m.group_id as string))];
+  }
+  const minDelay = Math.max(1, Number(input.min_delay_seconds ?? 30));
+  const maxDelay = Math.max(1, Number(input.max_delay_seconds ?? 60));
+  if (minDelay > maxDelay) throw new Error("Minimum delay must be less than or equal to maximum delay.");
+  const cycleDelay = Math.max(1, Number(input.cycle_delay_minutes ?? 20));
   if (!input.name.trim()) throw new Error("Give the campaign a name.");
   if (!input.message.text && !input.message.media_url)
     throw new Error("The message cannot be empty.");
-  if (input.type !== "DM" && input.group_ids.length === 0)
+  if (input.type !== "DM" && groupIds.length === 0)
     throw new Error("Select at least one group.");
   if (input.type !== "GROUP" && input.contact_ids.length === 0)
     throw new Error("Select at least one recipient.");
@@ -765,7 +1010,7 @@ export async function createCampaign(
   const plan = (tenant as { plans?: Record<string, number> } | null)?.plans ?? {};
   const messagesUsed = (tenant as { messages_used?: number } | null)?.messages_used ?? 0;
   const limit = Number(plan["monthly_message_limit"] ?? 0);
-  const targetCount = input.group_ids.length + input.contact_ids.length;
+  const targetCount = groupIds.length + input.contact_ids.length;
   if (limit && messagesUsed + targetCount > limit)
     throw new Error(`This campaign exceeds your monthly message limit (${limit}).`);
 
@@ -785,6 +1030,10 @@ export async function createCampaign(
       connection_id: input.connection_id ?? null,
       template_id: input.template_id ?? null,
       message: input.message,
+      group_category_id: input.group_category_id ?? null,
+      min_delay_seconds: minDelay,
+      max_delay_seconds: maxDelay,
+      cycle_delay_minutes: cycleDelay,
       scheduled_at: input.scheduled_at ?? null,
       started_at: input.start_now ? new Date().toISOString() : null,
       total_targets: targetCount,
@@ -794,14 +1043,14 @@ export async function createCampaign(
   if (error || !campaign) throw new Error(error?.message ?? "Could not create the campaign.");
 
   // Validate group ownership server-side, never trust the ids blindly.
-  if (input.group_ids.length) {
+  if (groupIds.length) {
     const { data: groups } = await client
       .from("discovered_groups")
       .select("id")
       .eq("tenant_id", ctx.tenantId)
-      .in("id", input.group_ids)
+      .in("id", groupIds)
       .in("status", ["APPROVED", "JOINED"]);
-    if ((groups ?? []).length !== new Set(input.group_ids).size) {
+    if ((groups ?? []).length !== new Set(groupIds).size) {
       await client.from("campaigns").delete().eq("id", campaign.id).eq("tenant_id", ctx.tenantId);
       throw new Error("One or more selected groups are not approved for this account.");
     }
@@ -884,6 +1133,66 @@ export async function createCampaign(
   return campaign;
 }
 
+export async function updateCampaign(
+  ctx: AuthContext,
+  id: string,
+  input: {
+    name: string;
+    connection_id?: string | null;
+    group_category_id?: string | null;
+    message: {
+      text?: string;
+      media_type?: string | null;
+      media_url?: string | null;
+      buttons?: { text: string; url: string }[];
+    };
+    min_delay_seconds?: number | null;
+    max_delay_seconds?: number | null;
+    cycle_delay_minutes?: number | null;
+  },
+) {
+  const minDelay = Math.max(1, Number(input.min_delay_seconds ?? 30));
+  const maxDelay = Math.max(1, Number(input.max_delay_seconds ?? 60));
+  if (minDelay > maxDelay) throw new Error("Minimum delay must be less than or equal to maximum delay.");
+  if (!input.name.trim()) throw new Error("Campaign name is required.");
+  if (!input.message.text && !input.message.media_url) throw new Error("Message cannot be empty.");
+  if (input.connection_id) await requireConnection(ctx, input.connection_id);
+  const { data, error } = await db()
+    .from("campaigns")
+    .update({
+      name: input.name.trim(),
+      connection_id: input.connection_id ?? null,
+      group_category_id: input.group_category_id ?? null,
+      message: input.message,
+      min_delay_seconds: minDelay,
+      max_delay_seconds: maxDelay,
+      cycle_delay_minutes: Math.max(1, Number(input.cycle_delay_minutes ?? 20)),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", id)
+    .eq("tenant_id", ctx.tenantId)
+    .select("*")
+    .single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+export async function deleteCampaign(ctx: AuthContext, id: string) {
+  const client = db();
+  await client
+    .from("campaigns")
+    .update({ status: "DELETED", deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("tenant_id", ctx.tenantId);
+  await client
+    .from("campaign_jobs")
+    .update({ status: "CANCELLED" })
+    .eq("campaign_id", id)
+    .eq("tenant_id", ctx.tenantId)
+    .in("status", ["QUEUED", "HELD", "PAUSED"]);
+  return { ok: true };
+}
+
 export async function enqueueCampaignJobs(campaignId: string, tenantId: string, startNow: boolean) {
   const client = db();
   const [{ data: campaign }, { data: groups }, { data: recipients }] = await Promise.all([
@@ -916,7 +1225,7 @@ export async function enqueueCampaignJobs(campaignId: string, tenantId: string, 
 export async function controlCampaign(
   ctx: AuthContext,
   id: string,
-  action: "START" | "PAUSE" | "RESUME" | "STOP",
+  action: "START" | "PAUSE" | "RESUME" | "RESTART" | "STOP",
 ) {
   const client = db();
   const { data: campaign } = await client
@@ -927,7 +1236,13 @@ export async function controlCampaign(
     .maybeSingle();
   if (!campaign) throw new Error("Campaign not found.");
 
-  const map = { START: "RUNNING", RESUME: "RUNNING", PAUSE: "PAUSED", STOP: "CANCELLED" } as const;
+  const map = {
+    START: "RUNNING",
+    RESUME: "RUNNING",
+    RESTART: "RUNNING",
+    PAUSE: "PAUSED",
+    STOP: "CANCELLED",
+  } as const;
   const status = map[action];
   await client
     .from("campaigns")

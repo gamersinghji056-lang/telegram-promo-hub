@@ -413,6 +413,41 @@ export async function searchPublicGroupsViaUserSession(
   });
 }
 
+export async function importGroupsFromFolderViaUserSession(
+  tenantId: string,
+  connectionId: string,
+  folderLink: string,
+) {
+  return withAuthorizedUserClient(tenantId, connectionId, async (client) => {
+    const slug = folderLink.trim().match(/(?:t\.me\/addlist\/|addlist\/)([A-Za-z0-9_-]+)/)?.[1];
+    if (!slug) throw new Error("Enter a valid Telegram folder link, for example https://t.me/addlist/...");
+    const invite = await client.invoke(new Api.chatlists.CheckChatlistInvite({ slug }));
+    const chats = "chats" in invite && Array.isArray(invite.chats) ? invite.chats : [];
+    const results: {
+      title: string;
+      username: string;
+      telegramGroupId: number;
+      memberCount: number | null;
+    }[] = [];
+    for (const chat of chats) {
+      if (!(chat instanceof Api.Channel) && !(chat instanceof Api.Chat)) continue;
+      const username = "username" in chat && chat.username ? String(chat.username) : "";
+      if (!username) continue;
+      const title = "title" in chat ? String(chat.title) : username;
+      results.push({
+        title,
+        username,
+        telegramGroupId: Number(chat.id),
+        memberCount:
+          "participantsCount" in chat && chat.participantsCount
+            ? Number(chat.participantsCount)
+            : null,
+      });
+    }
+    return results;
+  });
+}
+
 export async function joinGroupViaUserSession(
   tenantId: string,
   connectionId: string,
@@ -451,8 +486,8 @@ export async function sendViaUserSession(
       .filter(Boolean)
       .join("\n\n");
     await client.sendMessage(target, {
-      message: text || undefined,
-      file: message.media_url || undefined,
+      ...(text ? { message: text } : {}),
+      ...(message.media_url ? { file: message.media_url } : {}),
       linkPreview: true,
     });
     await db()

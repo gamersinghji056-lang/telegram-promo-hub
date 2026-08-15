@@ -10,12 +10,18 @@ import {
   Circle,
   Clock,
   CreditCard,
+  Eye,
+  FolderOpen,
   LogOut,
+  Pause,
+  Play,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   Send,
   Settings,
+  Trash2,
   Users,
   X,
 } from "lucide-react";
@@ -23,29 +29,39 @@ import { MiniAppShell } from "@/components/mini-app-shell";
 import { Button } from "@/components/ui/button";
 import {
   addConnection,
+  addApprovedGroupByUsername,
   addGroupByUsername,
   addKeyword,
   approveGroup,
   checkConnection,
   controlCampaign,
   createCampaign,
+  deleteCampaign,
+  deleteGroupCategory,
   disconnectConnection,
   findAudience,
   getAnalytics,
   getBilling,
+  getCampaignDetail,
   getCampaigns,
   getConnections,
   getDashboard,
+  getGroupCategories,
+  getGroupCategoryDetail,
   getGroups,
   getKeywords,
   getNotifications,
   getOwnActivity,
   rejectGroup,
   removeKeyword,
+  removeGroup,
   runGroupDiscovery,
+  importApprovedGroups,
   joinGroup,
   logout as logoutCustomer,
+  saveGroupCategory,
   startConnectionLogin,
+  updateCampaign,
   verifyConnectionCode,
   verifyConnectionPassword,
 } from "@/lib/customer.functions";
@@ -57,9 +73,11 @@ const valid = new Set([
   "groups-found",
   "groups-approved",
   "groups-joined",
+  "group-categories",
   "dm-audience",
   "dm-create",
   "dm-history",
+  "campaigns",
   "group-create",
   "group-history",
   "analytics",
@@ -74,10 +92,12 @@ const titles: Record<string, string> = {
   "groups-found": "Found Groups",
   "groups-approved": "Approved Groups",
   "groups-joined": "Joined Groups",
+  "group-categories": "Group Categories",
   "dm-audience": "DM Audience",
-  "dm-create": "DM Campaign",
+  "dm-create": "DM Promotion",
   "dm-history": "DM History",
-  "group-create": "Group Campaign",
+  campaigns: "Campaigns",
+  "group-create": "Group Promotion",
   "group-history": "Group History",
   analytics: "Analytics",
   billing: "Billing",
@@ -121,6 +141,15 @@ function telegramAuth(): string | null {
   return null;
 }
 
+async function telegramAuthReady() {
+  for (let i = 0; i < 8; i += 1) {
+    const auth = telegramAuth();
+    if (auth) return auth;
+    await new Promise((resolve) => setTimeout(resolve, 125));
+  }
+  return null;
+}
+
 function inputClass(extra = "") {
   return `w-full border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary ${extra}`;
 }
@@ -144,6 +173,7 @@ function MiniAppSection() {
   const groupsFn = useServerFn(getGroups);
   const keywordsFn = useServerFn(getKeywords);
   const campaignsFn = useServerFn(getCampaigns);
+  const groupCategoriesFn = useServerFn(getGroupCategories);
   const analyticsFn = useServerFn(getAnalytics);
   const billingFn = useServerFn(getBilling);
   const logsFn = useServerFn(getOwnActivity);
@@ -161,11 +191,20 @@ function MiniAppSection() {
     removeKeyword: useServerFn(removeKeyword),
     runGroupDiscovery: useServerFn(runGroupDiscovery),
     addGroupByUsername: useServerFn(addGroupByUsername),
+    addApprovedGroupByUsername: useServerFn(addApprovedGroupByUsername),
+    importApprovedGroups: useServerFn(importApprovedGroups),
     approveGroup: useServerFn(approveGroup),
     joinGroup: useServerFn(joinGroup),
     rejectGroup: useServerFn(rejectGroup),
+    removeGroup: useServerFn(removeGroup),
+    getGroupCategoryDetail: useServerFn(getGroupCategoryDetail),
+    saveGroupCategory: useServerFn(saveGroupCategory),
+    deleteGroupCategory: useServerFn(deleteGroupCategory),
+    getCampaignDetail: useServerFn(getCampaignDetail),
     findAudience: useServerFn(findAudience),
     createCampaign: useServerFn(createCampaign),
+    updateCampaign: useServerFn(updateCampaign),
+    deleteCampaign: useServerFn(deleteCampaign),
     controlCampaign: useServerFn(controlCampaign),
   };
 
@@ -174,6 +213,7 @@ function MiniAppSection() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const [actionBusy, setActionBusy] = useState("");
 
   const loaders = useMemo<Record<string, (auth: string) => Promise<any>>>(
     () => ({
@@ -182,7 +222,7 @@ function MiniAppSection() {
       "groups-find": async (a) => ({
         connections: await connectionsFn({ data: { auth: a } }),
         keywords: await keywordsFn({ data: { auth: a } }),
-        groups: await groupsFn({ data: { auth: a, status: "FOUND" } }),
+        groups: await groupsFn({ data: { auth: a, status: "ALL" } }),
       }),
       "groups-found": async (a) => ({
         connections: await connectionsFn({ data: { auth: a } }),
@@ -190,25 +230,36 @@ function MiniAppSection() {
       }),
       "groups-approved": async (a) => ({
         connections: await connectionsFn({ data: { auth: a } }),
-        groups: await groupsFn({ data: { auth: a, status: "APPROVED" } }),
+        groups: await groupsFn({ data: { auth: a, status: "APPROVED_ACTIVE" } }),
       }),
       "groups-joined": async (a) => ({
         connections: await connectionsFn({ data: { auth: a } }),
         groups: await groupsFn({ data: { auth: a, status: "JOINED" } }),
       }),
       "dm-audience": async (a) => ({
-        groups: await groupsFn({ data: { auth: a, status: "APPROVED" } }),
+        groups: await groupsFn({ data: { auth: a, status: "APPROVED_ACTIVE" } }),
       }),
       "dm-create": async (a) => ({
         connections: await connectionsFn({ data: { auth: a } }),
-        groups: await groupsFn({ data: { auth: a, status: "APPROVED" } }),
+        groups: await groupsFn({ data: { auth: a, status: "APPROVED_ACTIVE" } }),
+        campaigns: await campaignsFn({ data: { auth: a, filter: "DM" } }),
       }),
       "dm-history": (a) => campaignsFn({ data: { auth: a, filter: "DM" } }),
+      campaigns: async (a) => ({
+        campaigns: await campaignsFn({ data: { auth: a, filter: "ALL" } }),
+        connections: await connectionsFn({ data: { auth: a } }),
+      }),
       "group-create": async (a) => ({
         connections: await connectionsFn({ data: { auth: a } }),
-        groups: await groupsFn({ data: { auth: a, status: "APPROVED" } }),
+        groups: await groupsFn({ data: { auth: a, status: "APPROVED_ACTIVE" } }),
+        categories: await groupCategoriesFn({ data: { auth: a } }),
+        campaigns: await campaignsFn({ data: { auth: a, filter: "GROUP" } }),
       }),
       "group-history": (a) => campaignsFn({ data: { auth: a, filter: "GROUP" } }),
+      "group-categories": async (a) => ({
+        groups: await groupsFn({ data: { auth: a, status: "APPROVED_ACTIVE" } }),
+        categories: await groupCategoriesFn({ data: { auth: a } }),
+      }),
       analytics: (a) => analyticsFn({ data: { auth: a } }),
       billing: (a) => billingFn({ data: { auth: a } }),
       settings: async (a) => ({
@@ -222,7 +273,7 @@ function MiniAppSection() {
     setBusy(true);
     setError("");
     setNotice("");
-    const nextAuth = telegramAuth();
+    const nextAuth = await telegramAuthReady();
     setAuth(nextAuth);
     if (!valid.has(section)) {
       setError("This section does not exist.");
@@ -267,6 +318,18 @@ function MiniAppSection() {
     setError("You have signed out. Return to the bot to open a secure session.");
   }
 
+  async function runAction(label: string, fn: () => Promise<void>) {
+    setActionBusy(label);
+    setError("");
+    try {
+      await fn();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Action failed.");
+    } finally {
+      setActionBusy("");
+    }
+  }
+
   useEffect(() => {
     void load();
   }, [section]);
@@ -287,8 +350,8 @@ function MiniAppSection() {
           <h1 className="mt-1 text-2xl font-semibold">{titles[section] ?? section}</h1>
         </div>
         <div className="flex gap-2">
-          <Button size="icon" variant="secondary" aria-label="Refresh" onClick={load}>
-            <RefreshCw />
+          <Button size="icon" variant="secondary" aria-label="Refresh" onClick={load} disabled={busy}>
+            <RefreshCw className={busy ? "animate-spin" : ""} />
           </Button>
           <Button size="icon" variant="secondary" aria-label="Sign out" onClick={signOut}>
             <LogOut />
@@ -296,7 +359,9 @@ function MiniAppSection() {
         </div>
       </div>
       {notice ? (
-        <div className="mb-4 border border-primary bg-card p-3 text-sm text-primary">{notice}</div>
+        <div className="fixed left-1/2 top-1/2 z-50 w-[min(88vw,360px)] -translate-x-1/2 -translate-y-1/2 border border-primary bg-card p-4 text-center text-sm font-semibold text-primary shadow-lg">
+          {notice}
+        </div>
       ) : null}
       {error ? (
         <SessionWarning error={error} />
@@ -310,6 +375,8 @@ function MiniAppSection() {
           actions={actions}
           reload={load}
           setNotice={setNotice}
+          actionBusy={actionBusy}
+          runAction={runAction}
         />
       )}
     </MiniAppShell>
@@ -338,6 +405,8 @@ function CustomerContent(props: {
   actions: Record<string, any>;
   reload: () => Promise<void>;
   setNotice: (value: string) => void;
+  actionBusy: string;
+  runAction: (label: string, fn: () => Promise<void>) => Promise<void>;
 }) {
   const { section } = props;
   if (section === "dashboard") return <Dashboard data={props.data} />;
@@ -345,8 +414,10 @@ function CustomerContent(props: {
   if (section === "groups-find") return <GroupFinder {...props} />;
   if (["groups-found", "groups-approved", "groups-joined"].includes(section))
     return <GroupList {...props} />;
+  if (section === "group-categories") return <GroupCategories {...props} />;
   if (section === "dm-audience") return <DMAudience {...props} />;
   if (section === "dm-create") return <DMCampaign {...props} />;
+  if (section === "campaigns") return <CampaignsPage {...props} />;
   if (section === "dm-history" || section === "group-history")
     return <CampaignHistory {...props} />;
   if (section === "group-create") return <GroupCampaign {...props} />;
@@ -443,7 +514,7 @@ function QuickLink({ href, label }: { href: string; label: string }) {
   );
 }
 
-function Sessions({ auth, data, actions, reload, setNotice }: any) {
+function Sessions({ auth, data, actions, reload, setNotice, actionBusy, runAction }: any) {
   const [label, setLabel] = useState("");
   const [phone, setPhone] = useState("");
   const [connectionId, setConnectionId] = useState("");
@@ -452,43 +523,51 @@ function Sessions({ auth, data, actions, reload, setNotice }: any) {
   const [step, setStep] = useState<"PHONE" | "CODE" | "PASSWORD">("PHONE");
   async function submit(e: FormEvent) {
     e.preventDefault();
-    const result = await actions.startConnectionLogin({ data: { auth, label, phone } });
-    setConnectionId(result.connection.id);
-    setStep("CODE");
-    setNotice(result.isCodeViaApp ? "Code sent to your Telegram app." : "Code sent by Telegram.");
-    await reload();
+    await runAction("send-code", async () => {
+      const result = await actions.startConnectionLogin({ data: { auth, label, phone } });
+      setConnectionId(result.connection.id);
+      setStep("CODE");
+      setNotice(result.isCodeViaApp ? "Code sent to your Telegram app." : "Code sent by Telegram.");
+      await reload();
+    });
   }
   async function verifyCode(e: FormEvent) {
     e.preventDefault();
-    const result = await actions.verifyConnectionCode({ data: { auth, connectionId, code } });
-    if (result.step === "PASSWORD") {
-      setStep("PASSWORD");
-      setNotice("Telegram requires your 2FA password.");
-      return;
-    }
-    setStep("PHONE");
-    setPhone("");
-    setCode("");
-    setPassword("");
-    setConnectionId("");
-    setNotice("Telegram session connected.");
-    await reload();
+    await runAction("verify-code", async () => {
+      const result = await actions.verifyConnectionCode({ data: { auth, connectionId, code } });
+      if (result.step === "PASSWORD") {
+        setStep("PASSWORD");
+        setNotice("Telegram requires your 2FA password.");
+        return;
+      }
+      setStep("PHONE");
+      setPhone("");
+      setCode("");
+      setPassword("");
+      setConnectionId("");
+      setNotice("Telegram session connected.");
+      await reload();
+    });
   }
   async function verifyPassword(e: FormEvent) {
     e.preventDefault();
-    await actions.verifyConnectionPassword({ data: { auth, connectionId, password } });
-    setStep("PHONE");
-    setPhone("");
-    setCode("");
-    setPassword("");
-    setConnectionId("");
-    setNotice("Telegram session connected.");
-    await reload();
+    await runAction("verify-password", async () => {
+      await actions.verifyConnectionPassword({ data: { auth, connectionId, password } });
+      setStep("PHONE");
+      setPhone("");
+      setCode("");
+      setPassword("");
+      setConnectionId("");
+      setNotice("Telegram session connected.");
+      await reload();
+    });
   }
   async function check(id: string) {
-    const result = await actions.checkConnection({ data: { auth, id } });
-    setNotice(result.ok ? "Session is connected." : result.error);
-    await reload();
+    await runAction(`check-${id}`, async () => {
+      const result = await actions.checkConnection({ data: { auth, id } });
+      setNotice(result.ok ? "Session is connected." : result.error);
+      await reload();
+    });
   }
   return (
     <div className="space-y-4">
@@ -512,8 +591,8 @@ function Sessions({ auth, data, actions, reload, setNotice }: any) {
             placeholder="+15551234567"
             inputMode="tel"
           />
-          <Button type="submit" className="w-full" disabled={!phone}>
-            <Plus className="mr-2 size-4" /> SEND CODE
+          <Button type="submit" className="w-full" disabled={!phone || actionBusy === "send-code"}>
+            <Plus className="mr-2 size-4" /> {actionBusy === "send-code" ? "Sending..." : "SEND CODE"}
           </Button>
         </form>
       ) : null}
@@ -527,8 +606,8 @@ function Sessions({ auth, data, actions, reload, setNotice }: any) {
             placeholder="Login code"
             inputMode="numeric"
           />
-          <Button type="submit" className="w-full" disabled={!code}>
-            VERIFY CODE
+          <Button type="submit" className="w-full" disabled={!code || actionBusy === "verify-code"}>
+            {actionBusy === "verify-code" ? "Verifying..." : "VERIFY CODE"}
           </Button>
         </form>
       ) : null}
@@ -542,8 +621,8 @@ function Sessions({ auth, data, actions, reload, setNotice }: any) {
             placeholder="2FA password"
             type="password"
           />
-          <Button type="submit" className="w-full" disabled={!password}>
-            CONNECT SESSION
+          <Button type="submit" className="w-full" disabled={!password || actionBusy === "verify-password"}>
+            {actionBusy === "verify-password" ? "Connecting..." : "CONNECT SESSION"}
           </Button>
         </form>
       ) : null}
@@ -578,21 +657,25 @@ function Sessions({ auth, data, actions, reload, setNotice }: any) {
               <p>{row.restriction_reason ?? row.error_message ?? "No errors"}</p>
             </div>
             <div className="mt-4 flex flex-wrap gap-2">
-              <Button size="sm" variant="secondary" onClick={() => check(row.id)}>
-                CHECK STATUS
+              <Button size="sm" variant="secondary" disabled={actionBusy === `check-${row.id}`} onClick={() => check(row.id)}>
+                {actionBusy === `check-${row.id}` ? "Checking..." : "CHECK STATUS"}
               </Button>
-              <Button size="sm" variant="secondary" onClick={() => check(row.id)}>
+              <Button size="sm" variant="secondary" disabled={actionBusy === `check-${row.id}`} onClick={() => check(row.id)}>
                 RECONNECT
               </Button>
               <Button
                 size="sm"
                 variant="secondary"
-                onClick={async () => {
-                  await actions.disconnectConnection({ data: { auth, id: row.id } });
-                  await reload();
-                }}
+                disabled={actionBusy === `disconnect-${row.id}`}
+                onClick={() =>
+                  runAction(`disconnect-${row.id}`, async () => {
+                    await actions.disconnectConnection({ data: { auth, id: row.id } });
+                    setNotice("Session disconnected.");
+                    await reload();
+                  })
+                }
               >
-                DISCONNECT
+                {actionBusy === `disconnect-${row.id}` ? "Disconnecting..." : "DISCONNECT"}
               </Button>
             </div>
           </article>
@@ -620,34 +703,37 @@ function SessionSelect({ value, onChange, connections, label }: any) {
   );
 }
 
-function GroupFinder({ auth, data, actions, reload, setNotice }: any) {
+function GroupFinder({ auth, data, actions, reload, setNotice, actionBusy, runAction }: any) {
   const [keyword, setKeyword] = useState("");
   const [username, setUsername] = useState("");
   const [connectionId, setConnectionId] = useState("");
   const keywords = (data?.keywords ?? []).map((k: any) => k.keyword);
   async function addKey(e: FormEvent) {
     e.preventDefault();
-    await actions.addKeyword({ data: { auth, keyword } });
-    setKeyword("");
-    await reload();
+    await runAction("add-keyword", async () => {
+      await actions.addKeyword({ data: { auth, keyword } });
+      setKeyword("");
+      setNotice("Keyword saved.");
+      await reload();
+    });
   }
   async function searchGroups() {
-    const result = await actions.runGroupDiscovery({ data: { auth, connectionId, keywords } });
-    setNotice(
-      result.configured
-        ? `${result.added} group(s) found.`
-        : "Discovery provider is not configured. Add public groups by @username.",
-    );
-    await reload();
+    await runAction("search-groups", async () => {
+      const result = await actions.runGroupDiscovery({ data: { auth, connectionId, keywords } });
+      setNotice(`${result.added} group(s) found or updated.`);
+      await reload();
+    });
   }
   async function addManual(e: FormEvent) {
     e.preventDefault();
-    const row = await actions.addGroupByUsername({
-      data: { auth, connectionId, username, keywords },
+    await runAction("lookup-group", async () => {
+      const row = await actions.addGroupByUsername({
+        data: { auth, connectionId, username, keywords },
+      });
+      setUsername("");
+      setNotice(`Found ${row.title}. Review it before approval.`);
+      await reload();
     });
-    setUsername("");
-    setNotice(`Found ${row.title}. Review it before approval.`);
-    await reload();
   }
   return (
     <div className="space-y-4">
@@ -669,10 +755,13 @@ function GroupFinder({ auth, data, actions, reload, setNotice }: any) {
             <button
               key={k.id}
               type="button"
-              onClick={async () => {
-                await actions.removeKeyword({ data: { auth, id: k.id } });
-                await reload();
-              }}
+              disabled={!!actionBusy}
+              onClick={() =>
+                runAction(`remove-keyword-${k.id}`, async () => {
+                  await actions.removeKeyword({ data: { auth, id: k.id } });
+                  await reload();
+                })
+              }
               className="inline-flex items-center gap-1 border border-border px-2 py-1 text-xs"
             >
               {k.keyword} <X className="size-3" />
@@ -690,9 +779,9 @@ function GroupFinder({ auth, data, actions, reload, setNotice }: any) {
         <Button
           className="w-full"
           onClick={searchGroups}
-          disabled={!connectionId || keywords.length === 0}
+          disabled={!connectionId || keywords.length === 0 || actionBusy === "search-groups"}
         >
-          <Search className="mr-2 size-4" /> SEARCH GROUPS
+          <Search className="mr-2 size-4" /> {actionBusy === "search-groups" ? "Searching..." : "SEARCH GROUPS"}
         </Button>
       </section>
       <form onSubmit={addManual} className={panelClass("space-y-3")}>
@@ -703,8 +792,8 @@ function GroupFinder({ auth, data, actions, reload, setNotice }: any) {
           onChange={(e) => setUsername(e.target.value)}
           placeholder="@public_group"
         />
-        <Button type="submit" className="w-full" disabled={!connectionId}>
-          VIEW PUBLIC GROUP
+        <Button type="submit" className="w-full" disabled={!connectionId || !username || actionBusy === "lookup-group"}>
+          {actionBusy === "lookup-group" ? "Resolving..." : "VIEW PUBLIC GROUP"}
         </Button>
       </form>
       <GroupRows
@@ -713,25 +802,125 @@ function GroupFinder({ auth, data, actions, reload, setNotice }: any) {
         auth={auth}
         actions={actions}
         reload={reload}
+        setNotice={setNotice}
+        actionBusy={actionBusy}
+        runAction={runAction}
       />
     </div>
   );
 }
 
-function GroupList({ auth, data, actions, reload }: any) {
+function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runAction, section }: any) {
+  const [modal, setModal] = useState<"" | "ADD" | "IMPORT">("");
+  const [username, setUsername] = useState("");
+  const [folderLink, setFolderLink] = useState("");
+  const [connectionId, setConnectionId] = useState("");
   return (
-    <GroupRows
-      groups={data?.groups ?? []}
-      connections={data?.connections ?? []}
-      auth={auth}
-      actions={actions}
-      reload={reload}
-    />
+    <div className="space-y-4">
+      {section === "groups-approved" ? (
+        <section className={panelClass("flex flex-wrap gap-2")}>
+          <Button onClick={() => setModal("ADD")}>
+            <Plus className="mr-2 size-4" /> ADD GROUP
+          </Button>
+          <Button variant="secondary" onClick={() => setModal("IMPORT")}>
+            <FolderOpen className="mr-2 size-4" /> IMPORT GROUPS
+          </Button>
+        </section>
+      ) : null}
+      <GroupRows
+        groups={data?.groups ?? []}
+        connections={data?.connections ?? []}
+        auth={auth}
+        actions={actions}
+        reload={reload}
+        setNotice={setNotice}
+        actionBusy={actionBusy}
+        runAction={runAction}
+      />
+      {modal ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4">
+          <form
+            className={panelClass("w-full max-w-sm space-y-3 shadow-lg")}
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (modal === "ADD") {
+                void runAction("add-approved-group", async () => {
+                  await actions.addApprovedGroupByUsername({
+                    data: { auth, connectionId, username },
+                  });
+                  setNotice("Group approved successfully.");
+                  setUsername("");
+                  setModal("");
+                  await reload();
+                });
+              } else {
+                void runAction("import-groups", async () => {
+                  const result = await actions.importApprovedGroups({
+                    data: { auth, connectionId, folderLink },
+                  });
+                  setNotice(
+                    `Imported: ${result.imported}. Duplicates: ${result.duplicates}. Inaccessible: ${result.inaccessible}. Failed: ${result.failed}.`,
+                  );
+                  setFolderLink("");
+                  setModal("");
+                  await reload();
+                });
+              }
+            }}
+          >
+            <div className="flex items-center justify-between">
+              <p className="font-semibold">{modal === "ADD" ? "Add Group" : "Import Groups"}</p>
+              <button type="button" onClick={() => setModal("")} aria-label="Close">
+                <X className="size-4" />
+              </button>
+            </div>
+            <SessionSelect
+              label="Select Healthy Session"
+              value={connectionId}
+              onChange={setConnectionId}
+              connections={data?.connections}
+            />
+            {modal === "ADD" ? (
+              <input
+                className={inputClass()}
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="@groupname or https://t.me/groupname"
+              />
+            ) : (
+              <input
+                className={inputClass()}
+                value={folderLink}
+                onChange={(e) => setFolderLink(e.target.value)}
+                placeholder="https://t.me/addlist/..."
+              />
+            )}
+            <Button
+              className="w-full"
+              type="submit"
+              disabled={
+                !connectionId ||
+                (modal === "ADD" ? !username : !folderLink) ||
+                actionBusy === "add-approved-group" ||
+                actionBusy === "import-groups"
+              }
+            >
+              {actionBusy === "add-approved-group" || actionBusy === "import-groups"
+                ? "Saving..."
+                : modal === "ADD"
+                  ? "ADD GROUP"
+                  : "IMPORT"}
+            </Button>
+          </form>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
-function GroupRows({ groups, connections, auth, actions, reload }: any) {
+function GroupRows({ groups, connections, auth, actions, reload, setNotice, actionBusy, runAction }: any) {
   const [connectionId, setConnectionId] = useState("");
+  const [confirmRemove, setConfirmRemove] = useState<any>(null);
   return (
     <div className="space-y-3">
       <SessionSelect
@@ -743,7 +932,9 @@ function GroupRows({ groups, connections, auth, actions, reload }: any) {
       {groups.map((g: any) => (
         <article key={g.id} className={panelClass()}>
           <div className="flex items-start justify-between gap-3">
-            <div>
+            <div className="flex gap-3">
+              <input type="checkbox" readOnly checked={["APPROVED", "JOINED"].includes(g.status)} />
+              <div>
               <p className="font-medium">{g.title}</p>
               <p className="mt-1 text-xs text-muted-foreground">
                 {g.username ? `@${g.username}` : "No username"} | {g.member_count ?? "unknown"}{" "}
@@ -754,6 +945,7 @@ function GroupRows({ groups, connections, auth, actions, reload }: any) {
                 {new Date(g.discovered_at).toLocaleDateString()}
               </p>
               {g.join_error ? <p className="mt-2 text-xs text-warning">{g.join_error}</p> : null}
+              </div>
             </div>
             <span className={`text-xs font-semibold ${statusTone(g.status)}`}>{g.status}</span>
           </div>
@@ -769,39 +961,248 @@ function GroupRows({ groups, connections, auth, actions, reload }: any) {
             <Button
               size="sm"
               variant="secondary"
-              disabled={!connectionId}
-              onClick={async () => {
-                await actions.approveGroup({ data: { auth, id: g.id, connectionId } });
-                await reload();
-              }}
+              disabled={!connectionId || actionBusy === `approve-${g.id}`}
+              onClick={() =>
+                runAction(`approve-${g.id}`, async () => {
+                  await actions.approveGroup({ data: { auth, id: g.id, connectionId } });
+                  setNotice("Group approved successfully.");
+                  await reload();
+                })
+              }
             >
-              APPROVE
+              {actionBusy === `approve-${g.id}` ? "Approving..." : "APPROVE"}
             </Button>
             <Button
               size="sm"
               variant="secondary"
-              disabled={!connectionId}
-              onClick={async () => {
-                await actions.joinGroup({ data: { auth, id: g.id, connectionId } });
-                await reload();
-              }}
+              disabled={!connectionId || actionBusy === `join-${g.id}`}
+              onClick={() =>
+                runAction(`join-${g.id}`, async () => {
+                  const result = await actions.joinGroup({ data: { auth, id: g.id, connectionId } });
+                  setNotice(result.status === "JOINED" ? "Group joined." : `Join result: ${result.status}.`);
+                  await reload();
+                })
+              }
             >
-              JOIN
+              {actionBusy === `join-${g.id}` ? "Joining..." : "JOIN"}
             </Button>
             <Button
               size="sm"
               variant="secondary"
-              onClick={async () => {
-                await actions.rejectGroup({ data: { auth, id: g.id } });
-                await reload();
-              }}
+              disabled={actionBusy === `reject-${g.id}`}
+              onClick={() =>
+                runAction(`reject-${g.id}`, async () => {
+                  await actions.rejectGroup({ data: { auth, id: g.id } });
+                  setNotice("Group rejected.");
+                  await reload();
+                })
+              }
             >
-              REJECT
+              {actionBusy === `reject-${g.id}` ? "Rejecting..." : "REJECT"}
             </Button>
+            {["APPROVED", "JOINED"].includes(g.status) ? (
+              <Button size="sm" variant="secondary" onClick={() => setConfirmRemove(g)}>
+                REMOVE
+              </Button>
+            ) : null}
           </div>
         </article>
       ))}
       {!groups.length ? <Empty message="No groups in this view." /> : null}
+      {confirmRemove ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4">
+          <div className={panelClass("w-full max-w-sm space-y-3 shadow-lg")}>
+            <p className="font-semibold">Remove approval?</p>
+            <p className="text-sm text-muted-foreground">
+              Historical campaign and send records will be preserved.
+            </p>
+            <div className="flex gap-2">
+              <Button variant="secondary" className="flex-1" onClick={() => setConfirmRemove(null)}>
+                CANCEL
+              </Button>
+              <Button
+                className="flex-1"
+                disabled={actionBusy === `remove-${confirmRemove.id}`}
+                onClick={() =>
+                  runAction(`remove-${confirmRemove.id}`, async () => {
+                    await actions.removeGroup({ data: { auth, id: confirmRemove.id } });
+                    setConfirmRemove(null);
+                    setNotice("Group approval removed.");
+                    await reload();
+                  })
+                }
+              >
+                {actionBusy === `remove-${confirmRemove.id}` ? "Removing..." : "REMOVE"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, runAction }: any) {
+  const groups = data?.groups ?? [];
+  const categories = data?.categories ?? [];
+  const [editing, setEditing] = useState<any>(null);
+  const [name, setName] = useState("");
+  const [selected, setSelected] = useState<string[]>([]);
+  const [detail, setDetail] = useState<any>(null);
+
+  function openEditor(category?: any) {
+    setDetail(null);
+    setEditing(category ?? { id: null });
+    setName(category?.name ?? "");
+    setSelected(category?.groups?.map((g: any) => g.id) ?? []);
+    if (category?.id) {
+      void runAction(`open-category-${category.id}`, async () => {
+        const response = await actions.getGroupCategoryDetail({ data: { auth, id: category.id } });
+        setSelected((response.groups ?? []).map((g: any) => g.id));
+        setDetail(response);
+      });
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <section className={panelClass()}>
+        <Button onClick={() => openEditor()}>
+          <Plus className="mr-2 size-4" /> CREATE CATEGORY
+        </Button>
+      </section>
+      <div className="space-y-3">
+        {categories.map((category: any) => (
+          <article key={category.id} className={panelClass()}>
+            <p className="font-semibold">{category.name}</p>
+            <p className="mt-1 text-sm text-muted-foreground">{category.group_count ?? 0} Groups</p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() =>
+                  runAction(`open-${category.id}`, async () => {
+                    const response = await actions.getGroupCategoryDetail({
+                      data: { auth, id: category.id },
+                    });
+                    setDetail(response);
+                  })
+                }
+              >
+                <Eye className="mr-1 size-3" /> OPEN
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => openEditor(category)}>
+                EDIT
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={actionBusy === `delete-category-${category.id}`}
+                onClick={() => {
+                  if (!confirm("Delete this category? Groups will not be deleted.")) return;
+                  void runAction(`delete-category-${category.id}`, async () => {
+                    await actions.deleteGroupCategory({ data: { auth, id: category.id } });
+                    setNotice("Category deleted.");
+                    await reload();
+                  });
+                }}
+              >
+                DELETE
+              </Button>
+            </div>
+          </article>
+        ))}
+        {!categories.length ? <Empty message="No group categories yet." /> : null}
+      </div>
+      {detail ? (
+        <section className={panelClass("space-y-3")}>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-semibold">{detail.category.name}</p>
+              <p className="text-sm text-muted-foreground">Total Groups: {detail.groups.length}</p>
+            </div>
+            <button type="button" onClick={() => setDetail(null)} aria-label="Close">
+              <X className="size-4" />
+            </button>
+          </div>
+          <div className="space-y-2">
+            {detail.groups.map((g: any) => (
+              <p key={g.id} className="border border-border bg-background p-2 text-sm">
+                {g.title} {g.username ? `@${g.username}` : ""}
+              </p>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={() => openEditor(detail.category)}>
+              EDIT GROUPS
+            </Button>
+            <Button variant="secondary" onClick={() => openEditor(detail.category)}>
+              RENAME
+            </Button>
+          </div>
+        </section>
+      ) : null}
+      {editing ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4">
+          <form
+            className={panelClass("max-h-[88vh] w-full max-w-lg space-y-3 overflow-auto shadow-lg")}
+            onSubmit={(e) => {
+              e.preventDefault();
+              void runAction("save-category", async () => {
+                await actions.saveGroupCategory({
+                  data: { auth, id: editing.id, name, group_ids: selected },
+                });
+                setNotice(editing.id ? "Category updated successfully." : "Category created successfully.");
+                setEditing(null);
+                await reload();
+              });
+            }}
+          >
+            <div className="flex items-center justify-between">
+              <p className="font-semibold">{editing.id ? "Edit Category" : "Create Category"}</p>
+              <button type="button" onClick={() => setEditing(null)} aria-label="Close">
+                <X className="size-4" />
+              </button>
+            </div>
+            <label className="block space-y-2">
+              <span className="text-xs font-semibold uppercase text-muted-foreground">Category Name</span>
+              <input className={inputClass()} value={name} onChange={(e) => setName(e.target.value)} />
+            </label>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-semibold">Selected Groups: {selected.length}</p>
+              <div className="flex gap-2">
+                <Button type="button" size="sm" variant="secondary" onClick={() => setSelected(groups.map((g: any) => g.id))}>
+                  SELECT ALL
+                </Button>
+                <Button type="button" size="sm" variant="secondary" onClick={() => setSelected([])}>
+                  CLEAR ALL
+                </Button>
+              </div>
+            </div>
+            <div className="max-h-72 space-y-2 overflow-auto">
+              {groups.map((g: any) => (
+                <label key={g.id} className="flex items-center gap-3 border border-border bg-background p-3 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(g.id)}
+                    onChange={() =>
+                      setSelected(
+                        selected.includes(g.id)
+                          ? selected.filter((id) => id !== g.id)
+                          : [...selected, g.id],
+                      )
+                    }
+                  />
+                  <span>{g.title}</span>
+                </label>
+              ))}
+            </div>
+            <Button className="w-full" type="submit" disabled={!name || !selected.length || actionBusy === "save-category"}>
+              {actionBusy === "save-category" ? "Saving..." : editing.id ? "SAVE" : "CREATE CATEGORY"}
+            </Button>
+          </form>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -846,7 +1247,39 @@ function DMAudience({ auth, data, actions, setNotice }: any) {
   );
 }
 
-function DMCampaign({ auth, data, actions, setNotice }: any) {
+function CampaignsPage({ auth, data, actions, reload, setNotice, actionBusy, runAction }: any) {
+  const [filter, setFilter] = useState("ALL");
+  const rows = data?.campaigns ?? [];
+  const filtered = rows.filter((c: any) => {
+    if (filter === "ALL") return true;
+    if (filter === "ACTIVE") return ["RUNNING", "SCHEDULED"].includes(c.status);
+    if (filter === "GROUP" || filter === "DM") return c.type === filter;
+    return c.status === filter;
+  });
+  return (
+    <div className="space-y-4">
+      <section className={panelClass("flex flex-wrap gap-2")}>
+        {["ALL", "GROUP", "DM", "ACTIVE", "PAUSED", "COMPLETED"].map((f) => (
+          <Button key={f} size="sm" variant={filter === f ? "default" : "secondary"} onClick={() => setFilter(f)}>
+            {f}
+          </Button>
+        ))}
+      </section>
+      <CampaignCards
+        rows={filtered}
+        auth={auth}
+        actions={actions}
+        reload={reload}
+        setNotice={setNotice}
+        actionBusy={actionBusy}
+        runAction={runAction}
+      />
+    </div>
+  );
+}
+
+function DMCampaign({ auth, data, actions, reload, setNotice, actionBusy, runAction }: any) {
+  const [createMode, setCreateMode] = useState(false);
   const [sourceGroups, setSourceGroups] = useState<string[]>([]);
   const [audience, setAudience] = useState<any>(null);
   const [selected, setSelected] = useState<string[]>([]);
@@ -857,39 +1290,73 @@ function DMCampaign({ auth, data, actions, setNotice }: any) {
   const [buttonText, setButtonText] = useState("");
   const [buttonUrl, setButtonUrl] = useState("");
   const [name, setName] = useState("DM Promotion");
+  const [minDelay, setMinDelay] = useState(30);
+  const [maxDelay, setMaxDelay] = useState(60);
 
   async function loadAudience() {
-    const response = await actions.findAudience({
-      data: { auth, groupIds: sourceGroups, onlyNew: true },
+    await runAction("find-dm-audience", async () => {
+      const response = await actions.findAudience({
+        data: { auth, groupIds: sourceGroups, onlyNew: true },
+      });
+      setAudience(response);
+      setSelected([]);
+      setNotice(`Eligible users found: ${response.eligible}.`);
     });
-    setAudience(response);
-    setSelected([]);
   }
   async function submit(e: FormEvent) {
     e.preventDefault();
     const buttons = buttonText && buttonUrl ? [{ text: buttonText, url: buttonUrl }] : [];
-    await actions.createCampaign({
-      data: {
-        auth,
-        name,
-        type: "DM",
-        connection_id: connectionId,
-        message: {
-          text: message,
-          media_type: mediaType || null,
-          media_url: mediaUrl || null,
-          buttons,
+    await runAction("create-dm-campaign", async () => {
+      await actions.createCampaign({
+        data: {
+          auth,
+          name,
+          type: "DM",
+          connection_id: connectionId,
+          message: {
+            text: message,
+            media_type: mediaType || null,
+            media_url: mediaUrl || null,
+            buttons,
+          },
+          group_ids: [],
+          contact_ids: selected,
+          start_now: true,
+          exclude_previously_contacted: true,
+          min_delay_seconds: minDelay,
+          max_delay_seconds: maxDelay,
         },
-        group_ids: [],
-        contact_ids: selected,
-        start_now: true,
-        exclude_previously_contacted: true,
-      },
+      });
+      setNotice("DM campaign queued. Worker will process due jobs.");
+      await reload();
+      setCreateMode(false);
     });
-    setNotice("DM campaign queued. Worker will process due jobs.");
+  }
+  if (!createMode) {
+    const rows = data?.campaigns ?? [];
+    return (
+      <div className="space-y-4">
+        <CampaignSummary rows={rows} />
+        <Button className="w-full" onClick={() => setCreateMode(true)}>
+          <Plus className="mr-2 size-4" /> CREATE CAMPAIGN
+        </Button>
+        <CampaignCards
+          rows={rows}
+          auth={auth}
+          actions={actions}
+          reload={reload}
+          setNotice={setNotice}
+          actionBusy={actionBusy}
+          runAction={runAction}
+        />
+      </div>
+    );
   }
   return (
     <form onSubmit={submit} className="space-y-4">
+      <Button type="button" variant="secondary" onClick={() => setCreateMode(false)}>
+        BACK TO DM CAMPAIGNS
+      </Button>
       <GroupPicker
         groups={data?.groups ?? []}
         selected={sourceGroups}
@@ -900,9 +1367,9 @@ function DMCampaign({ auth, data, actions, setNotice }: any) {
         type="button"
         className="w-full"
         onClick={loadAudience}
-        disabled={sourceGroups.length === 0}
+        disabled={sourceGroups.length === 0 || actionBusy === "find-dm-audience"}
       >
-        FIND ELIGIBLE USERS
+        {actionBusy === "find-dm-audience" ? "Finding..." : "FIND ELIGIBLE USERS"}
       </Button>
       {audience ? (
         <AudienceSummary
@@ -932,6 +1399,16 @@ function DMCampaign({ auth, data, actions, setNotice }: any) {
         buttonUrl={buttonUrl}
         setButtonUrl={setButtonUrl}
       />
+      <section className={panelClass("grid grid-cols-2 gap-3")}>
+        <label className="space-y-2">
+          <span className="text-xs font-semibold uppercase text-muted-foreground">Min Delay Between Users</span>
+          <input className={inputClass()} type="number" min={1} value={minDelay} onChange={(e) => setMinDelay(Number(e.target.value))} />
+        </label>
+        <label className="space-y-2">
+          <span className="text-xs font-semibold uppercase text-muted-foreground">Max Delay Between Users</span>
+          <input className={inputClass()} type="number" min={1} value={maxDelay} onChange={(e) => setMaxDelay(Number(e.target.value))} />
+        </label>
+      </section>
       <Preview
         message={message}
         mediaUrl={mediaUrl}
@@ -941,16 +1418,17 @@ function DMCampaign({ auth, data, actions, setNotice }: any) {
       <Button
         className="w-full"
         type="submit"
-        disabled={!connectionId || !selected.length || (!message && !mediaUrl)}
+        disabled={!connectionId || !selected.length || (!message && !mediaUrl) || minDelay > maxDelay || actionBusy === "create-dm-campaign"}
       >
-        APPROVE AND QUEUE
+        {actionBusy === "create-dm-campaign" ? "Queuing..." : "APPROVE AND QUEUE"}
       </Button>
     </form>
   );
 }
 
-function GroupCampaign({ auth, data, actions, setNotice }: any) {
-  const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
+function GroupCampaign({ auth, data, actions, reload, setNotice, actionBusy, runAction }: any) {
+  const [createMode, setCreateMode] = useState(false);
+  const [categoryId, setCategoryId] = useState("");
   const [connectionId, setConnectionId] = useState("");
   const [message, setMessage] = useState("");
   const [mediaUrl, setMediaUrl] = useState("");
@@ -959,43 +1437,82 @@ function GroupCampaign({ auth, data, actions, setNotice }: any) {
   const [buttonUrl, setButtonUrl] = useState("");
   const [name, setName] = useState("Group Promotion");
   const [scheduledAt, setScheduledAt] = useState("");
+  const [minDelay, setMinDelay] = useState(30);
+  const [maxDelay, setMaxDelay] = useState(60);
+  const [cycleDelay, setCycleDelay] = useState(20);
   async function submit(e: FormEvent) {
     e.preventDefault();
     const buttons = buttonText && buttonUrl ? [{ text: buttonText, url: buttonUrl }] : [];
-    await actions.createCampaign({
-      data: {
-        auth,
-        name,
-        type: "GROUP",
-        connection_id: connectionId,
-        message: {
-          text: message,
-          media_type: mediaType || null,
-          media_url: mediaUrl || null,
-          buttons,
+    await runAction("create-group-campaign", async () => {
+      await actions.createCampaign({
+        data: {
+          auth,
+          name,
+          type: "GROUP",
+          connection_id: connectionId,
+          message: {
+            text: message,
+            media_type: mediaType || null,
+            media_url: mediaUrl || null,
+            buttons,
+          },
+          group_ids: [],
+          group_category_id: categoryId,
+          contact_ids: [],
+          scheduled_at: scheduledAt || null,
+          start_now: !scheduledAt,
+          min_delay_seconds: minDelay,
+          max_delay_seconds: maxDelay,
+          cycle_delay_minutes: cycleDelay,
         },
-        group_ids: selectedGroups,
-        contact_ids: [],
-        scheduled_at: scheduledAt || null,
-        start_now: !scheduledAt,
-      },
+      });
+      setNotice(scheduledAt ? "Group campaign scheduled." : "Group campaign queued.");
+      await reload();
+      setCreateMode(false);
     });
-    setNotice(scheduledAt ? "Group campaign scheduled." : "Group campaign queued.");
+  }
+  if (!createMode) {
+    const rows = data?.campaigns ?? [];
+    return (
+      <div className="space-y-4">
+        <CampaignSummary rows={rows} />
+        <Button className="w-full" onClick={() => setCreateMode(true)}>
+          <Plus className="mr-2 size-4" /> CREATE CAMPAIGN
+        </Button>
+        <CampaignCards
+          rows={rows}
+          auth={auth}
+          actions={actions}
+          reload={reload}
+          setNotice={setNotice}
+          actionBusy={actionBusy}
+          runAction={runAction}
+        />
+      </div>
+    );
   }
   return (
     <form onSubmit={submit} className="space-y-4">
-      <GroupPicker
-        groups={data?.groups ?? []}
-        selected={selectedGroups}
-        setSelected={setSelectedGroups}
-        allowAll
-      />
+      <Button type="button" variant="secondary" onClick={() => setCreateMode(false)}>
+        BACK TO GROUP PROMOTION CAMPAIGNS
+      </Button>
       <SessionSelect
         label="Select Sending Session"
         value={connectionId}
         onChange={setConnectionId}
         connections={data?.connections}
       />
+      <label className="block space-y-2">
+        <span className="text-xs font-semibold uppercase text-muted-foreground">Group Category</span>
+        <select className={inputClass()} value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
+          <option value="">Select category</option>
+          {(data?.categories ?? []).map((c: any) => (
+            <option key={c.id} value={c.id}>
+              {c.name} - {c.group_count ?? 0} groups
+            </option>
+          ))}
+        </select>
+      </label>
       <MessageForm
         name={name}
         setName={setName}
@@ -1019,6 +1536,20 @@ function GroupCampaign({ auth, data, actions, setNotice }: any) {
           onChange={(e) => setScheduledAt(e.target.value)}
         />
       </label>
+      <section className={panelClass("grid grid-cols-2 gap-3")}>
+        <label className="space-y-2">
+          <span className="text-xs font-semibold uppercase text-muted-foreground">Minimum Delay Seconds</span>
+          <input className={inputClass()} type="number" min={1} value={minDelay} onChange={(e) => setMinDelay(Number(e.target.value))} />
+        </label>
+        <label className="space-y-2">
+          <span className="text-xs font-semibold uppercase text-muted-foreground">Maximum Delay Seconds</span>
+          <input className={inputClass()} type="number" min={1} value={maxDelay} onChange={(e) => setMaxDelay(Number(e.target.value))} />
+        </label>
+        <label className="col-span-2 space-y-2">
+          <span className="text-xs font-semibold uppercase text-muted-foreground">Delay Between Cycles Minutes</span>
+          <input className={inputClass()} type="number" min={1} value={cycleDelay} onChange={(e) => setCycleDelay(Number(e.target.value))} />
+        </label>
+      </section>
       <Preview
         message={message}
         mediaUrl={mediaUrl}
@@ -1028,11 +1559,129 @@ function GroupCampaign({ auth, data, actions, setNotice }: any) {
       <Button
         className="w-full"
         type="submit"
-        disabled={!connectionId || !selectedGroups.length || (!message && !mediaUrl)}
+        disabled={!connectionId || !categoryId || (!message && !mediaUrl) || minDelay > maxDelay || actionBusy === "create-group-campaign"}
       >
-        APPROVE AND QUEUE
+        {actionBusy === "create-group-campaign" ? "Queuing..." : "APPROVE AND QUEUE"}
       </Button>
     </form>
+  );
+}
+
+function CampaignSummary({ rows }: { rows: any[] }) {
+  const total = rows.length;
+  const running = rows.filter((r) => r.status === "RUNNING").length;
+  const paused = rows.filter((r) => r.status === "PAUSED").length;
+  const completed = rows.filter((r) => String(r.status).startsWith("COMPLETED")).length;
+  return (
+    <section className={panelClass("grid grid-cols-4 gap-2 text-center")}>
+      <Stat label="Total" value={total} />
+      <Stat label="Running" value={running} />
+      <Stat label="Paused" value={paused} />
+      <Stat label="Completed" value={completed} />
+    </section>
+  );
+}
+
+function CampaignCards({ rows, auth, actions, reload, setNotice, actionBusy, runAction }: any) {
+  const [detail, setDetail] = useState<any>(null);
+  async function control(id: string, action: "START" | "PAUSE" | "RESTART" | "STOP") {
+    await runAction?.(`${action}-${id}`, async () => {
+      await actions.controlCampaign({ data: { auth, id, action } });
+      setNotice?.(action === "PAUSE" ? "Campaign paused." : "Campaign started.");
+      await reload?.();
+    });
+  }
+  return (
+    <div className="space-y-3">
+      {rows.map((c: any) => (
+        <article key={c.id} className={panelClass()}>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="font-medium">{c.name}</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {c.type} | {c.connection_id ? "Session selected" : "No session"} |{" "}
+                {new Date(c.created_at).toLocaleDateString()}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Cycles {c.cycles_completed ?? 0} | Sent {c.completed_count ?? 0} | Failed{" "}
+                {c.failed_count ?? 0} | Last run{" "}
+                {c.last_run_at ? new Date(c.last_run_at).toLocaleString() : "never"} | Next run{" "}
+                {c.next_run_at ? new Date(c.next_run_at).toLocaleString() : "not scheduled"}
+              </p>
+            </div>
+            <span className={`text-xs font-semibold ${statusTone(c.status)}`}>{c.status}</span>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Button size="sm" variant="secondary" disabled={!!actionBusy} onClick={() => control(c.id, "START")}>
+              <Play className="mr-1 size-3" /> START
+            </Button>
+            <Button size="sm" variant="secondary" disabled={!!actionBusy} onClick={() => control(c.id, "PAUSE")}>
+              <Pause className="mr-1 size-3" /> PAUSE
+            </Button>
+            <Button size="sm" variant="secondary" disabled={!!actionBusy} onClick={() => control(c.id, "RESTART")}>
+              <RotateCcw className="mr-1 size-3" /> RESTART
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() =>
+                runAction?.(`details-${c.id}`, async () => {
+                  const response = await actions.getCampaignDetail({ data: { auth, id: c.id } });
+                  setDetail(response);
+                })
+              }
+            >
+              DETAILS
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={!!actionBusy}
+              onClick={() => {
+                if (!confirm("Delete this campaign? Historical send/audit data is preserved.")) return;
+                void runAction?.(`delete-campaign-${c.id}`, async () => {
+                  await actions.deleteCampaign({ data: { auth, id: c.id } });
+                  setNotice?.("Campaign deleted.");
+                  await reload?.();
+                });
+              }}
+            >
+              <Trash2 className="mr-1 size-3" /> DELETE
+            </Button>
+          </div>
+        </article>
+      ))}
+      {!rows.length ? <Empty message="No campaigns yet." /> : null}
+      {detail ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4">
+          <section className={panelClass("max-h-[88vh] w-full max-w-lg space-y-3 overflow-auto shadow-lg")}>
+            <div className="flex items-center justify-between">
+              <p className="font-semibold">{detail.campaign.name}</p>
+              <button type="button" onClick={() => setDetail(null)} aria-label="Close">
+                <X className="size-4" />
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-sm">
+              <Stat label="Status" value={detail.campaign.status} />
+              <Stat label="Selected Users" value={detail.recipients?.length ?? 0} />
+              <Stat label="Groups" value={detail.groups?.length ?? 0} />
+              <Stat label="Messages Sent" value={detail.campaign.completed_count ?? 0} />
+              <Stat label="Failed" value={detail.campaign.failed_count ?? 0} />
+              <Stat label="Pending" value={Math.max((detail.campaign.total_targets ?? 0) - (detail.campaign.completed_count ?? 0) - (detail.campaign.failed_count ?? 0), 0)} />
+            </div>
+            <div className="space-y-2">
+              <p className="text-sm font-semibold">Recent errors/logs</p>
+              {(detail.logs ?? []).map((log: any) => (
+                <p key={log.id} className="border border-border bg-background p-2 text-xs">
+                  {log.level}: {log.message}
+                </p>
+              ))}
+              {!detail.logs?.length ? <p className="text-sm text-muted-foreground">No logs yet.</p> : null}
+            </div>
+          </section>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -1083,6 +1732,13 @@ function GroupPicker({ groups, selected, setSelected, allowAll }: any) {
 function AudienceSummary({ result, selectable, selected, setSelected }: any) {
   const users = result.users ?? [];
   const choose = (count: number) => setSelected(users.slice(0, count).map((u: any) => u.id));
+  const [rangeFrom, setRangeFrom] = useState(1);
+  const [rangeTo, setRangeTo] = useState(Math.min(10, users.length || 10));
+  const selectRange = () => {
+    const from = Math.max(1, Math.min(rangeFrom, users.length));
+    const to = Math.max(from, Math.min(rangeTo, users.length));
+    setSelected(users.slice(from - 1, to).map((u: any) => u.id));
+  };
   return (
     <section className={panelClass("space-y-3")}>
       <div className="grid grid-cols-2 gap-2 text-sm">
@@ -1093,27 +1749,37 @@ function AudienceSummary({ result, selectable, selected, setSelected }: any) {
         <Stat label="Excluded" value={result.excluded} />
       </div>
       {selectable ? (
-        <div className="flex flex-wrap gap-2">
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            onClick={() => setSelected(users.map((u: any) => u.id))}
-          >
-            Select All
-          </Button>
-          <Button type="button" size="sm" variant="secondary" onClick={() => setSelected([])}>
-            Select None
-          </Button>
-          {[10, 15, 25, 50].map((n) => (
-            <Button key={n} type="button" size="sm" variant="secondary" onClick={() => choose(n)}>
-              Select {n}
+        <div className="space-y-3">
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              onClick={() => setSelected(users.map((u: any) => u.id))}
+            >
+              SELECT ALL
             </Button>
-          ))}
+            <Button type="button" size="sm" variant="secondary" onClick={() => setSelected([])}>
+              SELECT NONE
+            </Button>
+            {[10, 15, 25, 50].map((n) => (
+              <Button key={n} type="button" size="sm" variant="secondary" onClick={() => choose(n)}>
+                Select {n}
+              </Button>
+            ))}
+          </div>
+          <div className="grid grid-cols-[1fr_1fr_auto] gap-2">
+            <input className={inputClass()} type="number" min={1} value={rangeFrom} onChange={(e) => setRangeFrom(Number(e.target.value))} placeholder="From" />
+            <input className={inputClass()} type="number" min={1} value={rangeTo} onChange={(e) => setRangeTo(Number(e.target.value))} placeholder="To" />
+            <Button type="button" variant="secondary" onClick={selectRange}>
+              SELECT RANGE
+            </Button>
+          </div>
+          <p className="text-sm font-semibold">Selected Users: {selected.length}</p>
         </div>
       ) : null}
       <div className="max-h-72 space-y-2 overflow-auto">
-        {users.map((u: any) => (
+        {users.map((u: any, index: number) => (
           <button
             type="button"
             key={u.id}
@@ -1127,7 +1793,9 @@ function AudienceSummary({ result, selectable, selected, setSelected }: any) {
             }
             className="flex w-full items-center justify-between border border-border bg-background p-3 text-left text-sm"
           >
-            <span>{u.username ? `@${u.username}` : (u.display_name ?? u.telegram_user_id)}</span>
+            <span>
+              {index + 1}. {u.username ? `@${u.username}` : (u.display_name ?? u.telegram_user_id)}
+            </span>
             <span className={statusTone(u.eligibility)}>
               {selectable && selected.includes(u.id) ? "SELECTED" : u.eligibility}
             </span>
@@ -1301,11 +1969,11 @@ function SettingsPanel({ data }: { data: any }) {
   );
 }
 
-function Stat({ label, value }: { label: string; value: number }) {
+function Stat({ label, value }: { label: string; value: number | string }) {
   return (
     <section className={panelClass()}>
       <p className="text-xs capitalize text-muted-foreground">{label}</p>
-      <p className="mt-1 text-xl font-semibold">{Number(value ?? 0)}</p>
+      <p className="mt-1 text-xl font-semibold">{value ?? 0}</p>
     </section>
   );
 }
