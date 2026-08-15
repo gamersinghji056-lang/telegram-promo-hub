@@ -613,9 +613,9 @@ export async function verifyGroupWritableViaUserSession(
         telegramGroupId: Number(entity.id),
         accessHash: accessHash(entity),
         entityType: entityType(entity),
-        canSendMessages: canSend,
-        writableStatus: canSend ? "WRITABLE" : "NOT_WRITABLE",
-        reason: canSend ? null : "Selected session cannot post messages to this group/channel.",
+        canSendMessages: canSend ? true : null,
+        writableStatus: canSend ? "WRITABLE" : "UNKNOWN",
+        reason: canSend ? null : "Static Telegram permissions could not confirm writability.",
       };
     } catch (error) {
       const message = errorMessage(error);
@@ -648,6 +648,87 @@ export async function verifyGroupWritableViaUserSession(
         writableStatus: "UNKNOWN",
         reason: message,
       };
+    }
+  });
+}
+
+export async function testGroupWritableViaUserSession(
+  tenantId: string,
+  connectionId: string,
+  group: {
+    username?: string | null;
+    telegram_group_id?: number | null;
+    access_hash?: string | null;
+    entity_type?: string | null;
+  },
+) {
+  return withAuthorizedUserClient(tenantId, connectionId, async (client) => {
+    try {
+      const seed = group.username
+        ? await client.getEntity(group.username.replace(/^@/, ""))
+        : inputChannelFromStored({
+            id: group.telegram_group_id ?? null,
+            accessHash: group.access_hash ?? null,
+          });
+      if (!seed) {
+        return {
+          writableStatus: "UNKNOWN",
+          canSendMessages: null,
+          reason: "Group entity cannot be resolved without username or access hash.",
+        };
+      }
+      const entity = await client.getEntity(seed as never);
+      if (!(entity instanceof Api.Channel) && !(entity instanceof Api.Chat)) {
+        return {
+          writableStatus: "INACCESSIBLE",
+          canSendMessages: false,
+          reason: "Resolved entity is not a group or channel.",
+        };
+      }
+      const sent = await client.sendMessage(entity, { message: "hey" });
+      const sentId = sent && typeof sent === "object" && "id" in sent ? Number(sent.id) : null;
+      if (sentId) {
+        try {
+          if (entity instanceof Api.Channel) {
+            await client.invoke(new Api.channels.DeleteMessages({ channel: entity, id: [sentId] }));
+          } else {
+            await client.invoke(new Api.messages.DeleteMessages({ id: [sentId], revoke: true }));
+          }
+        } catch {
+          /* Best-effort cleanup only. A confirmed send still proves writability. */
+        }
+      }
+      return {
+        writableStatus: "WRITABLE",
+        canSendMessages: true,
+        reason: null,
+        title: "title" in entity ? String(entity.title) : null,
+        username: "username" in entity && entity.username ? String(entity.username) : group.username ?? null,
+        telegramGroupId: Number(entity.id),
+        accessHash: accessHash(entity),
+        entityType: entityType(entity),
+      };
+    } catch (error) {
+      const message = errorMessage(error);
+      const upper = message.toUpperCase();
+      if (
+        upper.includes("CHAT_WRITE_FORBIDDEN") ||
+        upper.includes("CHAT_ADMIN_REQUIRED") ||
+        upper.includes("USER_BANNED_IN_CHANNEL") ||
+        upper.includes("WRITE_FORBIDDEN") ||
+        upper.includes("NOT ENOUGH RIGHTS")
+      ) {
+        return { writableStatus: "NOT_WRITABLE", canSendMessages: false, reason: message };
+      }
+      if (
+        upper.includes("CHANNEL_PRIVATE") ||
+        upper.includes("USER_NOT_PARTICIPANT") ||
+        upper.includes("CHAT_FORBIDDEN") ||
+        upper.includes("PEER_ID_INVALID")
+      ) {
+        return { writableStatus: "INACCESSIBLE", canSendMessages: false, reason: message };
+      }
+      return { writableStatus: "UNKNOWN", canSendMessages: null, reason: message };
     }
   });
 }

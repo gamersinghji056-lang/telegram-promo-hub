@@ -1,14 +1,32 @@
 import { Link } from "@tanstack/react-router";
-import { BarChart3, FolderOpen, LayoutDashboard, Megaphone, Tags, Users } from "lucide-react";
+import {
+  BarChart3,
+  Bot,
+  CreditCard,
+  FolderOpen,
+  LayoutDashboard,
+  Megaphone,
+  Search,
+  Settings,
+  Send,
+  Tags,
+  Users,
+} from "lucide-react";
 import type { ReactNode } from "react";
 
 const items = [
   ["dashboard", "Home", LayoutDashboard],
+  ["sessions", "Sessions", Bot],
+  ["groups-find", "Group Finder", Search],
+  ["groups-approved", "Approved Groups", FolderOpen],
+  ["dm-create", "DM Promotion", Send],
+  ["group-create", "Group Promotion", Megaphone],
   ["campaigns", "Campaigns", Megaphone],
-  ["groups-approved", "Groups", FolderOpen],
-  ["dm-audience", "Users", Users],
+  ["dm-audience", "Find Users", Users],
   ["group-categories", "Categories", Tags],
   ["analytics", "Analytics", BarChart3],
+  ["billing", "Billing", CreditCard],
+  ["settings", "Settings", Settings],
 ] as const;
 
 export function MiniAppShell({ active, children }: { active: string; children: ReactNode }) {
@@ -25,13 +43,13 @@ export function MiniAppShell({ active, children }: { active: string; children: R
       </header>
       <main className="mx-auto max-w-3xl p-4 sm:p-6">{children}</main>
       <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-card">
-        <div className="mx-auto grid max-w-3xl grid-cols-6 gap-1 px-2 py-2">
+        <div className="mx-auto flex max-w-3xl gap-1 overflow-x-auto px-2 py-2">
           {items.map(([slug, label, Icon]) => (
             <Link
               key={slug}
               to="/mini-app/$section"
               params={{ section: slug }}
-              className={`flex min-h-14 flex-col items-center justify-center gap-1 rounded-md px-1 text-[10px] font-medium transition-colors ${active === slug ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}
+              className={`flex min-h-14 min-w-20 shrink-0 flex-col items-center justify-center gap-1 rounded-md px-2 text-[10px] font-medium transition-colors ${active === slug ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}
             >
               <Icon className="size-4" />
               {label}

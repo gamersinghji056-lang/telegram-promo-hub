@@ -80,6 +80,7 @@ import {
   updateCampaign,
   verifyConnectionCode,
   verifyConnectionPassword,
+  testWritableGroups,
   verifyWritableGroups,
 } from "@/lib/customer.functions";
 
@@ -229,6 +230,7 @@ function MiniAppSection() {
     rejectGroup: useServerFn(rejectGroup),
     removeGroup: useServerFn(removeGroup),
     getGroupCategoryDetail: useServerFn(getGroupCategoryDetail),
+    testWritableGroups: useServerFn(testWritableGroups),
     verifyWritableGroups: useServerFn(verifyWritableGroups),
     saveGroupCategory: useServerFn(saveGroupCategory),
     deleteGroupCategory: useServerFn(deleteGroupCategory),
@@ -1121,13 +1123,35 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
 function GroupRows({ groups, connections, bulkJoin, auth, actions, reload, setNotice, actionBusy, runAction }: any) {
   const [connectionId, setConnectionId] = useState("");
   const [confirmRemove, setConfirmRemove] = useState<any>(null);
+  const [testSelected, setTestSelected] = useState<string[]>([]);
+  const [testResult, setTestResult] = useState<any>(null);
   const needsJoinSession = groups.some((g: any) => ["APPROVED", "JOINED"].includes(g.status));
   const approvedNotJoined = groups.filter((g: any) => g.status === "APPROVED").length;
   const totalBulk = bulkJoin?.group_ids?.length ?? approvedNotJoined;
+  const testableGroups = groups.filter(
+    (g: any) =>
+      ["APPROVED", "JOINED"].includes(g.status) &&
+      (g.writable_status === "UNKNOWN" ||
+        g.writable_status === "NOT_WRITABLE" ||
+        g.writable_status === "INACCESSIBLE" ||
+        g.can_send_messages !== true),
+  );
   async function startAll() {
     await runAction("join-all", async () => {
       await actions.startBulkJoin({ data: { auth, connectionId } });
       setNotice("Join all started.");
+      await reload();
+    });
+  }
+  async function testWritable() {
+    await runAction("test-writable-groups", async () => {
+      const result = await actions.testWritableGroups({
+        data: { auth, connectionId, groupIds: testSelected },
+      });
+      setTestResult(result);
+      setNotice(
+        `Tested: ${result.checked}/${result.total}. Writable: ${result.writable}. Not Writable: ${result.notWritable}. Unknown: ${result.unknown}. Inaccessible: ${result.inaccessible}.`,
+      );
       await reload();
     });
   }
@@ -1187,19 +1211,74 @@ function GroupRows({ groups, connections, bulkJoin, auth, actions, reload, setNo
               </div>
             </div>
           ) : null}
+          {connectionId && testableGroups.length ? (
+            <div className="space-y-3 border-t border-border pt-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-semibold">Test selected UNKNOWN/NOT_WRITABLE groups with a controlled send.</p>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => setTestSelected(testableGroups.map((g: any) => g.id))}
+                  >
+                    SELECT ALL
+                  </Button>
+                  <Button type="button" size="sm" variant="secondary" onClick={() => setTestSelected([])}>
+                    CLEAR ALL
+                  </Button>
+                </div>
+              </div>
+              <Button
+                className="w-full"
+                disabled={!testSelected.length || actionBusy === "test-writable-groups"}
+                onClick={testWritable}
+              >
+                {actionBusy === "test-writable-groups" ? "Testing..." : "TEST WRITABLE GROUPS"}
+              </Button>
+              <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-5">
+                <Stat label="Tested" value={`${testResult?.checked ?? 0}/${testResult?.total ?? testSelected.length}`} />
+                <Stat label="Writable" value={testResult?.writable ?? 0} />
+                <Stat label="Not Writable" value={testResult?.notWritable ?? 0} />
+                <Stat label="Unknown" value={testResult?.unknown ?? 0} />
+                <Stat label="Inaccessible" value={testResult?.inaccessible ?? 0} />
+              </div>
+            </div>
+          ) : null}
         </section>
       ) : null}
       {groups.map((g: any) => (
         <article key={g.id} className={panelClass()}>
           <div className="flex items-start justify-between gap-3">
             <div className="flex gap-3">
-              <input type="checkbox" readOnly checked={["APPROVED", "JOINED"].includes(g.status)} />
+              {testableGroups.some((row: any) => row.id === g.id) ? (
+                <input
+                  type="checkbox"
+                  checked={testSelected.includes(g.id)}
+                  onChange={() =>
+                    setTestSelected(
+                      testSelected.includes(g.id)
+                        ? testSelected.filter((id) => id !== g.id)
+                        : [...testSelected, g.id],
+                    )
+                  }
+                  aria-label={`Select ${g.title} for writable testing`}
+                />
+              ) : (
+                <input type="checkbox" readOnly checked={["APPROVED", "JOINED"].includes(g.status)} />
+              )}
               <div>
               <p className="font-medium">{g.title}</p>
               <p className="mt-1 text-xs text-muted-foreground">
                 {g.username ? `@${g.username}` : "No username"} | {g.member_count ?? "unknown"}{" "}
                 members
               </p>
+              {["APPROVED", "JOINED"].includes(g.status) ? (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Writable: {g.writable_status ?? "UNKNOWN"} | Can send:{" "}
+                  {g.can_send_messages === true ? "yes" : g.can_send_messages === false ? "no" : "unknown"}
+                </p>
+              ) : null}
               <p className="mt-1 text-xs text-muted-foreground">
                 Matched: {(g.matched_keywords ?? []).join(", ") || "none"} | Found{" "}
                 {new Date(g.discovered_at).toLocaleDateString()}
@@ -1320,16 +1399,9 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
   const [name, setName] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
   const [detail, setDetail] = useState<any>(null);
-  const autoVerifyStarted = useRef(false);
   useEffect(() => {
     setWritability(data?.writability ?? {});
   }, [data?.writability]);
-  useEffect(() => {
-    const unknown = Number(data?.writability?.unknown ?? 0);
-    if (autoVerifyStarted.current || writableGroups.length > 0 || unknown <= 0) return;
-    autoVerifyStarted.current = true;
-    void verifyGroups();
-  }, [data?.writability?.unknown, writableGroups.length]);
 
   async function verifyGroups() {
     await runAction("verify-writable-groups", async () => {
@@ -2039,30 +2111,53 @@ function CampaignDonut({ stats, compact = false }: { stats: any; compact?: boole
   const sent = Math.max(Number(stats.sent ?? 0), 0);
   const pending = Math.max(Number(stats.pending ?? 0), 0);
   const failed = Math.max(Number(stats.failed ?? 0), 0);
-  const safeTotal = Math.max(total, sent + pending + failed, 1);
-  const sentDeg = (sent / safeTotal) * 360;
-  const pendingDeg = ((sent + pending) / safeTotal) * 360;
-  const size = compact ? "size-24" : "size-32";
+  const safeTotal = Math.max(total, sent + pending + failed);
+  const radius = 42;
+  const circumference = 2 * Math.PI * radius;
+  let offset = 0;
+  const segments = [
+    { label: "Sent", value: sent, color: "hsl(var(--success))" },
+    { label: "Pending", value: pending, color: "hsl(var(--warning))" },
+    { label: "Failed", value: failed, color: "hsl(var(--destructive))" },
+  ].map((segment) => {
+    const length = safeTotal > 0 ? (segment.value / safeTotal) * circumference : 0;
+    const row = { ...segment, length, offset };
+    offset += length;
+    return row;
+  });
+  const size = compact ? "size-28" : "size-36";
   return (
     <div className="flex items-center gap-4">
-      <div
-        className={`grid ${size} shrink-0 place-items-center rounded-full`}
-        style={{
-          background: `conic-gradient(hsl(var(--success)) 0deg ${sentDeg}deg, hsl(var(--warning)) ${sentDeg}deg ${pendingDeg}deg, hsl(var(--destructive)) ${pendingDeg}deg 360deg)`,
-        }}
-        aria-label={`Total ${total}, Sent ${sent}, Pending ${pending}, Failed ${failed}`}
-      >
-        <div className="grid size-[68%] place-items-center rounded-full bg-card text-center">
-          <div>
-            <p className="text-[10px] uppercase text-muted-foreground">Total</p>
-            <p className="text-lg font-semibold">{total}</p>
-          </div>
-        </div>
-      </div>
+      <svg className={`${size} shrink-0`} viewBox="0 0 120 120" role="img" aria-label={`Total ${total}, Sent ${sent}, Pending ${pending}, Failed ${failed}`}>
+        <circle cx="60" cy="60" r={radius} fill="none" stroke="hsl(var(--muted))" strokeWidth="16" />
+        {segments.map((segment) =>
+          segment.length > 0 ? (
+            <circle
+              key={segment.label}
+              cx="60"
+              cy="60"
+              r={radius}
+              fill="none"
+              stroke={segment.color}
+              strokeWidth="16"
+              strokeDasharray={`${segment.length} ${circumference - segment.length}`}
+              strokeDashoffset={-segment.offset}
+              transform="rotate(-90 60 60)"
+            />
+          ) : null,
+        )}
+        <circle cx="60" cy="60" r="30" fill="hsl(var(--card))" />
+        <text x="60" y="56" textAnchor="middle" className="fill-muted-foreground text-[10px] uppercase">
+          Total
+        </text>
+        <text x="60" y="74" textAnchor="middle" className="fill-foreground text-lg font-semibold">
+          {total}
+        </text>
+      </svg>
       <div className="grid flex-1 grid-cols-1 gap-1 text-xs">
-        <p><span className="text-success">GREEN</span> Sent: {sent}</p>
-        <p><span className="text-warning">YELLOW</span> Pending: {pending}</p>
-        <p><span className="text-destructive">RED</span> Failed: {failed}</p>
+        <p className="flex items-center gap-2"><span className="size-2 bg-success" /> Sent: {sent}</p>
+        <p className="flex items-center gap-2"><span className="size-2 bg-warning" /> Pending: {pending}</p>
+        <p className="flex items-center gap-2"><span className="size-2 bg-destructive" /> Failed: {failed}</p>
       </div>
     </div>
   );
@@ -2456,6 +2551,7 @@ function CampaignHistory({ auth, data, actions, reload }: any) {
 function Analytics({ data }: { data: any }) {
   const totals = data?.totals ?? {};
   const campaignOverview = data?.campaignOverview ?? {};
+  const campaignStatus = data?.campaignStatus ?? {};
   const dm = data?.dmPromotion ?? {};
   const group = data?.groupPromotion ?? {};
   const users = data?.users ?? {};
@@ -2490,6 +2586,12 @@ function Analytics({ data }: { data: any }) {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <AnalyticsSection
           title="DM Promotion"
+          donutStats={{
+            total: Number(dm.messagesSent ?? 0) + Number(dm.pending ?? 0) + Number(dm.failed ?? 0),
+            sent: dm.messagesSent,
+            pending: dm.pending,
+            failed: dm.failed,
+          }}
           stats={[
             ["Total DM Campaigns", dm.totalCampaigns],
             ["Active", dm.active],
@@ -2507,6 +2609,12 @@ function Analytics({ data }: { data: any }) {
         />
         <AnalyticsSection
           title="Group Promotion"
+          donutStats={{
+            total: Number(group.messagesSent ?? 0) + Number(group.pending ?? 0) + Number(group.failed ?? 0),
+            sent: group.messagesSent,
+            pending: group.pending,
+            failed: group.failed,
+          }}
           stats={[
             ["Total Group Campaigns", group.totalCampaigns],
             ["Active", group.active],
@@ -2558,6 +2666,19 @@ function Analytics({ data }: { data: any }) {
           ]}
         />
       </div>
+      <AnalyticsSection
+        title="Campaigns"
+        stats={[
+          ["Active", campaignStatus.active],
+          ["Paused", campaignStatus.paused],
+          ["Completed", campaignStatus.completed],
+        ]}
+        bars={[
+          ["Active", campaignStatus.active, "bg-success"],
+          ["Paused", campaignStatus.paused, "bg-warning"],
+          ["Completed", campaignStatus.completed, "bg-primary"],
+        ]}
+      />
     </div>
   );
 }
@@ -2566,15 +2687,18 @@ function AnalyticsSection({
   title,
   stats,
   bars,
+  donutStats,
 }: {
   title: string;
   stats: [string, number | string | undefined][];
   bars: [string, number | undefined, string][];
+  donutStats?: { total: number; sent: number; pending: number; failed: number };
 }) {
   const max = Math.max(1, ...bars.map(([, value]) => Number(value ?? 0)));
   return (
     <section className={panelClass("space-y-3")}>
       <p className="font-semibold">{title}</p>
+      {donutStats ? <CampaignDonut stats={donutStats} /> : null}
       <div className="grid grid-cols-2 gap-2 text-sm">
         {stats.map(([label, value]) => (
           <Stat key={label} label={label} value={value ?? 0} />

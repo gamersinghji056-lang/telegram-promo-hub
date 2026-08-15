@@ -201,6 +201,15 @@ export const verifyWritableGroups = createServerFn({ method: "POST" })
     data.verifyWritableGroups(await resolveAuth(i.auth), i.limit ?? 40),
   );
 
+export const testWritableGroups = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { connectionId: string; groupIds: string[] }) => i)
+  .handler(async ({ data: i }) =>
+    data.testWritableGroups(await resolveAuth(i.auth), {
+      connectionId: i.connectionId,
+      groupIds: i.groupIds,
+    }),
+  );
+
 export const getGroupCategoryDetail = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { id: string }) => i)
   .handler(async ({ data: i }) => data.groupCategoryDetail(await resolveAuth(i.auth), i.id));

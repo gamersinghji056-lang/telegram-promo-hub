@@ -13,6 +13,7 @@ import {
   resolvePublicGroupViaUserSession,
   searchPublicGroupsViaUserSession,
   startUserSessionLogin,
+  testGroupWritableViaUserSession,
   verifyGroupWritableViaUserSession,
 } from "./telegram-user-session.server";
 
@@ -1936,6 +1937,79 @@ export async function verifyWritableGroups(ctx: AuthContext, limit = 40) {
   return { ...result, summary: await groupWritabilitySummary(ctx) };
 }
 
+export async function testWritableGroups(
+  ctx: AuthContext,
+  input: { connectionId: string; groupIds: string[] },
+) {
+  const connection = await requireConnection(ctx, input.connectionId);
+  const ids = [...new Set(input.groupIds)].slice(0, 100);
+  if (!ids.length) throw new Error("Select at least one group to test.");
+  const client = db();
+  const { data: rows, error } = await client
+    .from("discovered_groups")
+    .select("id, title, username, telegram_group_id, access_hash, entity_type, writable_status")
+    .eq("tenant_id", ctx.tenantId)
+    .in("status", ["APPROVED", "JOINED"])
+    .in("id", ids);
+  if (error) throw new Error(error.message);
+  const result = {
+    checked: 0,
+    total: rows?.length ?? 0,
+    writable: 0,
+    notWritable: 0,
+    unknown: 0,
+    inaccessible: 0,
+    paused: false,
+    errors: [] as { group: string; reason: string }[],
+  };
+  for (const group of rows ?? []) {
+    result.checked += 1;
+    const tested = await testGroupWritableViaUserSession(ctx.tenantId, connection.id as string, {
+      username: group.username as string | null,
+      telegram_group_id: group.telegram_group_id as number | null,
+      access_hash: group.access_hash as string | null,
+      entity_type: group.entity_type as string | null,
+    });
+    const status = tested.writableStatus;
+    const patch: Record<string, unknown> = {
+      can_send_messages: status === "WRITABLE" ? true : status === "UNKNOWN" ? null : false,
+      writable_status: status,
+      last_resolved_connection_id: connection.id,
+      updated_at: new Date().toISOString(),
+    };
+    if ("title" in tested && tested.title) patch.title = tested.title;
+    if ("username" in tested && tested.username) patch.username = tested.username;
+    if ("telegramGroupId" in tested && tested.telegramGroupId) patch.telegram_group_id = tested.telegramGroupId;
+    if ("accessHash" in tested) patch.access_hash = tested.accessHash;
+    if ("entityType" in tested && tested.entityType) patch.entity_type = tested.entityType;
+    await client
+      .from("discovered_groups")
+      .update(patch)
+      .eq("tenant_id", ctx.tenantId)
+      .eq("id", group.id);
+    if (status === "WRITABLE") result.writable += 1;
+    else if (status === "NOT_WRITABLE") result.notWritable += 1;
+    else if (status === "INACCESSIBLE") result.inaccessible += 1;
+    else result.unknown += 1;
+    if (tested.reason) {
+      result.errors.push({
+        group: String(group.title ?? group.username ?? group.id),
+        reason: tested.reason,
+      });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+  await clientConnectionUsed(ctx.tenantId, connection.id as string);
+  await notify(
+    ctx.tenantId,
+    "Writable group test completed",
+    `Tested ${result.checked}/${result.total}. Writable: ${result.writable}. Not writable: ${result.notWritable}. Unknown: ${result.unknown}. Inaccessible: ${result.inaccessible}.`,
+    "INFO",
+    "/mini-app/groups-approved",
+  );
+  return { ...result, summary: await groupWritabilitySummary(ctx) };
+}
+
 export async function saveGroupCategory(
   ctx: AuthContext,
   input: { id?: string | null; name: string; group_ids: string[] },
@@ -2533,6 +2607,11 @@ export async function analytics(ctx: AuthContext) {
     stats.sent_messages + stats.failed_messages
       ? Math.round((stats.sent_messages / (stats.sent_messages + stats.failed_messages)) * 100)
       : 0;
+  const campaignStatus = {
+    active: (campaigns ?? []).filter((c) => ["RUNNING", "SCHEDULED"].includes(String(c.status))).length,
+    paused: (campaigns ?? []).filter((c) => String(c.status) === "PAUSED").length,
+    completed: (campaigns ?? []).filter((c) => String(c.status).startsWith("COMPLETED")).length,
+  };
 
   return {
     totals: {
@@ -2548,6 +2627,7 @@ export async function analytics(ctx: AuthContext) {
       pending: allMessages.pending_messages,
     },
     campaignOverview: allMessages,
+    campaignStatus,
     dmPromotion: {
       totalCampaigns: dmCampaigns.length,
       active: dmCampaigns.filter((c) => ["RUNNING", "SCHEDULED"].includes(String(c.status))).length,
