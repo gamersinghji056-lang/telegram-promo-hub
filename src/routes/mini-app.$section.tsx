@@ -830,11 +830,18 @@ function SessionSelect({ value, onChange, connections, label }: any) {
       <span className="text-xs font-semibold uppercase text-muted-foreground">{label}</span>
       <select className={inputClass()} value={value} onChange={(e) => onChange(e.target.value)}>
         <option value="">Select session</option>
-        {rows.map((c: any) => (
-          <option key={c.id} value={c.id} disabled={c.status !== "CONNECTED"}>
-            {c.username ? `@${c.username}` : c.label} - {c.health ?? c.status}
-          </option>
-        ))}
+        {rows.map((c: any) => {
+          const waitingForAuth = ["AUTH_CODE_SENT", "TWO_FACTOR_REQUIRED", "DISCONNECTED"].includes(
+            String(c.status),
+          );
+          const usable = (c.has_session || c.status === "CONNECTED") && !waitingForAuth;
+          return (
+            <option key={c.id} value={c.id} disabled={!usable}>
+              {c.username ? `@${c.username}` : c.label} -{" "}
+              {usable ? c.health ?? c.status : "authorization required"}
+            </option>
+          );
+        })}
       </select>
     </label>
   );
@@ -1526,7 +1533,9 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
         {categories.map((category: any) => (
           <article key={category.id} className={panelClass()}>
             <p className="font-semibold">{category.name}</p>
-            <p className="mt-1 text-sm text-muted-foreground">{category.group_count ?? 0} Groups</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {category.usable_count ?? 0} usable / {category.unavailable_count ?? 0} unavailable
+            </p>
             <div className="mt-4 flex flex-wrap gap-2">
               <Button
                 size="sm"
@@ -1570,7 +1579,10 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
           <div className="flex items-center justify-between">
             <div>
               <p className="font-semibold">{detail.category.name}</p>
-              <p className="text-sm text-muted-foreground">Total Groups: {detail.groups.length}</p>
+              <p className="text-sm text-muted-foreground">
+                Total Groups: {detail.groups.length} | {detail.usable_count ?? 0} usable |{" "}
+                {detail.unavailable_count ?? 0} unavailable
+              </p>
             </div>
             <button type="button" onClick={() => setDetail(null)} aria-label="Close">
               <X className="size-4" />
@@ -2102,7 +2114,7 @@ function GroupCampaign({ auth, data, actions, reload, setNotice, actionBusy, run
           <option value="">Select category</option>
           {(data?.categories ?? []).map((c: any) => (
             <option key={c.id} value={c.id}>
-              {c.name} - {c.group_count ?? 0} groups
+              {c.name} - {c.usable_count ?? 0} usable / {c.unavailable_count ?? 0} unavailable
             </option>
           ))}
         </select>
@@ -2169,8 +2181,10 @@ function jobStats(row: any) {
     stats.pending_messages ??
       Math.max(Number(row?.total_targets ?? 0) - sent - failed, 0),
   );
-  const total = Number(stats.total_messages ?? row?.total_targets ?? sent + pending + failed);
-  return { total, sent, pending, failed };
+  const total = sent + pending + failed;
+  const groupsPerCycle = Number(row?.total_targets ?? stats.groups_per_cycle ?? 0);
+  const completedCycles = Number(row?.cycles_completed ?? 0);
+  return { total, sent, pending, failed, groupsPerCycle, completedCycles };
 }
 
 function CampaignDonut({ stats, compact = false }: { stats: any; compact?: boolean }) {
@@ -2183,20 +2197,20 @@ function CampaignDonut({ stats, compact = false }: { stats: any; compact?: boole
   const circumference = 2 * Math.PI * radius;
   let offset = 0;
   const segments = [
-    { label: "Sent", value: sent, color: "hsl(var(--success))" },
-    { label: "Pending", value: pending, color: "hsl(var(--warning))" },
-    { label: "Failed", value: failed, color: "hsl(var(--destructive))" },
+    { label: "Sent", value: sent, color: "var(--success)" },
+    { label: "Pending", value: pending, color: "var(--warning)" },
+    { label: "Failed", value: failed, color: "var(--destructive)" },
   ].map((segment) => {
     const length = safeTotal > 0 ? (segment.value / safeTotal) * circumference : 0;
     const row = { ...segment, length, offset };
     offset += length;
     return row;
   });
-  const size = compact ? "size-28" : "size-36";
+  const size = compact ? "size-32" : "size-44";
   return (
-    <div className="flex items-center gap-4">
+    <div className="flex flex-col items-center gap-4 sm:flex-row">
       <svg className={`${size} shrink-0`} viewBox="0 0 120 120" role="img" aria-label={`Total ${total}, Sent ${sent}, Pending ${pending}, Failed ${failed}`}>
-        <circle cx="60" cy="60" r={radius} fill="none" stroke="hsl(var(--muted))" strokeWidth="16" />
+        <circle cx="60" cy="60" r={radius} fill="none" stroke="var(--muted)" strokeWidth="18" />
         {segments.map((segment) =>
           segment.length > 0 ? (
             <circle
@@ -2206,14 +2220,15 @@ function CampaignDonut({ stats, compact = false }: { stats: any; compact?: boole
               r={radius}
               fill="none"
               stroke={segment.color}
-              strokeWidth="16"
+              strokeWidth="18"
+              strokeLinecap="round"
               strokeDasharray={`${segment.length} ${circumference - segment.length}`}
               strokeDashoffset={-segment.offset}
               transform="rotate(-90 60 60)"
             />
           ) : null,
         )}
-        <circle cx="60" cy="60" r="30" fill="hsl(var(--card))" />
+        <circle cx="60" cy="60" r="28" fill="var(--card)" />
         <text x="60" y="56" textAnchor="middle" className="fill-muted-foreground text-[10px] uppercase">
           Total
         </text>
@@ -2221,10 +2236,10 @@ function CampaignDonut({ stats, compact = false }: { stats: any; compact?: boole
           {total}
         </text>
       </svg>
-      <div className="grid flex-1 grid-cols-1 gap-1 text-xs">
-        <p className="flex items-center gap-2"><span className="size-2 bg-success" /> Sent: {sent}</p>
-        <p className="flex items-center gap-2"><span className="size-2 bg-warning" /> Pending: {pending}</p>
-        <p className="flex items-center gap-2"><span className="size-2 bg-destructive" /> Failed: {failed}</p>
+      <div className="grid w-full flex-1 grid-cols-3 gap-2 text-xs sm:grid-cols-1">
+        <p className="flex items-center justify-center gap-2 sm:justify-start"><span className="size-2 rounded-full bg-success" /> Sent: {sent}</p>
+        <p className="flex items-center justify-center gap-2 sm:justify-start"><span className="size-2 rounded-full bg-warning" /> Pending: {pending}</p>
+        <p className="flex items-center justify-center gap-2 sm:justify-start"><span className="size-2 rounded-full bg-destructive" /> Failed: {failed}</p>
       </div>
     </div>
   );
@@ -2266,8 +2281,10 @@ function CampaignCards({ rows, auth, actions, reload, setNotice, actionBusy, run
                 {new Date(c.created_at).toLocaleDateString()}
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
-                Cycles {c.cycles_completed ?? 0} | Total Messages {jobStats(c).total} | Sent{" "}
-                {jobStats(c).sent} | Pending {jobStats(c).pending} | Failed {jobStats(c).failed} | Last run{" "}
+                Completed Cycles {jobStats(c).completedCycles} | Current Cycle{" "}
+                {Number(c.cycles_completed ?? 0) + 1} | Groups per Cycle {jobStats(c).groupsPerCycle} |
+                Total Messages {jobStats(c).total} | Sent {jobStats(c).sent} | Pending{" "}
+                {jobStats(c).pending} | Failed {jobStats(c).failed} | Last run{" "}
                 {c.last_run_at ? new Date(c.last_run_at).toLocaleString() : "never"} | Next run{" "}
                 {c.next_run_at ? new Date(c.next_run_at).toLocaleString() : "not scheduled"}
               </p>
@@ -2331,10 +2348,21 @@ function CampaignCards({ rows, auth, actions, reload, setNotice, actionBusy, run
               <Stat label="Status" value={detail.campaign.status} />
               <Stat label="Selected Users" value={detail.recipients?.length ?? 0} />
               <Stat label="Groups" value={detail.groups?.length ?? 0} />
+              <Stat label="Completed Cycles" value={jobStats(detail.campaign).completedCycles} />
+              <Stat label="Current Cycle" value={Number(detail.campaign.cycles_completed ?? 0) + 1} />
+              <Stat label="Groups per Cycle" value={jobStats(detail.campaign).groupsPerCycle} />
               <Stat label="Total Messages" value={jobStats(detail.campaign).total} />
               <Stat label="Sent" value={jobStats(detail.campaign).sent} />
               <Stat label="Pending" value={jobStats(detail.campaign).pending} />
               <Stat label="Failed" value={jobStats(detail.campaign).failed} />
+              <Stat
+                label="Next Cycle"
+                value={
+                  detail.campaign.next_run_at
+                    ? new Date(detail.campaign.next_run_at).toLocaleString()
+                    : "not scheduled"
+                }
+              />
             </div>
             <CampaignDonut stats={jobStats(detail.campaign)} />
             <div className="space-y-2">

@@ -186,7 +186,7 @@ async function markCampaignCounts(campaignId: string, tenantId: string) {
   const [campaign, sent, failed, remaining] = await Promise.all([
     client
       .from("campaigns")
-      .select("id, type, status, cycle_delay_minutes, cycles_completed")
+      .select("id, type, status, cycle_delay_minutes, cycles_completed, completed_count, failed_count")
       .eq("id", campaignId)
       .eq("tenant_id", tenantId)
       .maybeSingle(),
@@ -206,37 +206,50 @@ async function markCampaignCounts(campaignId: string, tenantId: string) {
       .eq("campaign_id", campaignId)
       .in("status", ["QUEUED", "PROCESSING", "HELD", "PAUSED"]),
   ]);
-  const completed = sent.count ?? 0;
-  const failedCount = failed.count ?? 0;
+  const currentSent = sent.count ?? 0;
+  const currentFailed = failed.count ?? 0;
   const update: Record<string, unknown> = {
-    completed_count: completed,
-    failed_count: failedCount,
     updated_at: new Date().toISOString(),
   };
   if ((remaining.count ?? 0) === 0 && campaign.data?.type === "GROUP" && campaign.data?.status === "RUNNING") {
+    const nextCompleted = Number(campaign.data.completed_count ?? 0) + currentSent;
+    const nextFailed = Number(campaign.data.failed_count ?? 0) + currentFailed;
     const nextRun = new Date(
       Date.now() + Math.max(1, Number(campaign.data.cycle_delay_minutes ?? 20)) * 60_000,
     ).toISOString();
+    update["completed_count"] = nextCompleted;
+    update["failed_count"] = nextFailed;
     update["cycles_completed"] = Number(campaign.data.cycles_completed ?? 0) + 1;
     update["last_run_at"] = new Date().toISOString();
     update["next_run_at"] = nextRun;
-    await client
-      .from("campaign_jobs")
-      .update({
-        status: "QUEUED",
-        attempts: 0,
-        run_after: nextRun,
-        locked_at: null,
-        started_at: null,
-        completed_at: null,
-        last_error: null,
-      })
-      .eq("campaign_id", campaignId)
-      .eq("tenant_id", tenantId)
-      .eq("job_type", "GROUP");
+    if (currentSent > 0) {
+      await client
+        .from("campaign_jobs")
+        .update({
+          status: "QUEUED",
+          attempts: 0,
+          run_after: nextRun,
+          locked_at: null,
+          started_at: null,
+          completed_at: null,
+          last_error: null,
+        })
+        .eq("campaign_id", campaignId)
+        .eq("tenant_id", tenantId)
+        .eq("job_type", "GROUP")
+        .eq("status", "SENT");
+    } else {
+      update["status"] = nextFailed > 0 ? "COMPLETED_WITH_ERRORS" : "COMPLETED";
+      update["completed_at"] = new Date().toISOString();
+    }
   } else if ((remaining.count ?? 0) === 0) {
-    update["status"] = failedCount > 0 ? "COMPLETED_WITH_ERRORS" : "COMPLETED";
+    update["completed_count"] = currentSent;
+    update["failed_count"] = currentFailed;
+    update["status"] = currentFailed > 0 ? "COMPLETED_WITH_ERRORS" : "COMPLETED";
     update["completed_at"] = new Date().toISOString();
+  } else if (campaign.data?.type !== "GROUP") {
+    update["completed_count"] = currentSent;
+    update["failed_count"] = currentFailed;
   }
   await client.from("campaigns").update(update).eq("id", campaignId).eq("tenant_id", tenantId);
 }
@@ -420,6 +433,25 @@ async function processJob(job: JobRow) {
       .from(target.targetTable)
       .update({ status: "SENT", sent_at: new Date().toISOString(), error: null })
       .eq("id", job.target_id);
+    if (job.job_type === "GROUP") {
+      const { data: sentTarget } = await client
+        .from("campaign_groups")
+        .select("group_id")
+        .eq("id", job.target_id)
+        .eq("tenant_id", job.tenant_id)
+        .maybeSingle();
+      if (sentTarget?.group_id) {
+        await client
+          .from("discovered_groups")
+          .update({
+            can_send_messages: true,
+            writable_status: "WRITABLE",
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", sentTarget.group_id)
+          .eq("tenant_id", job.tenant_id);
+      }
+    }
     if (job.job_type === "DM" && target.contactId) {
       await client
         .from("audience_contacts")

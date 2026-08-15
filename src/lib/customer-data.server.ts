@@ -39,12 +39,12 @@ async function requireConnection(ctx: AuthContext, connectionId?: string | null)
     .eq("tenant_id", ctx.tenantId)
     .maybeSingle();
   if (!connection) throw new Error("Telegram session not found.");
-  if (connection.status !== "CONNECTED") throw new Error("Select a connected Telegram session.");
+  if (!connection.encrypted_session) throw new Error("This Telegram session is not authorized.");
+  if (["DISCONNECTED", "AUTH_CODE_SENT", "TWO_FACTOR_REQUIRED"].includes(String(connection.status))) {
+    throw new Error("This Telegram session is not authorized.");
+  }
   if (connection.cooldown_until && new Date(connection.cooldown_until as string) > new Date()) {
     throw new Error("Selected Telegram session is cooling down.");
-  }
-  if (["RESTRICTED", "REQUIRES_ACTION"].includes(String(connection.restriction_status ?? ""))) {
-    throw new Error("Selected Telegram session requires attention.");
   }
   return connection;
 }
@@ -54,7 +54,8 @@ async function defaultHealthyConnection(ctx: AuthContext) {
     .from("telegram_connections")
     .select("*")
     .eq("tenant_id", ctx.tenantId)
-    .eq("status", "CONNECTED")
+    .not("encrypted_session", "is", null)
+    .not("status", "in", "(DISCONNECTED,AUTH_CODE_SENT,TWO_FACTOR_REQUIRED)")
     .order("last_used_at", { ascending: true, nullsFirst: true })
     .order("created_at", { ascending: true })
     .limit(10);
@@ -62,8 +63,7 @@ async function defaultHealthyConnection(ctx: AuthContext) {
   const connection = (data ?? []).find((row) => {
     const cooldown = row.cooldown_until ? new Date(row.cooldown_until as string).getTime() : 0;
     return (
-      (!cooldown || cooldown <= now) &&
-      !["RESTRICTED", "REQUIRES_ACTION"].includes(String(row.restriction_status ?? ""))
+      !cooldown || cooldown <= now
     );
   });
   if (!connection) throw new Error("Connect a Telegram session first.");
@@ -140,7 +140,6 @@ function withCampaignJobStats<T extends Record<string, unknown>>(
   return {
     ...campaign,
     job_stats: next,
-    total_targets: next.total_messages || Number(campaign.total_targets ?? 0),
     completed_count: next.sent_messages,
     failed_count: next.failed_messages,
     pending_count: next.pending_messages,
@@ -302,11 +301,14 @@ export async function listConnections(ctx: AuthContext) {
   const { data } = await db()
     .from("telegram_connections")
     .select(
-      "id, tenant_id, label, account_name, username, telegram_id, telegram_user_id, phone_masked, status, health, error_message, restriction_status, restriction_reason, last_active_at, last_used_at, last_sync_at, link_expires_at, cooldown_until, auth_step, created_at, updated_at",
+      "id, tenant_id, label, account_name, username, telegram_id, telegram_user_id, phone_masked, status, health, error_message, restriction_status, restriction_reason, last_active_at, last_used_at, last_sync_at, link_expires_at, cooldown_until, auth_step, encrypted_session, created_at, updated_at",
     )
     .eq("tenant_id", ctx.tenantId)
     .order("created_at", { ascending: false });
-  return data ?? [];
+  return (data ?? []).map(({ encrypted_session, ...row }) => ({
+    ...row,
+    has_session: Boolean(encrypted_session),
+  }));
 }
 
 export async function createConnection(ctx: AuthContext, label: string) {
@@ -1760,19 +1762,30 @@ export async function listGroupCategories(ctx: AuthContext) {
   if (!categories?.length) return [];
   const { data: members } = await client
     .from("group_category_members")
-    .select("category_id, group_id")
+    .select("category_id, group_id, discovered_groups(can_send_messages, writable_status)")
     .eq("tenant_id", ctx.tenantId)
     .in(
       "category_id",
       categories.map((c) => c.id),
     );
   const counts = new Map<string, number>();
+  const usableCounts = new Map<string, number>();
   for (const member of members ?? []) {
-    counts.set(member.category_id as string, (counts.get(member.category_id as string) ?? 0) + 1);
+    const categoryId = member.category_id as string;
+    counts.set(categoryId, (counts.get(categoryId) ?? 0) + 1);
+    const group = Array.isArray(member.discovered_groups)
+      ? member.discovered_groups[0]
+      : member.discovered_groups;
+    if (group?.can_send_messages === true && group?.writable_status === "WRITABLE") {
+      usableCounts.set(categoryId, (usableCounts.get(categoryId) ?? 0) + 1);
+    }
   }
   return categories.map((category) => ({
     ...category,
     group_count: counts.get(category.id as string) ?? 0,
+    usable_count: usableCounts.get(category.id as string) ?? 0,
+    unavailable_count:
+      (counts.get(category.id as string) ?? 0) - (usableCounts.get(category.id as string) ?? 0),
   }));
 }
 
@@ -1795,25 +1808,25 @@ export async function groupCategoryDetail(ctx: AuthContext, id: string) {
       Array.isArray(m.discovered_groups) ? m.discovered_groups[0] : m.discovered_groups,
     )
     .filter(Boolean);
-  return { category, groups };
+  const usableCount = groups.filter(
+    (g) => g.can_send_messages === true && g.writable_status === "WRITABLE",
+  ).length;
+  return {
+    category,
+    groups,
+    usable_count: usableCount,
+    unavailable_count: groups.length - usableCount,
+  };
 }
 
 async function applySuccessfulSendWritableProof(ctx: AuthContext) {
   const client = db();
-  const { data: jobs } = await client
-    .from("campaign_jobs")
-    .select("target_id")
-    .eq("tenant_id", ctx.tenantId)
-    .eq("job_type", "GROUP")
-    .eq("status", "SENT")
-    .limit(5000);
-  const targetIds = [...new Set((jobs ?? []).map((job) => job.target_id as string).filter(Boolean))];
-  if (!targetIds.length) return 0;
   const { data: targets } = await client
     .from("campaign_groups")
     .select("group_id")
     .eq("tenant_id", ctx.tenantId)
-    .in("id", targetIds);
+    .eq("status", "SENT")
+    .limit(5000);
   const groupIds = [...new Set((targets ?? []).map((target) => target.group_id as string).filter(Boolean))];
   if (!groupIds.length) return 0;
   const { error } = await client
@@ -1824,8 +1837,7 @@ async function applySuccessfulSendWritableProof(ctx: AuthContext) {
       updated_at: new Date().toISOString(),
     })
     .eq("tenant_id", ctx.tenantId)
-    .in("id", groupIds)
-    .neq("writable_status", "NOT_WRITABLE");
+    .in("id", groupIds);
   if (error) throw new Error(error.message);
   return groupIds.length;
 }
@@ -2206,6 +2218,8 @@ export async function createCampaign(
 ) {
   const client = db();
   let groupIds = [...new Set(input.group_ids ?? [])];
+  let categoryGroupCount = 0;
+  let categoryUnavailableCount = 0;
   if (input.group_category_id) {
     const { data: category } = await client
       .from("group_categories")
@@ -2220,6 +2234,7 @@ export async function createCampaign(
       .eq("tenant_id", ctx.tenantId)
       .eq("category_id", input.group_category_id);
     groupIds = [...new Set((members ?? []).map((m) => m.group_id as string))];
+    categoryGroupCount = groupIds.length;
   }
   const minDelay = Math.max(1, Number(input.min_delay_seconds ?? 30));
   const maxDelay = Math.max(1, Number(input.max_delay_seconds ?? 60));
@@ -2246,7 +2261,12 @@ export async function createCampaign(
       .eq("writable_status", "WRITABLE");
     writableGroups = ((groups ?? []) as { id: string }[]);
     groupIds = writableGroups.map((g) => g.id);
-    if (!groupIds.length) throw new Error("Selected category has no confirmed writable groups.");
+    categoryUnavailableCount = Math.max(categoryGroupCount - groupIds.length, 0);
+    if (!groupIds.length) {
+      throw new Error(
+        "Selected category has no confirmed writable groups. Run TEST WRITABLE GROUPS with a connected session.",
+      );
+    }
   }
 
   const tenant = await tenantOverview(ctx);
@@ -2351,7 +2371,13 @@ export async function createCampaign(
     campaign_id: campaign.id,
     level: "INFO",
     message: "Campaign approved and jobs created.",
-    details: { groups: groupCount, recipients: recipientCount, connection_id: connection.id },
+    details: {
+      groups: groupCount,
+      recipients: recipientCount,
+      connection_id: connection.id,
+      category_groups: categoryGroupCount || groupCount,
+      unavailable_groups: categoryUnavailableCount,
+    },
   });
   await clientConnectionUsed(ctx.tenantId, connection.id as string);
 
