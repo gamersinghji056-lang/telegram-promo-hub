@@ -112,10 +112,14 @@ function userPresence(user: Api.User) {
 function channelWritable(entity: Api.Channel) {
   const row = entity as Api.Channel & {
     creator?: boolean;
+    left?: boolean;
     adminRights?: { postMessages?: boolean } | null;
+    bannedRights?: { sendMessages?: boolean } | null;
     defaultBannedRights?: { sendMessages?: boolean } | null;
   };
+  if (row.left) return false;
   if (row.broadcast && !row.creator && !row.adminRights?.postMessages) return false;
+  if (row.bannedRights?.sendMessages) return false;
   if (row.defaultBannedRights?.sendMessages) return false;
   return true;
 }
