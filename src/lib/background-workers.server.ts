@@ -6,7 +6,6 @@ import {
 } from "./customer-data.server";
 
 declare global {
-  // eslint-disable-next-line no-var
   var __wpayBackgroundWorkersStarted: boolean | undefined;
 }
 

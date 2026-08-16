@@ -1247,7 +1247,7 @@ export async function processBulkJoinJobs(limit = 2) {
   let processed = 0;
   for (const state of states ?? []) {
     const ids = (state.group_ids ?? []) as string[];
-    let index = Number(state.current_index ?? 0);
+    const index = Number(state.current_index ?? 0);
     if (!state.connection_id || index >= ids.length) {
       await db()
         .from("bulk_join_states")
@@ -1374,7 +1374,22 @@ function normalizeAudienceOptions(
   };
 }
 
-function applyAudienceFilters(query: any, options: Required<AudienceQueryOptions>) {
+type AudienceQueryBuilder = {
+  eq: (column: string, value: unknown) => AudienceQueryBuilder;
+  in: (column: string, values: unknown[]) => AudienceQueryBuilder;
+  gt: (column: string, value: unknown) => AudienceQueryBuilder;
+  neq: (column: string, value: unknown) => AudienceQueryBuilder;
+  or: (filters: string) => AudienceQueryBuilder;
+  order: (
+    column: string,
+    options?: { ascending?: boolean; nullsFirst?: boolean },
+  ) => AudienceQueryBuilder;
+};
+
+function applyAudienceFilters(
+  query: AudienceQueryBuilder,
+  options: Required<AudienceQueryOptions>,
+) {
   let q = query.eq("eligibility", "OPTED_IN");
   if (options.groupIds.length) q = q.in("source_group_id", options.groupIds);
   if (options.onlyNew) q = q.eq("contact_count", 0);
@@ -1391,7 +1406,7 @@ function applyAudienceFilters(query: any, options: Required<AudienceQueryOptions
   return q;
 }
 
-function orderAudience(query: any) {
+function orderAudience(query: AudienceQueryBuilder) {
   return query
     .order("has_username", { ascending: false, nullsFirst: false })
     .order("messages_observed", { ascending: false, nullsFirst: false })

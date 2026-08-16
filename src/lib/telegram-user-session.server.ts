@@ -303,7 +303,7 @@ export async function startUserSessionLogin(
   const phone = normalizePhone(input.phone);
   const masked = maskPhone(phone);
   const clientDb = db();
-  let targetId = input.connectionId ?? null;
+  const targetId = input.connectionId ?? null;
   let duplicateId: string | null = null;
   if (targetId) {
     await ownedConnection(ctx, targetId);
