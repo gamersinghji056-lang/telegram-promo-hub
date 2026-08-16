@@ -2290,6 +2290,7 @@ export async function createCampaign(
     min_delay_seconds?: number | null;
     max_delay_seconds?: number | null;
     cycle_delay_minutes?: number | null;
+    bypass_writable_check?: boolean;
   },
 ) {
   const client = db();
@@ -2325,22 +2326,26 @@ export async function createCampaign(
     throw new Error("Select at least one recipient.");
   const connection = await requireConnection(ctx, input.connection_id);
 
-  let writableGroups: { id: string }[] = [];
+  let campaignGroups: { id: string }[] = [];
   if (input.type === "GROUP" && groupIds.length) {
-    const { data: groups } = await client
+    let groupQuery = client
       .from("discovered_groups")
       .select("id")
       .eq("tenant_id", ctx.tenantId)
       .in("id", groupIds)
-      .in("status", ["APPROVED", "JOINED"])
-      .eq("can_send_messages", true)
-      .eq("writable_status", "WRITABLE");
-    writableGroups = ((groups ?? []) as { id: string }[]);
-    groupIds = writableGroups.map((g) => g.id);
+      .in("status", ["APPROVED", "JOINED"]);
+    groupQuery = input.bypass_writable_check
+      ? groupQuery.or("writable_status.is.null,writable_status.neq.INACCESSIBLE")
+      : groupQuery.eq("can_send_messages", true).eq("writable_status", "WRITABLE");
+    const { data: groups } = await groupQuery;
+    campaignGroups = ((groups ?? []) as { id: string }[]);
+    groupIds = campaignGroups.map((g) => g.id);
     categoryUnavailableCount = Math.max(categoryGroupCount - groupIds.length, 0);
     if (!groupIds.length) {
       throw new Error(
-        "Selected category has no confirmed writable groups. Run TEST WRITABLE GROUPS with a connected session.",
+        input.bypass_writable_check
+          ? "Selected category has no approved accessible groups to try."
+          : "Selected category has no confirmed writable groups. Run TEST WRITABLE GROUPS with a connected session.",
       );
     }
   }
@@ -2382,11 +2387,11 @@ export async function createCampaign(
   if (error || !campaign) throw new Error(error?.message ?? "Could not create the campaign.");
 
   if (groupIds.length) {
-    const rows = writableGroups.map((g) => ({
+    const rows = campaignGroups.map((g) => ({
       campaign_id: campaign.id,
       tenant_id: ctx.tenantId,
       group_id: g.id,
-      status: "PENDING",
+      status: input.bypass_writable_check ? "PENDING_BYPASS" : "PENDING",
     }));
     if (rows.length)
       await client.from("campaign_groups").upsert(rows, { onConflict: "campaign_id,group_id" });

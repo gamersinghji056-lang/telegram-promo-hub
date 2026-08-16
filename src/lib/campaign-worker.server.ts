@@ -133,8 +133,12 @@ async function resolveTarget(job: JobRow) {
     if (!data || !group) throw new Error("Group target not found.");
     if (!["APPROVED", "JOINED"].includes(String(group.status)))
       throw new Error("Group is not approved.");
-    if (group.can_send_messages === false || group.writable_status === "NOT_WRITABLE") {
+    const bypassWritableCheck = data.status === "PENDING_BYPASS";
+    if (!bypassWritableCheck && (group.can_send_messages === false || group.writable_status === "NOT_WRITABLE")) {
       throw new Error("NOT_WRITABLE: selected session cannot post to this group/channel.");
+    }
+    if (group.writable_status === "INACCESSIBLE") {
+      throw new Error("ENTITY_UNAVAILABLE: group is inaccessible.");
     }
     return {
       kind: "GROUP" as const,

@@ -351,6 +351,7 @@ export const createCampaign = createServerFn({ method: "POST" })
         min_delay_seconds?: number | null;
         max_delay_seconds?: number | null;
         cycle_delay_minutes?: number | null;
+        bypass_writable_check?: boolean;
       },
     ) => i,
   )

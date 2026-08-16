@@ -406,10 +406,24 @@ function MiniAppSection() {
     const focusSelector = "input, textarea, select, [contenteditable='true']";
     const telegram = (
       window as unknown as {
-        Telegram?: { WebApp?: { viewportHeight?: number; viewportStableHeight?: number } };
+        Telegram?: {
+          WebApp?: {
+            viewportHeight?: number;
+            viewportStableHeight?: number;
+            onEvent?: (event: string, handler: () => void) => void;
+            offEvent?: (event: string, handler: () => void) => void;
+          };
+        };
       }
     ).Telegram?.WebApp;
     let lastFocused: HTMLElement | null = null;
+    const layoutHeight = () =>
+      Math.max(
+        window.innerHeight,
+        window.visualViewport?.height ?? 0,
+        Number(telegram?.viewportStableHeight ?? 0),
+        Number(telegram?.viewportHeight ?? 0),
+      );
     const scrollFocusedIntoView = (active: HTMLElement) => {
       const viewport = window.visualViewport;
       const viewportTop = viewport?.offsetTop ?? 0;
@@ -421,7 +435,7 @@ function MiniAppSection() {
       const bottomGuard = viewportTop + viewportHeight - navHeight - 18;
       const rect = active.getBoundingClientRect();
       if (rect.bottom > bottomGuard) {
-        window.scrollBy({ top: rect.bottom - bottomGuard, behavior: "smooth" });
+        window.scrollBy({ top: rect.bottom - bottomGuard + 16, behavior: "smooth" });
       } else if (rect.top < topGuard) {
         window.scrollBy({ top: rect.top - topGuard, behavior: "smooth" });
       }
@@ -429,14 +443,29 @@ function MiniAppSection() {
     const updateViewportPadding = () => {
       const viewport = window.visualViewport;
       const visualBottom = viewport ? viewport.height + viewport.offsetTop : window.innerHeight;
+      const stableHeight =
+        typeof telegram?.viewportStableHeight === "number" && telegram.viewportStableHeight > 0
+          ? telegram.viewportStableHeight
+          : layoutHeight();
       const telegramHeight =
         typeof telegram?.viewportHeight === "number" && telegram.viewportHeight > 0
           ? telegram.viewportHeight
           : window.innerHeight;
-      const inset = Math.max(0, window.innerHeight - visualBottom, window.innerHeight - telegramHeight);
+      const inset = Math.max(
+        0,
+        layoutHeight() - visualBottom,
+        stableHeight - telegramHeight,
+        stableHeight - (viewport?.height ?? telegramHeight) - (viewport?.offsetTop ?? 0),
+      );
       const focused = document.activeElement instanceof HTMLElement && document.activeElement.matches(focusSelector);
       const keyboardOpen = focused && inset > 40;
-      root.style.setProperty("--miniapp-keyboard-inset", `${Math.ceil(keyboardOpen ? inset : 0)}px`);
+      const navHeight = Number.parseFloat(
+        getComputedStyle(root).getPropertyValue("--miniapp-bottom-nav-height") || "72",
+      );
+      root.style.setProperty(
+        "--miniapp-keyboard-inset",
+        `${Math.ceil(keyboardOpen ? inset + navHeight + 96 : 0)}px`,
+      );
       root.style.setProperty("--miniapp-nav-translate", keyboardOpen ? "110%" : "0px");
       const active = document.activeElement;
       if (active instanceof HTMLElement && active.matches(focusSelector)) {
@@ -454,6 +483,7 @@ function MiniAppSection() {
         event.target.style.scrollMarginBottom = "calc(7rem + var(--miniapp-keyboard-inset, 0px))";
         window.setTimeout(updateViewportPadding, 60);
         window.setTimeout(updateViewportPadding, 260);
+        window.setTimeout(() => scrollFocusedIntoView(event.target as HTMLElement), 360);
       }
     };
     const onBlur = () => {
@@ -465,12 +495,14 @@ function MiniAppSection() {
     window.visualViewport?.addEventListener("scroll", updateViewportPadding);
     window.addEventListener("focusin", onFocus);
     window.addEventListener("focusout", onBlur);
+    telegram?.onEvent?.("viewportChanged", updateViewportPadding);
     updateViewportPadding();
     return () => {
       window.visualViewport?.removeEventListener("resize", updateViewportPadding);
       window.visualViewport?.removeEventListener("scroll", updateViewportPadding);
       window.removeEventListener("focusin", onFocus);
       window.removeEventListener("focusout", onBlur);
+      telegram?.offEvent?.("viewportChanged", updateViewportPadding);
       root.style.removeProperty("--miniapp-keyboard-inset");
       root.style.removeProperty("--miniapp-nav-translate");
     };
@@ -2305,8 +2337,7 @@ function GroupCampaign({ auth, data, actions, reload, setNotice, actionBusy, run
   const [minDelay, setMinDelay] = useState(30);
   const [maxDelay, setMaxDelay] = useState(60);
   const [cycleDelay, setCycleDelay] = useState(20);
-  async function submit(e: FormEvent) {
-    e.preventDefault();
+  async function submitCampaign(bypassWritableCheck = false) {
     const buttons = buttonText && buttonUrl ? [{ text: buttonText, url: buttonUrl }] : [];
     await runAction("create-group-campaign", async () => {
       await actions.createCampaign({
@@ -2329,12 +2360,23 @@ function GroupCampaign({ auth, data, actions, reload, setNotice, actionBusy, run
           min_delay_seconds: minDelay,
           max_delay_seconds: maxDelay,
           cycle_delay_minutes: cycleDelay,
+          bypass_writable_check: bypassWritableCheck,
         },
       });
-      setNotice(scheduledAt ? "Group campaign scheduled." : "Group campaign queued.");
+      setNotice(
+        bypassWritableCheck
+          ? "Group campaign queued without pre-check."
+          : scheduledAt
+            ? "Group campaign scheduled."
+            : "Group campaign queued.",
+      );
       await reload();
       setCreateMode(false);
     });
+  }
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    await submitCampaign(false);
   }
   if (!createMode) {
     const rows = data?.campaigns ?? [];
@@ -2427,6 +2469,15 @@ function GroupCampaign({ auth, data, actions, reload, setNotice, actionBusy, run
         disabled={!connectionId || !categoryId || (!message && !mediaUrl) || minDelay > maxDelay || actionBusy === "create-group-campaign"}
       >
         {actionBusy === "create-group-campaign" ? "Queuing..." : "APPROVE AND QUEUE"}
+      </Button>
+      <Button
+        className="w-full"
+        type="button"
+        variant="secondary"
+        disabled={!connectionId || !categoryId || (!message && !mediaUrl) || minDelay > maxDelay || actionBusy === "create-group-campaign"}
+        onClick={() => submitCampaign(true)}
+      >
+        {actionBusy === "create-group-campaign" ? "Queuing..." : "CREATE CAMPAIGN WITHOUT WRITABLE CHECK"}
       </Button>
     </form>
   );
