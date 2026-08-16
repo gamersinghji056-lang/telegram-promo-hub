@@ -38,13 +38,32 @@ function credentials() {
 
 function clientFromSession(session: string) {
   const { apiId, apiHash } = credentials();
-  return new TelegramClient(new StringSession(session), apiId, apiHash, {
+  const client = new TelegramClient(new StringSession(session), apiId, apiHash, {
     connectionRetries: CONNECTION_RETRIES,
   });
+  // Server operations are request/response only. GramJS starts a background
+  // update loop on connect by default, which kept logging TIMEOUTs after jobs.
+  (client as unknown as { _loopStarted?: boolean })._loopStarted = true;
+  return client;
 }
 
 function savedSession(client: TelegramClient) {
   return (client.session as StringSession).save();
+}
+
+async function disconnectClient(
+  client: TelegramClient,
+  context: { tenantId?: string | null; connectionId?: string | null } = {},
+) {
+  try {
+    await client.disconnect();
+  } catch (error) {
+    console.warn("SESSION_DISCONNECT_IGNORED", {
+      tenantId: context.tenantId ?? null,
+      connectionId: context.connectionId ?? null,
+      reason: errorMessage(error),
+    });
+  }
 }
 
 function maskPhone(phone: string) {
@@ -363,7 +382,7 @@ export async function startUserSessionLogin(
     });
     return { connection: data, step: "CODE" as const, isCodeViaApp: sent.isCodeViaApp };
   } finally {
-    await client.disconnect();
+    await disconnectClient(client, { tenantId: ctx.tenantId, connectionId: targetId ?? null });
   }
 }
 
@@ -449,7 +468,7 @@ export async function completeUserSessionCode(
     }
     throw new Error(errorMessage(error));
   } finally {
-    await client.disconnect();
+    await disconnectClient(client, { tenantId: ctx.tenantId, connectionId: input.connectionId });
   }
 }
 
@@ -475,7 +494,7 @@ export async function completeUserSessionPassword(
   } catch (error) {
     throw new Error(errorMessage(error));
   } finally {
-    await client.disconnect();
+    await disconnectClient(client, { tenantId: ctx.tenantId, connectionId: input.connectionId });
   }
 }
 
@@ -525,7 +544,7 @@ export async function checkUserSession(ctx: AuthContext, connectionId: string) {
     }
     return { ok: false as const, error: message };
   } finally {
-    await client.disconnect();
+    await disconnectClient(client, { tenantId: ctx.tenantId, connectionId });
   }
 }
 
@@ -616,7 +635,7 @@ export async function withAuthorizedUserClient<T>(
     }
     throw error;
   } finally {
-    await client.disconnect();
+    await disconnectClient(client, { tenantId, connectionId });
   }
 }
 

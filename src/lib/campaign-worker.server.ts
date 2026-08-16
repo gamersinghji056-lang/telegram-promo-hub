@@ -61,8 +61,7 @@ function classifyTelegramError(error: string, jobType?: JobRow["job_type"]) {
     lower.includes("auth_key") ||
     lower.includes("session_revoked") ||
     lower.includes("session_expired") ||
-    lower.includes("user_restricted") ||
-    lower.includes("account")
+    lower.includes("user_restricted")
   ) {
     return "RESTRICTED";
   }
@@ -116,9 +115,6 @@ async function verifyConnection(tenantId: string, connectionId: string | null) {
   }
   if (data.cooldown_until && new Date(data.cooldown_until as string) > new Date()) {
     throw new Error(`COOLDOWN_UNTIL:${data.cooldown_until}`);
-  }
-  if (["RESTRICTED", "REQUIRES_ACTION"].includes(String(data.restriction_status ?? ""))) {
-    throw new Error("Sending session requires attention.");
   }
 }
 
