@@ -12,6 +12,7 @@ import {
   joinGroupViaUserSession,
   resolvePublicGroupViaUserSession,
   searchPublicGroupsViaUserSession,
+  startUserSessionReconnect,
   startUserSessionLogin,
   testGroupWritableViaUserSession,
   verifyGroupWritableViaUserSession,
@@ -366,6 +367,10 @@ export async function startConnectionLogin(
   input: { label: string; phone: string },
 ) {
   return startUserSessionLogin(ctx, input);
+}
+
+export async function reconnectConnection(ctx: AuthContext, connectionId: string) {
+  return startUserSessionReconnect(ctx, { connectionId });
 }
 
 export async function verifyConnectionCode(

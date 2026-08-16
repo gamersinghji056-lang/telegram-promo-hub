@@ -14,10 +14,12 @@ type ConnectionRow = {
   id: string;
   tenant_id: string;
   label: string;
+  account_name?: string | null;
   encrypted_session?: string | null;
   pending_session?: string | null;
   pending_phone?: string | null;
   phone_code_hash?: string | null;
+  phone_masked?: string | null;
   status: string;
   cooldown_until?: string | null;
   health?: string | null;
@@ -232,15 +234,13 @@ async function saveConnectedProfile(
   connectionId: string,
   client: TelegramClient,
   user: Api.User,
+  phone?: string | null,
 ) {
   const session = savedSession(client);
   const fullName = [user.firstName, user.lastName].filter(Boolean).join(" ").trim();
-  const { data, error } = await db()
-    .from("telegram_connections")
-    .update({
-      encrypted_session: encryptSecret(session),
+  const patch: Record<string, unknown> = {
+    encrypted_session: encryptSecret(session),
       pending_session: null,
-      pending_phone: null,
       phone_code_hash: null,
       auth_step: null,
       telegram_id: Number(user.id),
@@ -255,7 +255,14 @@ async function saveConnectedProfile(
       last_active_at: new Date().toISOString(),
       last_sync_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
-    })
+  };
+  if (phone) {
+    patch.pending_phone = encryptSecret(phone);
+    patch.phone_masked = maskPhone(phone);
+  }
+  const { data, error } = await db()
+    .from("telegram_connections")
+    .update(patch)
     .eq("id", connectionId)
     .eq("tenant_id", ctx.tenantId)
     .select(publicFields())
@@ -272,21 +279,48 @@ async function saveConnectedProfile(
 
 export async function startUserSessionLogin(
   ctx: AuthContext,
-  input: { label: string; phone: string },
+  input: { label: string; phone: string; connectionId?: string | null },
 ) {
-  await ensureLimit(ctx);
   const phone = normalizePhone(input.phone);
+  const masked = maskPhone(phone);
+  const clientDb = db();
+  let targetId = input.connectionId ?? null;
+  let duplicateId: string | null = null;
+  if (targetId) {
+    await ownedConnection(ctx, targetId);
+    const { data: sameMasked } = await clientDb
+      .from("telegram_connections")
+      .select("id, pending_phone")
+      .eq("tenant_id", ctx.tenantId)
+      .eq("phone_masked", masked)
+      .neq("id", targetId);
+    for (const row of sameMasked ?? []) {
+      if (decryptSecret(row.pending_phone) === phone) duplicateId = String(row.id);
+    }
+  } else {
+    await ensureLimit(ctx);
+    const { data: existingRows } = await clientDb
+      .from("telegram_connections")
+      .select("id, pending_phone, phone_masked")
+      .eq("tenant_id", ctx.tenantId)
+      .eq("phone_masked", masked)
+      .limit(20);
+    for (const row of existingRows ?? []) {
+      const storedPhone = decryptSecret(row.pending_phone);
+      if (storedPhone === phone || (!storedPhone && row.phone_masked === masked)) {
+        throw new Error("This Telegram account already exists. Use Reconnect.");
+      }
+    }
+  }
   const client = clientFromSession("");
   await client.connect();
   try {
     const sent = await client.sendCode(credentials(), phone);
     const pendingSession = savedSession(client);
-    const { data, error } = await db()
-      .from("telegram_connections")
-      .insert({
+    const patch = {
         tenant_id: ctx.tenantId,
         label: input.label.trim() || "Telegram account",
-        phone_masked: maskPhone(phone),
+        phone_masked: masked,
         pending_phone: encryptSecret(phone),
         pending_session: encryptSecret(pendingSession),
         phone_code_hash: sent.phoneCodeHash,
@@ -295,10 +329,33 @@ export async function startUserSessionLogin(
         health: "REQUIRES_CODE",
         restriction_status: "NONE",
         error_message: null,
-      })
+        updated_at: new Date().toISOString(),
+      };
+    const query = targetId
+      ? clientDb
+          .from("telegram_connections")
+          .update({
+            ...patch,
+            encrypted_session: null,
+            username: null,
+            telegram_id: null,
+            telegram_user_id: null,
+            account_name: input.label.trim() || "Telegram account",
+          })
+          .eq("id", targetId)
+          .eq("tenant_id", ctx.tenantId)
+      : clientDb.from("telegram_connections").insert(patch);
+    const { data, error } = await query
       .select(publicFields())
       .single();
     if (error) throw new Error(error.message);
+    if (duplicateId) {
+      await clientDb
+        .from("telegram_connections")
+        .delete()
+        .eq("id", duplicateId)
+        .eq("tenant_id", ctx.tenantId);
+    }
     await logSystem({
       tenant_id: ctx.tenantId,
       customer_id: ctx.customerId,
@@ -308,6 +365,37 @@ export async function startUserSessionLogin(
   } finally {
     await client.disconnect();
   }
+}
+
+export async function startUserSessionReconnect(
+  ctx: AuthContext,
+  input: { connectionId: string },
+) {
+  const connection = await ownedConnection(ctx, input.connectionId);
+  let phone = decryptSecret(connection.pending_phone);
+  if (!phone && connection.phone_masked) {
+    const { data: sameMasked } = await db()
+      .from("telegram_connections")
+      .select("id, pending_phone")
+      .eq("tenant_id", ctx.tenantId)
+      .eq("phone_masked", connection.phone_masked)
+      .neq("id", input.connectionId);
+    for (const row of sameMasked ?? []) {
+      const candidate = decryptSecret(row.pending_phone);
+      if (candidate) {
+        phone = candidate;
+        break;
+      }
+    }
+  }
+  if (!phone) {
+    throw new Error("Saved phone number is missing. Delete this session and add it again.");
+  }
+  return startUserSessionLogin(ctx, {
+    label: String(connection.label ?? connection.account_name ?? "Telegram account"),
+    phone,
+    connectionId: input.connectionId,
+  });
 }
 
 export async function completeUserSessionCode(
@@ -339,6 +427,7 @@ export async function completeUserSessionCode(
         input.connectionId,
         client,
         result.user as Api.User,
+        phone,
       ),
       step: "CONNECTED" as const,
     };
@@ -380,7 +469,7 @@ export async function completeUserSessionPassword(
       onError: async () => true,
     })) as Api.User;
     return {
-      connection: await saveConnectedProfile(ctx, input.connectionId, client, user),
+      connection: await saveConnectedProfile(ctx, input.connectionId, client, user, decryptSecret(connection.pending_phone)),
       step: "CONNECTED" as const,
     };
   } catch (error) {
@@ -446,7 +535,6 @@ export async function disconnectUserSession(ctx: AuthContext, connectionId: stri
     .update({
       encrypted_session: null,
       pending_session: null,
-      pending_phone: null,
       phone_code_hash: null,
       auth_step: null,
       status: "DISCONNECTED",

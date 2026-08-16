@@ -69,6 +69,10 @@ export const checkConnection = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { id: string }) => i)
   .handler(async ({ data: i }) => data.checkConnection(await resolveAuth(i.auth), i.id));
 
+export const reconnectConnection = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { id: string }) => i)
+  .handler(async ({ data: i }) => data.reconnectConnection(await resolveAuth(i.auth), i.id));
+
 export const disconnectConnection = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { id: string }) => i)
   .handler(async ({ data: i }) => {

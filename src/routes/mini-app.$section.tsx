@@ -59,7 +59,9 @@ import {
   getNotifications,
   getOwnActivity,
   rejectGroup,
+  reconnectConnection,
   removeKeyword,
+  removeConnection,
   removeGroup,
   runGroupDiscovery,
   pauseGroupDiscovery,
@@ -210,7 +212,9 @@ function MiniAppSection() {
     verifyConnectionCode: useServerFn(verifyConnectionCode),
     verifyConnectionPassword: useServerFn(verifyConnectionPassword),
     checkConnection: useServerFn(checkConnection),
+    reconnectConnection: useServerFn(reconnectConnection),
     disconnectConnection: useServerFn(disconnectConnection),
+    removeConnection: useServerFn(removeConnection),
     addKeyword: useServerFn(addKeyword),
     removeKeyword: useServerFn(removeKeyword),
     runGroupDiscovery: useServerFn(runGroupDiscovery),
@@ -735,9 +739,27 @@ function Sessions({ auth, data, actions, reload, setNotice, actionBusy, runActio
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
   const [step, setStep] = useState<"PHONE" | "CODE" | "PASSWORD">("PHONE");
+  const [cardAuth, setCardAuth] = useState<Record<string, { step: "CODE" | "PASSWORD"; code: string; password: string }>>({});
+  const [cardMessage, setCardMessage] = useState<Record<string, string>>({});
+  const [localBusy, setLocalBusy] = useState("");
+  const busy = localBusy || actionBusy;
+  async function sessionAction(key: string, connectionKey: string, fn: () => Promise<void>) {
+    setLocalBusy(key);
+    setCardMessage((current) => ({ ...current, [connectionKey]: "" }));
+    try {
+      await fn();
+    } catch (error) {
+      setCardMessage((current) => ({
+        ...current,
+        [connectionKey]: error instanceof Error ? error.message : "Action failed.",
+      }));
+    } finally {
+      setLocalBusy("");
+    }
+  }
   async function submit(e: FormEvent) {
     e.preventDefault();
-    await runAction("send-code", async () => {
+    await sessionAction("send-code", "new", async () => {
       const result = await actions.startConnectionLogin({ data: { auth, label, phone } });
       setConnectionId(result.connection.id);
       setStep("CODE");
@@ -747,7 +769,7 @@ function Sessions({ auth, data, actions, reload, setNotice, actionBusy, runActio
   }
   async function verifyCode(e: FormEvent) {
     e.preventDefault();
-    await runAction("verify-code", async () => {
+    await sessionAction("verify-code", connectionId || "new", async () => {
       const result = await actions.verifyConnectionCode({ data: { auth, connectionId, code } });
       if (result.step === "PASSWORD") {
         setStep("PASSWORD");
@@ -765,7 +787,7 @@ function Sessions({ auth, data, actions, reload, setNotice, actionBusy, runActio
   }
   async function verifyPassword(e: FormEvent) {
     e.preventDefault();
-    await runAction("verify-password", async () => {
+    await sessionAction("verify-password", connectionId || "new", async () => {
       await actions.verifyConnectionPassword({ data: { auth, connectionId, password } });
       setStep("PHONE");
       setPhone("");
@@ -777,9 +799,71 @@ function Sessions({ auth, data, actions, reload, setNotice, actionBusy, runActio
     });
   }
   async function check(id: string) {
-    await runAction(`check-${id}`, async () => {
+    await sessionAction(`check-${id}`, id, async () => {
       const result = await actions.checkConnection({ data: { auth, id } });
-      setNotice(result.ok ? "Session is connected." : result.error);
+      setCardMessage((current) => ({
+        ...current,
+        [id]: result.ok ? "HEALTHY" : result.error || "DISCONNECTED",
+      }));
+      await reload();
+    });
+  }
+  async function reconnect(row: any) {
+    await sessionAction(`reconnect-${row.id}`, row.id, async () => {
+      const result = await actions.reconnectConnection({ data: { auth, id: row.id } });
+      setCardAuth((current) => ({
+        ...current,
+        [row.id]: { step: result.step === "PASSWORD" ? "PASSWORD" : "CODE", code: "", password: "" },
+      }));
+      setCardMessage((current) => ({
+        ...current,
+        [row.id]: `Code sent to ${result.connection?.phone_masked ?? row.phone_masked ?? "saved phone"}.`,
+      }));
+      await reload();
+    });
+  }
+  async function verifyCardCode(row: any, e: FormEvent) {
+    e.preventDefault();
+    const state = cardAuth[row.id] ?? { step: "CODE", code: "", password: "" };
+    await sessionAction(`verify-code-${row.id}`, row.id, async () => {
+      const result = await actions.verifyConnectionCode({ data: { auth, connectionId: row.id, code: state.code } });
+      if (result.step === "PASSWORD") {
+        setCardAuth((current) => ({ ...current, [row.id]: { ...state, step: "PASSWORD", password: "" } }));
+        setCardMessage((current) => ({ ...current, [row.id]: "Telegram requires your 2FA password." }));
+        return;
+      }
+      setCardAuth((current) => {
+        const next = { ...current };
+        delete next[row.id];
+        return next;
+      });
+      setCardMessage((current) => ({ ...current, [row.id]: "HEALTHY" }));
+      await reload();
+    });
+  }
+  async function verifyCardPassword(row: any, e: FormEvent) {
+    e.preventDefault();
+    const state = cardAuth[row.id] ?? { step: "PASSWORD", code: "", password: "" };
+    await sessionAction(`verify-password-${row.id}`, row.id, async () => {
+      await actions.verifyConnectionPassword({ data: { auth, connectionId: row.id, password: state.password } });
+      setCardAuth((current) => {
+        const next = { ...current };
+        delete next[row.id];
+        return next;
+      });
+      setCardMessage((current) => ({ ...current, [row.id]: "HEALTHY" }));
+      await reload();
+    });
+  }
+  async function cancelCard(row: any) {
+    await sessionAction(`cancel-${row.id}`, row.id, async () => {
+      await actions.disconnectConnection({ data: { auth, id: row.id } });
+      setCardAuth((current) => {
+        const next = { ...current };
+        delete next[row.id];
+        return next;
+      });
+      setCardMessage((current) => ({ ...current, [row.id]: "Reconnect cancelled." }));
       await reload();
     });
   }
@@ -805,8 +889,9 @@ function Sessions({ auth, data, actions, reload, setNotice, actionBusy, runActio
             placeholder="+15551234567"
             inputMode="tel"
           />
-          <Button type="submit" className="w-full" disabled={!phone || actionBusy === "send-code"}>
-            <Plus className="mr-2 size-4" /> {actionBusy === "send-code" ? "Sending..." : "SEND CODE"}
+          {cardMessage.new ? <p className="text-sm text-warning">{cardMessage.new}</p> : null}
+          <Button type="submit" className="w-full" disabled={!phone || busy === "send-code"}>
+            <Plus className="mr-2 size-4" /> {busy === "send-code" ? "Sending..." : "SEND CODE"}
           </Button>
         </form>
       ) : null}
@@ -820,8 +905,8 @@ function Sessions({ auth, data, actions, reload, setNotice, actionBusy, runActio
             placeholder="Login code"
             inputMode="numeric"
           />
-          <Button type="submit" className="w-full" disabled={!code || actionBusy === "verify-code"}>
-            {actionBusy === "verify-code" ? "Verifying..." : "VERIFY CODE"}
+          <Button type="submit" className="w-full" disabled={!code || busy === "verify-code"}>
+            {busy === "verify-code" ? "Verifying..." : "VERIFY CODE"}
           </Button>
         </form>
       ) : null}
@@ -835,13 +920,21 @@ function Sessions({ auth, data, actions, reload, setNotice, actionBusy, runActio
             placeholder="2FA password"
             type="password"
           />
-          <Button type="submit" className="w-full" disabled={!password || actionBusy === "verify-password"}>
-            {actionBusy === "verify-password" ? "Connecting..." : "CONNECT SESSION"}
+          <Button type="submit" className="w-full" disabled={!password || busy === "verify-password"}>
+            {busy === "verify-password" ? "Connecting..." : "CONNECT SESSION"}
           </Button>
         </form>
       ) : null}
       <div className="space-y-3">
-        {rows.map((row: any) => (
+        {rows.map((row: any) => {
+          const authState =
+            cardAuth[row.id] ??
+            (row.status === "AUTH_CODE_SENT" || row.health === "REQUIRES_CODE"
+              ? { step: "CODE" as const, code: "", password: "" }
+              : row.status === "TWO_FACTOR_REQUIRED"
+                ? { step: "PASSWORD" as const, code: "", password: "" }
+                : null);
+          return (
           <article key={row.id} className={panelClass()}>
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -870,30 +963,96 @@ function Sessions({ auth, data, actions, reload, setNotice, actionBusy, runActio
               <p>Restriction: {row.restriction_status ?? "NONE"}</p>
               <p>{row.restriction_reason ?? row.error_message ?? "No errors"}</p>
             </div>
+            {cardMessage[row.id] ? (
+              <p className="mt-3 text-sm font-semibold text-primary">{cardMessage[row.id]}</p>
+            ) : null}
+            {authState?.step === "CODE" ? (
+              <form className="mt-4 space-y-3 border-t border-border pt-3" onSubmit={(e) => verifyCardCode(row, e)}>
+                <p className="text-sm font-semibold">Code sent to {row.phone_masked ?? "saved phone"}</p>
+                <input
+                  className={inputClass()}
+                  value={authState.code}
+                  onChange={(e) =>
+                    setCardAuth((current) => ({
+                      ...current,
+                      [row.id]: { ...authState, code: e.target.value },
+                    }))
+                  }
+                  placeholder="OTP code"
+                  inputMode="numeric"
+                />
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" type="submit" disabled={!authState.code || busy === `verify-code-${row.id}`}>
+                    {busy === `verify-code-${row.id}` ? "Verifying..." : "VERIFY CODE"}
+                  </Button>
+                  <Button size="sm" type="button" variant="secondary" disabled={busy === `reconnect-${row.id}`} onClick={() => reconnect(row)}>
+                    {busy === `reconnect-${row.id}` ? "Sending..." : "RESEND CODE"}
+                  </Button>
+                  <Button size="sm" type="button" variant="secondary" disabled={busy === `cancel-${row.id}`} onClick={() => cancelCard(row)}>
+                    {busy === `cancel-${row.id}` ? "Cancelling..." : "CANCEL"}
+                  </Button>
+                </div>
+              </form>
+            ) : null}
+            {authState?.step === "PASSWORD" ? (
+              <form className="mt-4 space-y-3 border-t border-border pt-3" onSubmit={(e) => verifyCardPassword(row, e)}>
+                <p className="text-sm font-semibold">Telegram 2FA Password</p>
+                <input
+                  className={inputClass()}
+                  value={authState.password}
+                  onChange={(e) =>
+                    setCardAuth((current) => ({
+                      ...current,
+                      [row.id]: { ...authState, password: e.target.value },
+                    }))
+                  }
+                  placeholder="2FA password"
+                  type="password"
+                />
+                <Button size="sm" type="submit" disabled={!authState.password || busy === `verify-password-${row.id}`}>
+                  {busy === `verify-password-${row.id}` ? "Connecting..." : "CONNECT SESSION"}
+                </Button>
+              </form>
+            ) : null}
             <div className="mt-4 flex flex-wrap gap-2">
-              <Button size="sm" variant="secondary" disabled={actionBusy === `check-${row.id}`} onClick={() => check(row.id)}>
-                {actionBusy === `check-${row.id}` ? "Checking..." : "CHECK STATUS"}
+              <Button size="sm" variant="secondary" disabled={busy === `check-${row.id}`} onClick={() => check(row.id)}>
+                {busy === `check-${row.id}` ? "Checking..." : "CHECK STATUS"}
               </Button>
-              <Button size="sm" variant="secondary" disabled={actionBusy === `check-${row.id}`} onClick={() => check(row.id)}>
-                RECONNECT
+              <Button size="sm" variant="secondary" disabled={busy === `reconnect-${row.id}`} onClick={() => reconnect(row)}>
+                {busy === `reconnect-${row.id}` ? "Sending..." : "RECONNECT"}
               </Button>
               <Button
                 size="sm"
                 variant="secondary"
-                disabled={actionBusy === `disconnect-${row.id}`}
+                disabled={busy === `disconnect-${row.id}`}
                 onClick={() =>
-                  runAction(`disconnect-${row.id}`, async () => {
+                  sessionAction(`disconnect-${row.id}`, row.id, async () => {
                     await actions.disconnectConnection({ data: { auth, id: row.id } });
-                    setNotice("Session disconnected.");
+                    setCardMessage((current) => ({ ...current, [row.id]: "DISCONNECTED" }));
                     await reload();
                   })
                 }
               >
-                {actionBusy === `disconnect-${row.id}` ? "Disconnecting..." : "DISCONNECT"}
+                {busy === `disconnect-${row.id}` ? "Disconnecting..." : "DISCONNECT"}
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={busy === `delete-${row.id}`}
+                onClick={() => {
+                  if (!confirm("Delete this Telegram session permanently?")) return;
+                  void sessionAction(`delete-${row.id}`, row.id, async () => {
+                    await actions.removeConnection({ data: { auth, id: row.id } });
+                    await reload();
+                  });
+                }}
+              >
+                {busy === `delete-${row.id}` ? "Deleting..." : "DELETE SESSION"}
               </Button>
             </div>
           </article>
-        ))}
+          );
+        })}
         {!rows.length ? <Empty message="No Telegram sessions connected yet." /> : null}
       </div>
     </div>
