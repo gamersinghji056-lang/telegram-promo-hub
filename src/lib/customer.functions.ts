@@ -219,12 +219,15 @@ export const getGroupCategoryDetail = createServerFn({ method: "POST" })
   .handler(async ({ data: i }) => data.groupCategoryDetail(await resolveAuth(i.auth), i.id));
 
 export const saveGroupCategory = createServerFn({ method: "POST" })
-  .inputValidator((i: Auth & { id?: string | null; name: string; group_ids: string[] }) => i)
+  .inputValidator(
+    (i: Auth & { id?: string | null; name: string; group_ids: string[]; bypass_writable_check?: boolean }) => i,
+  )
   .handler(async ({ data: i }) =>
     data.saveGroupCategory(await resolveAuth(i.auth), {
       id: i.id ?? null,
       name: i.name,
       group_ids: i.group_ids,
+      bypass_writable_check: i.bypass_writable_check,
     }),
   );
 

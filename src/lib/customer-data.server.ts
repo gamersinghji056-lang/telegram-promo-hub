@@ -2100,23 +2100,29 @@ export async function testWritableGroups(
 
 export async function saveGroupCategory(
   ctx: AuthContext,
-  input: { id?: string | null; name: string; group_ids: string[] },
+  input: { id?: string | null; name: string; group_ids: string[]; bypass_writable_check?: boolean },
 ) {
   const client = db();
   const name = input.name.trim();
   if (!name) throw new Error("Category name is required.");
   const ids = [...new Set(input.group_ids)];
   if (!ids.length) throw new Error("Select at least one approved group.");
-  const { data: groups } = await client
+  let groupQuery = client
     .from("discovered_groups")
     .select("id, can_send_messages, writable_status, entity_type")
     .eq("tenant_id", ctx.tenantId)
     .in("id", ids)
-    .in("status", ["APPROVED", "JOINED"])
-    .eq("can_send_messages", true)
-    .eq("writable_status", "WRITABLE");
+    .in("status", ["APPROVED", "JOINED"]);
+  if (!input.bypass_writable_check) {
+    groupQuery = groupQuery.eq("can_send_messages", true).eq("writable_status", "WRITABLE");
+  }
+  const { data: groups } = await groupQuery;
   if ((groups ?? []).length !== ids.length) {
-    throw new Error("One or more selected groups are not confirmed writable.");
+    throw new Error(
+      input.bypass_writable_check
+        ? "One or more selected groups are not approved."
+        : "One or more selected groups are not confirmed writable.",
+    );
   }
 
   let categoryId = input.id ?? null;

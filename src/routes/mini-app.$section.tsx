@@ -1667,9 +1667,11 @@ function GroupRows({ groups, connections, bulkJoin, auth, actions, reload, setNo
 
 function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, runAction }: any) {
   const groups = data?.groups ?? [];
+  const approvedGroups = groups.filter((g: any) => ["APPROVED", "JOINED"].includes(g.status));
   const writableGroups = groups.filter(
     (g: any) => g.can_send_messages === true && g.writable_status === "WRITABLE",
   );
+  const notWritableGroups = approvedGroups.filter((g: any) => g.writable_status === "NOT_WRITABLE");
   const testableGroups = groups.filter(
     (g: any) =>
       ["APPROVED", "JOINED"].includes(g.status) &&
@@ -1738,9 +1740,30 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
     });
   }
 
-  function openEditor(category?: any) {
+  async function checkOneWritable(groupId: string) {
+    await runAction(`check-write-${groupId}`, async () => {
+      const response = await actions.testWritableGroups({
+        data: { auth, connectionId: testConnectionId, groupIds: [groupId] },
+      });
+      setTestResult(response);
+      setWritability(response.summary ?? writability);
+      const error = response.errors?.[0]?.reason;
+      setNotice(
+        response.writable
+          ? "Group is writable."
+          : response.notWritable
+            ? `Group is not writable${error ? `: ${error}` : "."}`
+            : response.inaccessible
+              ? `Group is inaccessible${error ? `: ${error}` : "."}`
+              : `Group write status is unknown${error ? `: ${error}` : "."}`,
+      );
+      await reload();
+    });
+  }
+
+  function openEditor(category?: any, bypassWritableCheck = false) {
     setDetail(null);
-    setEditing(category ?? { id: null });
+    setEditing(category ?? { id: null, bypassWritableCheck });
     setName(category?.name ?? "");
     setSelected(category?.groups?.map((g: any) => g.id) ?? []);
     if (category?.id) {
@@ -1762,6 +1785,9 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
         <div className="flex flex-wrap items-center justify-between gap-3">
           <Button onClick={() => openEditor()}>
             <Plus className="mr-2 size-4" /> CREATE CATEGORY
+          </Button>
+          <Button variant="secondary" onClick={() => openEditor(undefined, true)}>
+            CREATE CATEGORY WITHOUT WRITABLE CHECK
           </Button>
           <Button
             variant="secondary"
@@ -1816,6 +1842,32 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
               <Stat label="Not Writable" value={testResult?.notWritable ?? 0} />
               <Stat label="Unknown" value={testResult?.unknown ?? 0} />
               <Stat label="Inaccessible" value={testResult?.inaccessible ?? 0} />
+            </div>
+          </div>
+        ) : null}
+        {notWritableGroups.length ? (
+          <div className="space-y-3 border-t border-border pt-3">
+            <p className="text-sm font-semibold">NOT WRITABLE GROUPS</p>
+            <div className="max-h-64 space-y-2 overflow-auto">
+              {notWritableGroups.map((group: any) => (
+                <div
+                  key={group.id}
+                  className="flex flex-wrap items-center justify-between gap-2 border border-border bg-background p-3 text-sm"
+                >
+                  <span>
+                    {group.title} {group.username ? `@${group.username}` : ""}
+                  </span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    disabled={!testConnectionId || actionBusy === `check-write-${group.id}`}
+                    onClick={() => void checkOneWritable(group.id)}
+                  >
+                    {actionBusy === `check-write-${group.id}` ? "Checking..." : "CHECK WRITE"}
+                  </Button>
+                </div>
+              ))}
             </div>
           </div>
         ) : null}
@@ -1904,7 +1956,13 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
               e.preventDefault();
               void runAction("save-category", async () => {
                 await actions.saveGroupCategory({
-                  data: { auth, id: editing.id, name, group_ids: selected },
+                  data: {
+                    auth,
+                    id: editing.id,
+                    name,
+                    group_ids: selected,
+                    bypass_writable_check: Boolean(editing.bypassWritableCheck && !editing.id),
+                  },
                 });
                 setNotice(editing.id ? "Category updated successfully." : "Category created successfully.");
                 setEditing(null);
@@ -1913,7 +1971,13 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
             }}
           >
             <div className="flex items-center justify-between">
-              <p className="font-semibold">{editing.id ? "Edit Category" : "Create Category"}</p>
+              <p className="font-semibold">
+                {editing.id
+                  ? "Edit Category"
+                  : editing.bypassWritableCheck
+                    ? "Create Category Without Writable Check"
+                    : "Create Category"}
+              </p>
               <button type="button" onClick={() => setEditing(null)} aria-label="Close">
                 <X className="size-4" />
               </button>
@@ -1924,10 +1988,22 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
             </label>
             <div className="flex items-center justify-between gap-2">
               <p className="text-sm font-semibold">
-                Writable Groups: {writableGroups.length} | Selected Groups: {selected.length}
+                {editing.bypassWritableCheck
+                  ? `Approved Groups: ${approvedGroups.length}`
+                  : `Writable Groups: ${writableGroups.length}`}{" "}
+                | Selected Groups: {selected.length}
               </p>
               <div className="flex gap-2">
-                <Button type="button" size="sm" variant="secondary" onClick={() => setSelected(writableGroups.map((g: any) => g.id))}>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={() =>
+                    setSelected(
+                      (editing.bypassWritableCheck ? approvedGroups : writableGroups).map((g: any) => g.id),
+                    )
+                  }
+                >
                   SELECT ALL
                 </Button>
                 <Button type="button" size="sm" variant="secondary" onClick={() => setSelected([])}>
@@ -1936,7 +2012,7 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
               </div>
             </div>
             <div className="max-h-72 space-y-2 overflow-auto">
-              {writableGroups.map((g: any) => (
+              {(editing.bypassWritableCheck ? approvedGroups : writableGroups).map((g: any) => (
                 <label key={g.id} className="flex items-center gap-3 border border-border bg-background p-3 text-sm">
                   <input
                     type="checkbox"
@@ -1952,10 +2028,11 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
                   <span>{g.title}</span>
                 </label>
               ))}
-              {!writableGroups.length ? (
+              {!(editing.bypassWritableCheck ? approvedGroups : writableGroups).length ? (
                 <p className="text-sm text-muted-foreground">
-                  No confirmed writable groups available. Tap VERIFY GROUPS to check approved groups
-                  with your healthy Telegram session.
+                  {editing.bypassWritableCheck
+                    ? "No approved groups available."
+                    : "No confirmed writable groups available. Tap VERIFY GROUPS to check approved groups with your healthy Telegram session."}
                 </p>
               ) : null}
             </div>
