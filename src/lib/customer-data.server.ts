@@ -315,14 +315,39 @@ export async function dashboard(ctx: AuthContext) {
 /* -------------------------------- connections ------------------------------------ */
 
 export async function listConnections(ctx: AuthContext) {
-  const { data } = await db()
+  const client = db();
+  const { data } = await client
     .from("telegram_connections")
     .select(
       "id, tenant_id, label, account_name, username, telegram_id, telegram_user_id, phone_masked, status, health, error_message, restriction_status, restriction_reason, last_active_at, last_used_at, last_sync_at, link_expires_at, cooldown_until, auth_step, encrypted_session, created_at, updated_at",
     )
     .eq("tenant_id", ctx.tenantId)
     .order("created_at", { ascending: false });
-  return (data ?? []).map(({ encrypted_session, ...row }) => ({
+  const staleStoredSessions = (data ?? []).filter((row) => {
+    if (!row.encrypted_session) return false;
+    if (["DISCONNECTED", "AUTH_CODE_SENT", "TWO_FACTOR_REQUIRED"].includes(String(row.status))) {
+      return false;
+    }
+    return (
+      ["ERROR", "UNKNOWN", "RESTRICTED"].includes(String(row.status)) ||
+      ["ERROR", "UNKNOWN", "REQUIRES_ACTION"].includes(String(row.health))
+    );
+  });
+  for (const row of staleStoredSessions) {
+    await checkUserSession(ctx, String(row.id));
+  }
+  const rows = staleStoredSessions.length
+    ? (
+        await client
+          .from("telegram_connections")
+          .select(
+            "id, tenant_id, label, account_name, username, telegram_id, telegram_user_id, phone_masked, status, health, error_message, restriction_status, restriction_reason, last_active_at, last_used_at, last_sync_at, link_expires_at, cooldown_until, auth_step, encrypted_session, created_at, updated_at",
+          )
+          .eq("tenant_id", ctx.tenantId)
+          .order("created_at", { ascending: false })
+      ).data ?? []
+    : data ?? [];
+  return rows.map(({ encrypted_session, ...row }) => ({
     ...row,
     has_session: Boolean(encrypted_session),
   }));

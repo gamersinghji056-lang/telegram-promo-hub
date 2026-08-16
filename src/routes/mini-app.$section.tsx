@@ -400,36 +400,75 @@ function MiniAppSection() {
     if (typeof window === "undefined") return;
     const root = document.documentElement;
     const focusSelector = "input, textarea, select, [contenteditable='true']";
+    const telegram = (
+      window as unknown as {
+        Telegram?: { WebApp?: { viewportHeight?: number; viewportStableHeight?: number } };
+      }
+    ).Telegram?.WebApp;
+    let lastFocused: HTMLElement | null = null;
+    const scrollFocusedIntoView = (active: HTMLElement) => {
+      const viewport = window.visualViewport;
+      const viewportTop = viewport?.offsetTop ?? 0;
+      const viewportHeight = viewport?.height ?? window.innerHeight;
+      const navHeight = Number.parseFloat(
+        getComputedStyle(root).getPropertyValue("--miniapp-bottom-nav-height") || "72",
+      );
+      const topGuard = viewportTop + 12;
+      const bottomGuard = viewportTop + viewportHeight - navHeight - 18;
+      const rect = active.getBoundingClientRect();
+      if (rect.bottom > bottomGuard) {
+        window.scrollBy({ top: rect.bottom - bottomGuard, behavior: "smooth" });
+      } else if (rect.top < topGuard) {
+        window.scrollBy({ top: rect.top - topGuard, behavior: "smooth" });
+      }
+    };
     const updateViewportPadding = () => {
       const viewport = window.visualViewport;
-      const inset = viewport
-        ? Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop)
-        : 0;
-      root.style.setProperty("--miniapp-keyboard-inset", `${Math.ceil(inset)}px`);
+      const visualBottom = viewport ? viewport.height + viewport.offsetTop : window.innerHeight;
+      const telegramHeight =
+        typeof telegram?.viewportHeight === "number" && telegram.viewportHeight > 0
+          ? telegram.viewportHeight
+          : window.innerHeight;
+      const inset = Math.max(0, window.innerHeight - visualBottom, window.innerHeight - telegramHeight);
+      const focused = document.activeElement instanceof HTMLElement && document.activeElement.matches(focusSelector);
+      const keyboardOpen = focused && inset > 40;
+      root.style.setProperty("--miniapp-keyboard-inset", `${Math.ceil(keyboardOpen ? inset : 0)}px`);
+      root.style.setProperty("--miniapp-nav-translate", keyboardOpen ? "110%" : "0px");
       const active = document.activeElement;
       if (active instanceof HTMLElement && active.matches(focusSelector)) {
+        lastFocused = active;
         window.setTimeout(() => {
-          active.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+          scrollFocusedIntoView(active);
         }, 40);
+      } else if (!focused) {
+        lastFocused = null;
       }
     };
     const onFocus = (event: Event) => {
       if (event.target instanceof HTMLElement && event.target.matches(focusSelector)) {
+        lastFocused = event.target;
+        event.target.style.scrollMarginBottom = "calc(7rem + var(--miniapp-keyboard-inset, 0px))";
         window.setTimeout(updateViewportPadding, 60);
         window.setTimeout(updateViewportPadding, 260);
       }
     };
+    const onBlur = () => {
+      if (lastFocused) lastFocused.style.scrollMarginBottom = "";
+      lastFocused = null;
+      window.setTimeout(updateViewportPadding, 80);
+    };
     window.visualViewport?.addEventListener("resize", updateViewportPadding);
     window.visualViewport?.addEventListener("scroll", updateViewportPadding);
     window.addEventListener("focusin", onFocus);
-    window.addEventListener("focusout", updateViewportPadding);
+    window.addEventListener("focusout", onBlur);
     updateViewportPadding();
     return () => {
       window.visualViewport?.removeEventListener("resize", updateViewportPadding);
       window.visualViewport?.removeEventListener("scroll", updateViewportPadding);
       window.removeEventListener("focusin", onFocus);
-      window.removeEventListener("focusout", updateViewportPadding);
+      window.removeEventListener("focusout", onBlur);
       root.style.removeProperty("--miniapp-keyboard-inset");
+      root.style.removeProperty("--miniapp-nav-translate");
     };
   }, []);
 
@@ -872,7 +911,10 @@ function SessionSelect({ value, onChange, connections, label }: any) {
           const waitingForAuth = ["AUTH_CODE_SENT", "TWO_FACTOR_REQUIRED", "DISCONNECTED"].includes(
             String(c.status),
           );
-          const usable = (c.has_session || c.status === "CONNECTED") && !waitingForAuth;
+          const requiresAction =
+            String(c.health) === "REQUIRES_ACTION" &&
+            String(c.restriction_status) === "REQUIRES_ACTION";
+          const usable = Boolean(c.has_session) && !waitingForAuth && !requiresAction;
           return (
             <option key={c.id} value={c.id} disabled={!usable}>
               {c.username ? `@${c.username}` : c.label} -{" "}
