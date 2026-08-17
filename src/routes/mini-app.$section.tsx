@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import { MiniAppShell } from "@/components/mini-app-shell";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   addConnection,
   addApprovedGroupByUsername,
@@ -320,9 +321,12 @@ function MiniAppSection() {
       }),
       analytics: (a) => analyticsFn({ data: { auth: a } }),
       billing: (a) => billingFn({ data: { auth: a } }),
-      settings: async (a) => ({
-        logs: await logsFn({ data: { auth: a } }),
-      }),
+     settings: async (a) => ({
+  logs: await logsFn({ data: { auth: a } }),
+  account: await actions.getAccountSettings({
+    data: { auth: a },
+  }),
+}),
     }),
     [],
   );
@@ -1673,11 +1677,21 @@ function GroupRows({ groups, connections, bulkJoin, auth, actions, reload, setNo
 
 function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, runAction }: any) {
   const groups = data?.groups ?? [];
-  const approvedGroups = groups.filter((g: any) => ["APPROVED", "JOINED"].includes(g.status));
-  const writableGroups = groups.filter(
-    (g: any) => g.can_send_messages === true && g.writable_status === "WRITABLE",
+
+  const approvedGroups = groups.filter((g: any) =>
+    ["APPROVED", "JOINED"].includes(g.status),
   );
-  const notWritableGroups = approvedGroups.filter((g: any) => g.writable_status === "NOT_WRITABLE");
+
+  const writableGroups = groups.filter(
+    (g: any) =>
+      g.can_send_messages === true &&
+      g.writable_status === "WRITABLE",
+  );
+
+  const notWritableGroups = approvedGroups.filter(
+    (g: any) => g.writable_status === "NOT_WRITABLE",
+  );
+
   const testableGroups = groups.filter(
     (g: any) =>
       ["APPROVED", "JOINED"].includes(g.status) &&
@@ -1686,8 +1700,12 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
         g.writable_status === "INACCESSIBLE" ||
         g.can_send_messages !== true),
   );
+
   const categories = data?.categories ?? [];
-  const [writability, setWritability] = useState<any>(data?.writability ?? {});
+
+  const [writability, setWritability] = useState<any>(
+    data?.writability ?? {},
+  );
   const [verification, setVerification] = useState<any>(null);
   const [testConnectionId, setTestConnectionId] = useState("");
   const [testSelected, setTestSelected] = useState<string[]>([]);
@@ -1696,18 +1714,24 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
   const [name, setName] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
   const [detail, setDetail] = useState<any>(null);
+
   useEffect(() => {
     setWritability(data?.writability ?? {});
   }, [data?.writability]);
 
   async function verifyGroups() {
     await runAction("verify-writable-groups", async () => {
-      const response = await actions.verifyWritableGroups({ data: { auth, limit: 60 } });
+      const response = await actions.verifyWritableGroups({
+        data: { auth, limit: 60 },
+      });
+
       setVerification(response);
       setWritability(response.summary ?? writability);
+
       setNotice(
         `Checking Groups: ${response.checked}/${response.total}. Writable: ${response.writable}. Not Writable: ${response.notWritable}. Unknown: ${response.unknown}.`,
       );
+
       await reload();
     });
   }
@@ -1723,25 +1747,44 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
         inaccessible: 0,
         errors: [] as any[],
       };
+
       setTestResult(aggregate);
+
       let summary = writability;
+
       for (const groupId of testSelected) {
         const response = await actions.testWritableGroups({
-          data: { auth, connectionId: testConnectionId, groupIds: [groupId] },
+          data: {
+            auth,
+            connectionId: testConnectionId,
+            groupIds: [groupId],
+          },
         });
+
         aggregate.checked += response.checked ?? 0;
         aggregate.writable += response.writable ?? 0;
         aggregate.notWritable += response.notWritable ?? 0;
         aggregate.unknown += response.unknown ?? 0;
         aggregate.inaccessible += response.inaccessible ?? 0;
-        aggregate.errors = [...aggregate.errors, ...(response.errors ?? [])];
+        aggregate.errors = [
+          ...aggregate.errors,
+          ...(response.errors ?? []),
+        ];
+
         summary = response.summary ?? summary;
-        setTestResult({ ...aggregate, errors: [...aggregate.errors] });
+
+        setTestResult({
+          ...aggregate,
+          errors: [...aggregate.errors],
+        });
       }
+
       setWritability(summary);
+
       setNotice(
         `Tested: ${aggregate.checked}/${aggregate.total}. Writable: ${aggregate.writable}. Not Writable: ${aggregate.notWritable}. Unknown: ${aggregate.unknown}. Inaccessible: ${aggregate.inaccessible}.`,
       );
+
       await reload();
     });
   }
@@ -1749,11 +1792,18 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
   async function checkOneWritable(groupId: string) {
     await runAction(`check-write-${groupId}`, async () => {
       const response = await actions.testWritableGroups({
-        data: { auth, connectionId: testConnectionId, groupIds: [groupId] },
+        data: {
+          auth,
+          connectionId: testConnectionId,
+          groupIds: [groupId],
+        },
       });
+
       setTestResult(response);
       setWritability(response.summary ?? writability);
+
       const error = response.errors?.[0]?.reason;
+
       setNotice(
         response.writable
           ? "Group is writable."
@@ -1763,25 +1813,57 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
               ? `Group is inaccessible${error ? `: ${error}` : "."}`
               : `Group write status is unknown${error ? `: ${error}` : "."}`,
       );
-      await reload();
+
+      // IMPORTANT:
+      // Do not reload here.
+      // This keeps the selected session and CHECK WRITE buttons active.
     });
   }
 
-  function openEditor(category?: any, bypassWritableCheck = false) {
+  function openEditor(
+    category?: any,
+    bypassWritableCheck = false,
+  ) {
     setDetail(null);
-    setEditing(category ?? { id: null, bypassWritableCheck });
+
+    setEditing(
+      category ?? {
+        id: null,
+        bypassWritableCheck,
+      },
+    );
+
     setName(category?.name ?? "");
-    setSelected(category?.groups?.map((g: any) => g.id) ?? []);
+
+    setSelected(
+      category?.groups?.map((g: any) => g.id) ?? [],
+    );
+
     if (category?.id) {
-      void runAction(`open-category-${category.id}`, async () => {
-        const response = await actions.getGroupCategoryDetail({ data: { auth, id: category.id } });
-        setSelected(
-          (response.groups ?? [])
-            .filter((g: any) => g.can_send_messages === true && g.writable_status === "WRITABLE")
-            .map((g: any) => g.id),
-        );
-        setDetail(response);
-      });
+      void runAction(
+        `open-category-${category.id}`,
+        async () => {
+          const response =
+            await actions.getGroupCategoryDetail({
+              data: {
+                auth,
+                id: category.id,
+              },
+            });
+
+          setSelected(
+            (response.groups ?? [])
+              .filter(
+                (g: any) =>
+                  g.can_send_messages === true &&
+                  g.writable_status === "WRITABLE",
+              )
+              .map((g: any) => g.id),
+          );
+
+          setDetail(response);
+        },
+      );
     }
   }
 
@@ -1790,25 +1872,63 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
       <section className={panelClass("space-y-3")}>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <Button onClick={() => openEditor()}>
-            <Plus className="mr-2 size-4" /> CREATE CATEGORY
+            <Plus className="mr-2 size-4" />
+            CREATE CATEGORY
           </Button>
-          <Button variant="secondary" onClick={() => openEditor(undefined, true)}>
-            CREATE CATEGORY WITHOUT WRITABLE CHECK
+
+          <Button
+            className="w-full justify-center px-3 text-[11px] leading-tight sm:w-auto sm:text-xs"
+            onClick={() => openEditor(undefined, true)}
+          >
+            <Plus className="mr-2 size-4 shrink-0" />
+
+            <span className="whitespace-normal text-center">
+              CREATE CATEGORY WITHOUT WRITABLE CHECK
+            </span>
           </Button>
+
           <Button
             variant="secondary"
-            disabled={actionBusy === "verify-writable-groups"}
+            disabled={
+              actionBusy === "verify-writable-groups"
+            }
             onClick={() => void verifyGroups()}
           >
-            {actionBusy === "verify-writable-groups" ? "Checking..." : "VERIFY GROUPS"}
+            {actionBusy === "verify-writable-groups"
+              ? "Checking..."
+              : "VERIFY GROUPS"}
           </Button>
         </div>
+
         <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
-          <Stat label="Checking Groups" value={`${verification?.checked ?? 0}/${verification?.total ?? writability.unknown ?? 0}`} />
-          <Stat label="Writable" value={writability.writable ?? writableGroups.length} />
-          <Stat label="Not Writable" value={writability.notWritable ?? 0} />
-          <Stat label="Unknown" value={writability.unknown ?? 0} />
+          <Stat
+            label="Checking Groups"
+            value={`${verification?.checked ?? 0}/${
+              verification?.total ??
+              writability.unknown ??
+              0
+            }`}
+          />
+
+          <Stat
+            label="Writable"
+            value={
+              writability.writable ??
+              writableGroups.length
+            }
+          />
+
+          <Stat
+            label="Not Writable"
+            value={writability.notWritable ?? 0}
+          />
+
+          <Stat
+            label="Unknown"
+            value={writability.unknown ?? 0}
+          />
         </div>
+
         {testableGroups.length ? (
           <div className="space-y-3 border-t border-border pt-3">
             <SessionSelect
@@ -1817,103 +1937,222 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
               onChange={setTestConnectionId}
               connections={data?.connections}
             />
+
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-sm font-semibold">
-                Testable Groups: {testableGroups.length} | Selected: {testSelected.length}
+                Testable Groups: {testableGroups.length} |
+                Selected: {testSelected.length}
               </p>
+
               <div className="flex gap-2">
                 <Button
                   type="button"
                   size="sm"
                   variant="secondary"
-                  onClick={() => setTestSelected(testableGroups.map((g: any) => g.id))}
+                  onClick={() =>
+                    setTestSelected(
+                      testableGroups.map(
+                        (g: any) => g.id,
+                      ),
+                    )
+                  }
                 >
                   SELECT ALL
                 </Button>
-                <Button type="button" size="sm" variant="secondary" onClick={() => setTestSelected([])}>
+
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setTestSelected([])}
+                >
                   CLEAR ALL
                 </Button>
               </div>
             </div>
+
             <Button
               className="w-full"
-              disabled={!testConnectionId || !testSelected.length || actionBusy === "test-category-writable-groups"}
+              disabled={
+                !testConnectionId ||
+                !testSelected.length ||
+                actionBusy ===
+                  "test-category-writable-groups"
+              }
               onClick={testWritable}
             >
-              {actionBusy === "test-category-writable-groups" ? "Testing..." : "TEST WRITABLE GROUPS"}
+              {actionBusy ===
+              "test-category-writable-groups"
+                ? "Testing..."
+                : "TEST WRITABLE GROUPS"}
             </Button>
+
             <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-5">
-              <Stat label="Tested" value={`${testResult?.checked ?? 0}/${testResult?.total ?? testSelected.length}`} />
-              <Stat label="Writable" value={testResult?.writable ?? 0} />
-              <Stat label="Not Writable" value={testResult?.notWritable ?? 0} />
-              <Stat label="Unknown" value={testResult?.unknown ?? 0} />
-              <Stat label="Inaccessible" value={testResult?.inaccessible ?? 0} />
+              <Stat
+                label="Tested"
+                value={`${testResult?.checked ?? 0}/${
+                  testResult?.total ??
+                  testSelected.length
+                }`}
+              />
+
+              <Stat
+                label="Writable"
+                value={testResult?.writable ?? 0}
+              />
+
+              <Stat
+                label="Not Writable"
+                value={testResult?.notWritable ?? 0}
+              />
+
+              <Stat
+                label="Unknown"
+                value={testResult?.unknown ?? 0}
+              />
+
+              <Stat
+                label="Inaccessible"
+                value={testResult?.inaccessible ?? 0}
+              />
             </div>
           </div>
         ) : null}
+
         {notWritableGroups.length ? (
           <div className="space-y-3 border-t border-border pt-3">
-            <p className="text-sm font-semibold">NOT WRITABLE GROUPS</p>
+            <p className="text-sm font-semibold">
+              NOT WRITABLE GROUPS
+            </p>
+
             <div className="max-h-64 space-y-2 overflow-auto">
-              {notWritableGroups.map((group: any) => (
-                <div
-                  key={group.id}
-                  className="flex flex-wrap items-center justify-between gap-2 border border-border bg-background p-3 text-sm"
-                >
-                  <span>
-                    {group.title} {group.username ? `@${group.username}` : ""}
-                  </span>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="secondary"
-                    disabled={!testConnectionId || actionBusy === `check-write-${group.id}`}
-                    onClick={() => void checkOneWritable(group.id)}
+              {notWritableGroups.map(
+                (group: any) => (
+                  <div
+                    key={group.id}
+                    className="flex flex-wrap items-center justify-between gap-2 border border-border bg-background p-3 text-sm"
                   >
-                    {actionBusy === `check-write-${group.id}` ? "Checking..." : "CHECK WRITE"}
-                  </Button>
-                </div>
-              ))}
+                    <span>
+                      {group.title}{" "}
+                      {group.username
+                        ? `@${group.username}`
+                        : ""}
+                    </span>
+
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="shrink-0 px-3 text-xs"
+                      disabled={
+                        !testConnectionId ||
+                        actionBusy ===
+                          `check-write-${group.id}`
+                      }
+                      onClick={() =>
+                        void checkOneWritable(
+                          group.id,
+                        )
+                      }
+                    >
+                      {actionBusy ===
+                      `check-write-${group.id}`
+                        ? "Checking..."
+                        : "CHECK WRITE"}
+                    </Button>
+                  </div>
+                ),
+              )}
             </div>
           </div>
         ) : null}
       </section>
+
       <div className="space-y-3">
         {categories.map((category: any) => (
-          <article key={category.id} className={panelClass()}>
-            <p className="font-semibold">{category.name}</p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {category.usable_count ?? 0} usable / {category.unavailable_count ?? 0} unavailable
+          <article
+            key={category.id}
+            className={panelClass()}
+          >
+            <p className="font-semibold">
+              {category.name}
             </p>
+
+            <p className="mt-1 text-sm text-muted-foreground">
+              {category.group_count ??
+                category.groups?.length ??
+                0}{" "}
+              groups
+            </p>
+
             <div className="mt-4 flex flex-wrap gap-2">
               <Button
                 size="sm"
                 variant="secondary"
                 onClick={() =>
-                  runAction(`open-${category.id}`, async () => {
-                    const response = await actions.getGroupCategoryDetail({
-                      data: { auth, id: category.id },
-                    });
-                    setDetail(response);
-                  })
+                  runAction(
+                    `open-${category.id}`,
+                    async () => {
+                      const response =
+                        await actions.getGroupCategoryDetail(
+                          {
+                            data: {
+                              auth,
+                              id: category.id,
+                            },
+                          },
+                        );
+
+                      setDetail(response);
+                    },
+                  )
                 }
               >
-                <Eye className="mr-1 size-3" /> OPEN
+                <Eye className="mr-1 size-3" />
+                OPEN
               </Button>
-              <Button size="sm" variant="secondary" onClick={() => openEditor(category)}>
-                EDIT
-              </Button>
+
               <Button
                 size="sm"
                 variant="secondary"
-                disabled={actionBusy === `delete-category-${category.id}`}
+                onClick={() =>
+                  openEditor(category)
+                }
+              >
+                EDIT
+              </Button>
+
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={
+                  actionBusy ===
+                  `delete-category-${category.id}`
+                }
                 onClick={() => {
-                  if (!confirm("Delete this category? Groups will not be deleted.")) return;
-                  void runAction(`delete-category-${category.id}`, async () => {
-                    await actions.deleteGroupCategory({ data: { auth, id: category.id } });
-                    setNotice("Category deleted.");
-                    await reload();
-                  });
+                  if (
+                    !confirm(
+                      "Delete this category? Groups will not be deleted.",
+                    )
+                  )
+                    return;
+
+                  void runAction(
+                    `delete-category-${category.id}`,
+                    async () => {
+                      await actions.deleteGroupCategory({
+                        data: {
+                          auth,
+                          id: category.id,
+                        },
+                      });
+
+                      setNotice(
+                        "Category deleted.",
+                      );
+
+                      await reload();
+                    },
+                  );
                 }}
               >
                 DELETE
@@ -1921,59 +2160,110 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
             </div>
           </article>
         ))}
-        {!categories.length ? <Empty message="No group categories yet." /> : null}
+
+        {!categories.length ? (
+          <Empty message="No group categories yet." />
+        ) : null}
       </div>
+
       {detail ? (
-        <section className={panelClass("space-y-3")}>
+        <section
+          className={panelClass("space-y-3")}
+        >
           <div className="flex items-center justify-between">
             <div>
-              <p className="font-semibold">{detail.category.name}</p>
+              <p className="font-semibold">
+                {detail.category.name}
+              </p>
+
               <p className="text-sm text-muted-foreground">
-                Total Groups: {detail.groups.length} | {detail.usable_count ?? 0} usable |{" "}
-                {detail.unavailable_count ?? 0} unavailable
+                Total Groups:{" "}
+                {detail.groups.length}
               </p>
             </div>
-            <button type="button" onClick={() => setDetail(null)} aria-label="Close">
+
+            <button
+              type="button"
+              onClick={() => setDetail(null)}
+              aria-label="Close"
+            >
               <X className="size-4" />
             </button>
           </div>
+
           <div className="space-y-2">
             {detail.groups.map((g: any) => (
-              <p key={g.id} className="border border-border bg-background p-2 text-sm">
-                {g.title} {g.username ? `@${g.username}` : ""}
+              <p
+                key={g.id}
+                className="border border-border bg-background p-2 text-sm"
+              >
+                {g.title}{" "}
+                {g.username
+                  ? `@${g.username}`
+                  : ""}
               </p>
             ))}
           </div>
+
           <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" onClick={() => openEditor(detail.category)}>
+            <Button
+              variant="secondary"
+              onClick={() =>
+                openEditor(detail.category)
+              }
+            >
               EDIT GROUPS
             </Button>
-            <Button variant="secondary" onClick={() => openEditor(detail.category)}>
+
+            <Button
+              variant="secondary"
+              onClick={() =>
+                openEditor(detail.category)
+              }
+            >
               RENAME
             </Button>
           </div>
         </section>
       ) : null}
+
       {editing ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4">
           <form
-            className={panelClass("max-h-[88vh] w-full max-w-lg space-y-3 overflow-auto shadow-lg")}
+            className={panelClass(
+              "max-h-[88vh] w-full max-w-lg space-y-3 overflow-auto shadow-lg",
+            )}
             onSubmit={(e) => {
               e.preventDefault();
-              void runAction("save-category", async () => {
-                await actions.saveGroupCategory({
-                  data: {
-                    auth,
-                    id: editing.id,
-                    name,
-                    group_ids: selected,
-                    bypass_writable_check: Boolean(editing.bypassWritableCheck && !editing.id),
-                  },
-                });
-                setNotice(editing.id ? "Category updated successfully." : "Category created successfully.");
-                setEditing(null);
-                await reload();
-              });
+
+              void runAction(
+                "save-category",
+                async () => {
+                  await actions.saveGroupCategory({
+                    data: {
+                      auth,
+                      id: editing.id,
+                      name,
+                      group_ids: selected,
+                      bypass_writable_check:
+                        Boolean(
+                          editing.bypassWritableCheck &&
+                            !editing.id,
+                        ),
+                    },
+                  });
+
+                  setNotice(
+                    editing.id
+                      ? "Category updated successfully."
+                      : "Category created successfully.",
+                  );
+
+                  setEditing(null);
+
+                  await reload();
+                },
+              );
             }}
           >
             <div className="flex items-center justify-between">
@@ -1984,14 +2274,30 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
                     ? "Create Category Without Writable Check"
                     : "Create Category"}
               </p>
-              <button type="button" onClick={() => setEditing(null)} aria-label="Close">
+
+              <button
+                type="button"
+                onClick={() => setEditing(null)}
+                aria-label="Close"
+              >
                 <X className="size-4" />
               </button>
             </div>
+
             <label className="block space-y-2">
-              <span className="text-xs font-semibold uppercase text-muted-foreground">Category Name</span>
-              <input className={inputClass()} value={name} onChange={(e) => setName(e.target.value)} />
+              <span className="text-xs font-semibold uppercase text-muted-foreground">
+                Category Name
+              </span>
+
+              <input
+                className={inputClass()}
+                value={name}
+                onChange={(e) =>
+                  setName(e.target.value)
+                }
+              />
             </label>
+
             <div className="flex items-center justify-between gap-2">
               <p className="text-sm font-semibold">
                 {editing.bypassWritableCheck
@@ -1999,6 +2305,7 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
                   : `Writable Groups: ${writableGroups.length}`}{" "}
                 | Selected Groups: {selected.length}
               </p>
+
               <div className="flex gap-2">
                 <Button
                   type="button"
@@ -2006,35 +2313,66 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
                   variant="secondary"
                   onClick={() =>
                     setSelected(
-                      (editing.bypassWritableCheck ? approvedGroups : writableGroups).map((g: any) => g.id),
+                      (
+                        editing.bypassWritableCheck
+                          ? approvedGroups
+                          : writableGroups
+                      ).map((g: any) => g.id),
                     )
                   }
                 >
                   SELECT ALL
                 </Button>
-                <Button type="button" size="sm" variant="secondary" onClick={() => setSelected([])}>
+
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={() =>
+                    setSelected([])
+                  }
+                >
                   CLEAR ALL
                 </Button>
               </div>
             </div>
+
             <div className="max-h-72 space-y-2 overflow-auto">
-              {(editing.bypassWritableCheck ? approvedGroups : writableGroups).map((g: any) => (
-                <label key={g.id} className="flex items-center gap-3 border border-border bg-background p-3 text-sm">
+              {(
+                editing.bypassWritableCheck
+                  ? approvedGroups
+                  : writableGroups
+              ).map((g: any) => (
+                <label
+                  key={g.id}
+                  className="flex items-center gap-3 border border-border bg-background p-3 text-sm"
+                >
                   <input
                     type="checkbox"
-                    checked={selected.includes(g.id)}
+                    checked={selected.includes(
+                      g.id,
+                    )}
                     onChange={() =>
                       setSelected(
                         selected.includes(g.id)
-                          ? selected.filter((id) => id !== g.id)
+                          ? selected.filter(
+                              (id) =>
+                                id !== g.id,
+                            )
                           : [...selected, g.id],
                       )
                     }
                   />
+
                   <span>{g.title}</span>
                 </label>
               ))}
-              {!(editing.bypassWritableCheck ? approvedGroups : writableGroups).length ? (
+
+              {!(
+                editing.bypassWritableCheck
+                  ? approvedGroups
+                  : writableGroups
+              ).length ? (
                 <p className="text-sm text-muted-foreground">
                   {editing.bypassWritableCheck
                     ? "No approved groups available."
@@ -2042,8 +2380,21 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
                 </p>
               ) : null}
             </div>
-            <Button className="w-full" type="submit" disabled={!name || !selected.length || actionBusy === "save-category"}>
-              {actionBusy === "save-category" ? "Saving..." : editing.id ? "SAVE" : "CREATE CATEGORY"}
+
+            <Button
+              className="w-full"
+              type="submit"
+              disabled={
+                !name ||
+                !selected.length ||
+                actionBusy === "save-category"
+              }
+            >
+              {actionBusy === "save-category"
+                ? "Saving..."
+                : editing.id
+                  ? "SAVE"
+                  : "CREATE CATEGORY"}
             </Button>
           </form>
         </div>
@@ -2420,8 +2771,13 @@ function GroupCampaign({ auth, data, actions, reload, setNotice, actionBusy, run
   const [minDelay, setMinDelay] = useState(30);
   const [maxDelay, setMaxDelay] = useState(60);
   const [cycleDelay, setCycleDelay] = useState(20);
-  async function submitCampaign(bypassWritableCheck = false) {
-    const buttons = buttonText && buttonUrl ? [{ text: buttonText, url: buttonUrl }] : [];
+
+  async function submitCampaign() {
+    const buttons =
+      buttonText && buttonUrl
+        ? [{ text: buttonText, url: buttonUrl }]
+        : [];
+
     await runAction("create-group-campaign", async () => {
       await actions.createCampaign({
         data: {
@@ -2443,32 +2799,44 @@ function GroupCampaign({ auth, data, actions, reload, setNotice, actionBusy, run
           min_delay_seconds: minDelay,
           max_delay_seconds: maxDelay,
           cycle_delay_minutes: cycleDelay,
-          bypass_writable_check: bypassWritableCheck,
+
+          // Category itself defines the campaign targets.
+          // Do not ask the user for another writable-check choice here.
+          bypass_writable_check: true,
         },
       });
+
       setNotice(
-        bypassWritableCheck
-          ? "Group campaign queued without pre-check."
-          : scheduledAt
-            ? "Group campaign scheduled."
-            : "Group campaign queued.",
+        scheduledAt
+          ? "Group campaign scheduled."
+          : "Group campaign queued.",
       );
+
       await reload();
       setCreateMode(false);
     });
   }
+
   async function submit(e: FormEvent) {
     e.preventDefault();
-    await submitCampaign(false);
+    await submitCampaign();
   }
+
   if (!createMode) {
     const rows = data?.campaigns ?? [];
+
     return (
       <div className="space-y-4">
         <CampaignSummary rows={rows} />
-        <Button className="w-full" onClick={() => setCreateMode(true)}>
-          <Plus className="mr-2 size-4" /> CREATE CAMPAIGN
+
+        <Button
+          className="w-full"
+          onClick={() => setCreateMode(true)}
+        >
+          <Plus className="mr-2 size-4" />
+          CREATE CAMPAIGN
         </Button>
+
         <CampaignCards
           rows={rows}
           auth={auth}
@@ -2481,28 +2849,57 @@ function GroupCampaign({ auth, data, actions, reload, setNotice, actionBusy, run
       </div>
     );
   }
+
   return (
     <form onSubmit={submit} className="space-y-4">
-      <Button type="button" variant="secondary" onClick={() => setCreateMode(false)}>
+      <Button
+        type="button"
+        variant="secondary"
+        onClick={() => setCreateMode(false)}
+      >
         BACK TO GROUP PROMOTION CAMPAIGNS
       </Button>
+
       <SessionSelect
         label="Select Sending Session"
         value={connectionId}
         onChange={setConnectionId}
         connections={data?.connections}
       />
+
       <label className="block space-y-2">
-        <span className="text-xs font-semibold uppercase text-muted-foreground">Group Category</span>
-        <select className={inputClass()} value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
-          <option value="">Select category</option>
-          {(data?.categories ?? []).map((c: any) => (
-            <option key={c.id} value={c.id}>
-              {c.name} - {c.usable_count ?? 0} usable / {c.unavailable_count ?? 0} unavailable
-            </option>
-          ))}
+        <span className="text-xs font-semibold uppercase text-muted-foreground">
+          Group Category
+        </span>
+
+        <select
+          className={inputClass()}
+          value={categoryId}
+          onChange={(e) =>
+            setCategoryId(e.target.value)
+          }
+        >
+          <option value="">
+            Select category
+          </option>
+
+          {(data?.categories ?? []).map(
+            (c: any) => (
+              <option
+                key={c.id}
+                value={c.id}
+              >
+                {c.name} -{" "}
+                {c.group_count ??
+                  c.groups?.length ??
+                  0}{" "}
+                groups
+              </option>
+            ),
+          )}
         </select>
       </label>
+
       <MessageForm
         name={name}
         setName={setName}
@@ -2517,50 +2914,105 @@ function GroupCampaign({ auth, data, actions, reload, setNotice, actionBusy, run
         buttonUrl={buttonUrl}
         setButtonUrl={setButtonUrl}
       />
+
       <label className="block space-y-2">
-        <span className="text-xs font-semibold uppercase text-muted-foreground">Schedule</span>
+        <span className="text-xs font-semibold uppercase text-muted-foreground">
+          Schedule
+        </span>
+
         <input
           className={inputClass()}
           type="datetime-local"
           value={scheduledAt}
-          onChange={(e) => setScheduledAt(e.target.value)}
+          onChange={(e) =>
+            setScheduledAt(e.target.value)
+          }
         />
       </label>
-      <section className={panelClass("grid grid-cols-2 gap-3")}>
+
+      <section
+        className={panelClass(
+          "grid grid-cols-2 gap-3",
+        )}
+      >
         <label className="space-y-2">
-          <span className="text-xs font-semibold uppercase text-muted-foreground">Minimum Delay Seconds</span>
-          <input className={inputClass()} type="number" min={1} value={minDelay} onChange={(e) => setMinDelay(Number(e.target.value))} />
+          <span className="text-xs font-semibold uppercase text-muted-foreground">
+            Minimum Delay Seconds
+          </span>
+
+          <input
+            className={inputClass()}
+            type="number"
+            min={1}
+            value={minDelay}
+            onChange={(e) =>
+              setMinDelay(
+                Number(e.target.value),
+              )
+            }
+          />
         </label>
+
         <label className="space-y-2">
-          <span className="text-xs font-semibold uppercase text-muted-foreground">Maximum Delay Seconds</span>
-          <input className={inputClass()} type="number" min={1} value={maxDelay} onChange={(e) => setMaxDelay(Number(e.target.value))} />
+          <span className="text-xs font-semibold uppercase text-muted-foreground">
+            Maximum Delay Seconds
+          </span>
+
+          <input
+            className={inputClass()}
+            type="number"
+            min={1}
+            value={maxDelay}
+            onChange={(e) =>
+              setMaxDelay(
+                Number(e.target.value),
+              )
+            }
+          />
         </label>
+
         <label className="col-span-2 space-y-2">
-          <span className="text-xs font-semibold uppercase text-muted-foreground">Delay Between Cycles Minutes</span>
-          <input className={inputClass()} type="number" min={1} value={cycleDelay} onChange={(e) => setCycleDelay(Number(e.target.value))} />
+          <span className="text-xs font-semibold uppercase text-muted-foreground">
+            Delay Between Cycles Minutes
+          </span>
+
+          <input
+            className={inputClass()}
+            type="number"
+            min={1}
+            value={cycleDelay}
+            onChange={(e) =>
+              setCycleDelay(
+                Number(e.target.value),
+              )
+            }
+          />
         </label>
       </section>
+
       <Preview
         message={message}
         mediaUrl={mediaUrl}
         buttonText={buttonText}
         buttonUrl={buttonUrl}
       />
+
       <Button
         className="w-full"
         type="submit"
-        disabled={!connectionId || !categoryId || (!message && !mediaUrl) || minDelay > maxDelay || actionBusy === "create-group-campaign"}
+        disabled={
+          !connectionId ||
+          !categoryId ||
+          (!message && !mediaUrl) ||
+          minDelay > maxDelay ||
+          actionBusy ===
+            "create-group-campaign"
+        }
       >
-        {actionBusy === "create-group-campaign" ? "Queuing..." : "APPROVE AND QUEUE"}
-      </Button>
-      <Button
-        className="w-full"
-        type="button"
-        variant="secondary"
-        disabled={!connectionId || !categoryId || (!message && !mediaUrl) || minDelay > maxDelay || actionBusy === "create-group-campaign"}
-        onClick={() => submitCampaign(true)}
-      >
-        {actionBusy === "create-group-campaign" ? "Queuing..." : "CREATE CAMPAIGN WITHOUT WRITABLE CHECK"}
+        {actionBusy ===
+        "create-group-campaign"
+          ? "Queuing..."
+          : "APPROVE AND QUEUE"}
       </Button>
     </form>
   );
