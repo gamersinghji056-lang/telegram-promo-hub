@@ -194,7 +194,6 @@ function MiniAppSection() {
   const { section } = Route.useParams();
   const dashboardFn = useServerFn(getDashboard);
   const connectionsFn = useServerFn(getConnections);
-  const accountSettingsFn = useServerFn(getAccountSettings);
   const groupsFn = useServerFn(getGroups);
   const keywordsFn = useServerFn(getKeywords);
   const campaignsFn = useServerFn(getCampaigns);
