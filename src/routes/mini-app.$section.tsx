@@ -194,6 +194,7 @@ function MiniAppSection() {
   const { section } = Route.useParams();
   const dashboardFn = useServerFn(getDashboard);
   const connectionsFn = useServerFn(getConnections);
+  const accountSettingsFn = useServerFn(getAccountSettings);
   const groupsFn = useServerFn(getGroups);
   const keywordsFn = useServerFn(getKeywords);
   const campaignsFn = useServerFn(getCampaigns);
@@ -202,6 +203,7 @@ function MiniAppSection() {
   const analyticsFn = useServerFn(getAnalytics);
   const billingFn = useServerFn(getBilling);
   const logsFn = useServerFn(getOwnActivity);
+  const accountSettingsFn = useServerFn(getAccountSettings);
   const notificationsFn = useServerFn(getNotifications);
   const markNotificationsReadFn = useServerFn(markNotificationsRead);
   const logoutFn = useServerFn(logoutCustomer);
@@ -321,12 +323,13 @@ function MiniAppSection() {
       }),
       analytics: (a) => analyticsFn({ data: { auth: a } }),
       billing: (a) => billingFn({ data: { auth: a } }),
-    settings: async (a) => ({
-  logs: await logsFn({ data: { auth: a } }),
-  account: await getAccountSettings({
-    data: { auth: a },
-  }),
-}),
+      settings: async (a) => ({
+        logs: await logsFn({ data: { auth: a } }),
+        account: await accountSettingsFn({
+          data: { auth: a },
+        }),
+      }),
+    }),
     [],
   );
 
@@ -663,7 +666,7 @@ function CustomerContent(props: {
   if (section === "group-create") return <GroupCampaign {...props} />;
   if (section === "analytics") return <Analytics data={props.data} />;
   if (section === "billing") return <Billing data={props.data} />;
-  if (section === "settings") return <SettingsPanel data={props.data} />;
+  if (section === "settings") return <SettingsPanel {...props} />;
   return null;
 }
 
@@ -1851,14 +1854,8 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
             });
 
           setSelected(
-            (response.groups ?? [])
-              .filter(
-                (g: any) =>
-                  g.can_send_messages === true &&
-                  g.writable_status === "WRITABLE",
-              )
-              .map((g: any) => g.id),
-          );
+  (response.groups ?? []).map((g: any) => g.id),
+);
 
           setDetail(response);
         },
@@ -3720,85 +3717,63 @@ function SettingsPanel({
   }, [data?.account?.name]);
 
   async function saveName() {
-    const cleanName = name.trim();
+  const trimmedName = name.trim();
 
-    if (!cleanName) {
-      setNotice({
-        type: "error",
-        message: "Name cannot be empty.",
-      });
-      return;
-    }
+  if (!trimmedName) {
+    setNotice("Name cannot be empty.");
+    return;
+  }
 
-    await runAction("update-account-name", async () => {
-      const result = await actions.updateAccountName({
+  await runAction("update-account-name", async () => {
+    await actions.updateAccountName({
+      data: {
+        auth,
+        name: trimmedName,
+      },
+    });
+
+    setNotice("Name updated successfully.");
+    setEditNameOpen(false);
+  });
+}
+
+  async function savePassword() {
+  if (!currentPassword) {
+    setNotice("Enter your current password.");
+    return;
+  }
+
+  if (newPassword.length < 8) {
+    setNotice("New password must be at least 8 characters.");
+    return;
+  }
+
+  if (newPassword !== confirmPassword) {
+    setNotice("New passwords do not match.");
+    return;
+  }
+
+  await runAction(
+    "update-account-password",
+    async () => {
+      await actions.updateAccountPassword({
         data: {
           auth,
-          name: cleanName,
+          currentPassword,
+          newPassword,
+          confirmPassword,
         },
       });
 
-      setName(result?.name ?? cleanName);
-      setEditNameOpen(false);
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setPasswordOpen(false);
 
-      setNotice({
-        type: "success",
-        message: "Name updated successfully.",
-      });
-    });
-  }
-
-  async function savePassword() {
-    if (!currentPassword) {
-      setNotice({
-        type: "error",
-        message: "Enter your current password.",
-      });
-      return;
-    }
-
-    if (newPassword.length < 8) {
-      setNotice({
-        type: "error",
-        message:
-          "New password must be at least 8 characters.",
-      });
-      return;
-    }
-
-    if (newPassword !== confirmPassword) {
-      setNotice({
-        type: "error",
-        message: "New passwords do not match.",
-      });
-      return;
-    }
-
-    await runAction(
-      "update-account-password",
-      async () => {
-        await actions.updateAccountPassword({
-          data: {
-            auth,
-            currentPassword,
-            newPassword,
-            confirmPassword,
-          },
-        });
-
-        setCurrentPassword("");
-        setNewPassword("");
-        setConfirmPassword("");
-        setPasswordOpen(false);
-
-        setNotice({
-          type: "success",
-          message:
-            "Password changed successfully.",
-        });
-      },
-    );
-  }
+      setNotice("Password changed successfully.");
+    },
+  );
+}
 
   return (
     <div className="space-y-3">
