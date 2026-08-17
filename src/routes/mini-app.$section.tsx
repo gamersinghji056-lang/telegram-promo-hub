@@ -321,13 +321,12 @@ function MiniAppSection() {
       }),
       analytics: (a) => analyticsFn({ data: { auth: a } }),
       billing: (a) => billingFn({ data: { auth: a } }),
-     settings: async (a) => ({
+    settings: async (a) => ({
   logs: await logsFn({ data: { auth: a } }),
-  account: await actions.getAccountSettings({
+  account: await getAccountSettings({
     data: { auth: a },
   }),
 }),
-    }),
     [],
   );
 
