@@ -42,6 +42,9 @@ import {
   discoverAudience,
   disconnectConnection,
   findAudience,
+  getAccountSettings,
+  updateAccountName,
+  updateAccountPassword,
   getAudienceDiscoveryState,
   getAnalytics,
   getBilling,
@@ -207,6 +210,9 @@ function MiniAppSection() {
   const bulkJoinStateFn = useServerFn(getBulkJoinState);
 
   const actions = {
+    getAccountSettings: useServerFn(getAccountSettings),
+    updateAccountName: useServerFn(updateAccountName),
+    updateAccountPassword: useServerFn(updateAccountPassword),
     addConnection: useServerFn(addConnection),
     startConnectionLogin: useServerFn(startConnectionLogin),
     verifyConnectionCode: useServerFn(verifyConnectionCode),
@@ -3234,32 +3240,433 @@ function Billing({ data }: { data: any }) {
   );
 }
 
-function SettingsPanel({ data }: { data: any }) {
+function SettingsPanel({
+  auth,
+  data,
+  actions,
+  setNotice,
+  runAction,
+  actionBusy,
+}: any) {
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [editNameOpen, setEditNameOpen] = useState(false);
+  const [passwordOpen, setPasswordOpen] = useState(false);
+  const [comingSoonOpen, setComingSoonOpen] = useState(false);
+
+  const [name, setName] = useState(
+    data?.account?.name ?? "",
+  );
+
+  const [currentPassword, setCurrentPassword] =
+    useState("");
+  const [newPassword, setNewPassword] =
+    useState("");
+  const [confirmPassword, setConfirmPassword] =
+    useState("");
+
+  useEffect(() => {
+    setName(data?.account?.name ?? "");
+  }, [data?.account?.name]);
+
+  async function saveName() {
+    const cleanName = name.trim();
+
+    if (!cleanName) {
+      setNotice({
+        type: "error",
+        message: "Name cannot be empty.",
+      });
+      return;
+    }
+
+    await runAction("update-account-name", async () => {
+      const result = await actions.updateAccountName({
+        data: {
+          auth,
+          name: cleanName,
+        },
+      });
+
+      setName(result?.name ?? cleanName);
+      setEditNameOpen(false);
+
+      setNotice({
+        type: "success",
+        message: "Name updated successfully.",
+      });
+    });
+  }
+
+  async function savePassword() {
+    if (!currentPassword) {
+      setNotice({
+        type: "error",
+        message: "Enter your current password.",
+      });
+      return;
+    }
+
+    if (newPassword.length < 8) {
+      setNotice({
+        type: "error",
+        message:
+          "New password must be at least 8 characters.",
+      });
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setNotice({
+        type: "error",
+        message: "New passwords do not match.",
+      });
+      return;
+    }
+
+    await runAction(
+      "update-account-password",
+      async () => {
+        await actions.updateAccountPassword({
+          data: {
+            auth,
+            currentPassword,
+            newPassword,
+            confirmPassword,
+          },
+        });
+
+        setCurrentPassword("");
+        setNewPassword("");
+        setConfirmPassword("");
+        setPasswordOpen(false);
+
+        setNotice({
+          type: "success",
+          message:
+            "Password changed successfully.",
+        });
+      },
+    );
+  }
+
   return (
     <div className="space-y-3">
-      <section className={panelClass()}>
+      <button
+        type="button"
+        className={`${panelClass()} w-full text-left transition active:scale-[0.99]`}
+        onClick={() => setAccountOpen(true)}
+      >
         <Settings className="size-5 text-primary" />
-        <p className="mt-3 font-semibold">Account Settings</p>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Security and session settings are managed through the bot-authenticated Mini App session.
+
+        <p className="mt-3 font-semibold">
+          Account Settings
         </p>
-      </section>
-      <section className={panelClass("space-y-3")}>
-        <p className="font-semibold">History / Logs</p>
-        {(data?.logs ?? []).map((log: any) => (
-          <div key={log.id} className="border-t border-border pt-3 text-xs">
-            <p className="font-semibold">{log.action}</p>
-            <p className="text-muted-foreground">{new Date(log.created_at).toLocaleString()}</p>
+
+        <p className="mt-1 text-sm text-muted-foreground">
+          Edit your profile and password
+        </p>
+      </button>
+
+      {data?.logs ? (
+        <section className={panelClass()}>
+          <p className="font-semibold">
+            History / Logs
+          </p>
+
+          <div className="mt-3 space-y-2">
+            {(data.logs ?? [])
+              .slice(0, 20)
+              .map((log: any) => (
+                <div
+                  key={log.id}
+                  className="rounded-xl border p-3"
+                >
+                  <p className="text-sm font-medium">
+                    {log.action ??
+                      log.message ??
+                      "Activity"}
+                  </p>
+
+                  {log.created_at ? (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {new Date(
+                        log.created_at,
+                      ).toLocaleString()}
+                    </p>
+                  ) : null}
+                </div>
+              ))}
+
+            {!data.logs?.length ? (
+              <p className="text-sm text-muted-foreground">
+                No activity yet.
+              </p>
+            ) : null}
           </div>
-        ))}
-        {!data?.logs?.length ? (
-          <p className="text-sm text-muted-foreground">No activity logs yet.</p>
-        ) : null}
-      </section>
+        </section>
+      ) : null}
+
+      {accountOpen ? (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-sm rounded-2xl border bg-background p-4 shadow-xl">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="font-semibold">
+                  Account Settings
+                </p>
+
+                {data?.account?.email ? (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {data.account.email}
+                  </p>
+                ) : null}
+              </div>
+
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() =>
+                  setAccountOpen(false)
+                }
+              >
+                ✕
+              </Button>
+            </div>
+
+            <div className="mt-4 space-y-2">
+              <Button
+                type="button"
+                variant="secondary"
+                className="w-full justify-start"
+                onClick={() => {
+                  setAccountOpen(false);
+                  setEditNameOpen(true);
+                }}
+              >
+                Edit Name
+              </Button>
+
+              <Button
+                type="button"
+                variant="secondary"
+                className="w-full justify-start"
+                onClick={() => {
+                  setAccountOpen(false);
+                  setPasswordOpen(true);
+                }}
+              >
+                Change Password
+              </Button>
+
+              <Button
+                type="button"
+                variant="secondary"
+                className="w-full justify-start"
+                onClick={() => {
+                  setAccountOpen(false);
+                  setComingSoonOpen(true);
+                }}
+              >
+                Refer &amp; Earn
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {editNameOpen ? (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-sm rounded-2xl border bg-background p-4 shadow-xl">
+            <p className="font-semibold">
+              Edit Name
+            </p>
+
+            <div className="mt-4">
+              <label className="text-xs text-muted-foreground">
+                Name
+              </label>
+
+              <Input
+                className="mt-1"
+                value={name}
+                onChange={(event) =>
+                  setName(event.target.value)
+                }
+                placeholder="Enter your name"
+                autoComplete="name"
+              />
+            </div>
+
+            <div className="mt-4 flex gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                className="flex-1"
+                disabled={
+                  actionBusy ===
+                  "update-account-name"
+                }
+                onClick={() =>
+                  setEditNameOpen(false)
+                }
+              >
+                CANCEL
+              </Button>
+
+              <Button
+                type="button"
+                className="flex-1"
+                disabled={
+                  !name.trim() ||
+                  actionBusy ===
+                    "update-account-name"
+                }
+                onClick={() => void saveName()}
+              >
+                {actionBusy ===
+                "update-account-name"
+                  ? "Saving..."
+                  : "SAVE"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {passwordOpen ? (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-sm rounded-2xl border bg-background p-4 shadow-xl">
+            <p className="font-semibold">
+              Change Password
+            </p>
+
+            <div className="mt-4 space-y-3">
+              <div>
+                <label className="text-xs text-muted-foreground">
+                  Current Password
+                </label>
+
+                <Input
+                  className="mt-1"
+                  type="password"
+                  value={currentPassword}
+                  onChange={(event) =>
+                    setCurrentPassword(
+                      event.target.value,
+                    )
+                  }
+                  autoComplete="current-password"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-muted-foreground">
+                  New Password
+                </label>
+
+                <Input
+                  className="mt-1"
+                  type="password"
+                  value={newPassword}
+                  onChange={(event) =>
+                    setNewPassword(
+                      event.target.value,
+                    )
+                  }
+                  placeholder="Minimum 8 characters"
+                  autoComplete="new-password"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-muted-foreground">
+                  Confirm New Password
+                </label>
+
+                <Input
+                  className="mt-1"
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(event) =>
+                    setConfirmPassword(
+                      event.target.value,
+                    )
+                  }
+                  autoComplete="new-password"
+                />
+              </div>
+            </div>
+
+            <div className="mt-4 flex gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                className="flex-1"
+                disabled={
+                  actionBusy ===
+                  "update-account-password"
+                }
+                onClick={() => {
+                  setPasswordOpen(false);
+                  setCurrentPassword("");
+                  setNewPassword("");
+                  setConfirmPassword("");
+                }}
+              >
+                CANCEL
+              </Button>
+
+              <Button
+                type="button"
+                className="flex-1"
+                disabled={
+                  !currentPassword ||
+                  !newPassword ||
+                  !confirmPassword ||
+                  actionBusy ===
+                    "update-account-password"
+                }
+                onClick={() =>
+                  void savePassword()
+                }
+              >
+                {actionBusy ===
+                "update-account-password"
+                  ? "Changing..."
+                  : "CHANGE"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {comingSoonOpen ? (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-xs rounded-2xl border bg-background p-5 text-center shadow-xl">
+            <p className="text-lg font-semibold">
+              Refer &amp; Earn
+            </p>
+
+            <p className="mt-2 text-sm text-muted-foreground">
+              Coming Soon
+            </p>
+
+            <Button
+              type="button"
+              className="mt-5 w-full"
+              onClick={() =>
+                setComingSoonOpen(false)
+              }
+            >
+              OK
+            </Button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
-
 function Stat({ label, value }: { label: string; value: number | string }) {
   return (
     <section className={panelClass()}>
