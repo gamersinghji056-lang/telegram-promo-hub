@@ -1520,6 +1520,8 @@ function GroupRows({ groups, connections, bulkJoin, auth, actions, reload, setNo
       (g.writable_status === "UNKNOWN" ||
         g.writable_status === "NOT_WRITABLE" ||
         g.writable_status === "INACCESSIBLE" ||
+        !g.sendable_status ||
+        g.sendable_status === "UNKNOWN" ||
         g.can_send_messages !== true),
   );
   async function startAll() {
@@ -1826,17 +1828,24 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
   const [name, setName] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
   const [detail, setDetail] = useState<any>(null);
+  const [categorySaveBusy, setCategorySaveBusy] = useState(false);
+  const [categoryError, setCategoryError] = useState("");
+  const categorySaveRun = useRef(0);
   useEffect(() => {
     setWritability(data?.writability ?? {});
   }, [data?.writability]);
 
   async function verifyGroups() {
-    await runAction("verify-writable-groups", async () => {
-      const response = await actions.verifyWritableGroups({ data: { auth, limit: 60 } });
+    const joinIfRequired = confirm(
+      "Some groups may require joining before testing. Continue with Join & Test where required?",
+    );
+    if (!joinIfRequired) return;
+    await runAction("verify-unknown", async () => {
+      const response = await actions.verifyWritableGroups({ data: { auth, limit: 60, joinIfRequired } });
       setVerification(response);
       setWritability(response.summary ?? writability);
       setNotice(
-        `Checking Groups: ${response.checked}/${response.total}. Writable: ${response.writable}. Not Writable: ${response.notWritable}. Unknown: ${response.unknown}.`,
+        `Verify Unknown: ${response.checked}/${response.total}. Writable: ${response.writable}. Sendable: ${response.sendable}. Unknown: ${response.unknown}.`,
       );
       await reload();
     });
@@ -1847,15 +1856,17 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
   }
 
   async function runSelectedCheck(mode: "WRITABLE" | "SENDABLE") {
-    await runAction("test-category-writable-groups", async () => {
-      const joinIfRequired = confirm(
-        "Some groups may require joining before testing. Continue with Join & Test where required?",
-      );
+    const actionKey = mode === "SENDABLE" ? "check-sendable" : "check-writable";
+    const joinIfRequired = confirm(
+      "Some groups may require joining before testing. Continue with Join & Test where required?",
+    );
+    if (!joinIfRequired) return;
+    await runAction(actionKey, async () => {
       const response =
         mode === "SENDABLE"
           ? await actions.testSendableGroups({ data: { auth, groupIds: testSelected, joinIfRequired } })
           : await actions.testWritableGroups({ data: { auth, groupIds: testSelected, joinIfRequired } });
-      setTestResult(response);
+      setTestResult({ ...response, mode });
       setWritability(response.summary ?? writability);
       setNotice(
         mode === "SENDABLE"
@@ -1876,7 +1887,7 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
           data: { auth, groupIds: [groupId], joinIfRequired: true },
         });
       }
-      setTestResult(response);
+      setTestResult({ ...response, mode });
       setWritability(response.summary ?? writability);
       const error = response.errors?.[0]?.reason;
       setNotice(
@@ -1891,19 +1902,100 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
     });
   }
 
+  function closeEditor() {
+    categorySaveRun.current += 1;
+    setEditing(null);
+    setName("");
+    setSelected([]);
+    setCategorySaveBusy(false);
+    setCategoryError("");
+  }
+
   function openEditor(category?: any, categoryType: "NW_NS" | "WRITABLE" | "SENDABLE" = "NW_NS") {
+    categorySaveRun.current += 1;
+    const openRun = categorySaveRun.current;
     setDetail(null);
-    setEditing(category ?? { id: null, category_type: categoryType });
+    setCategorySaveBusy(false);
+    setCategoryError("");
+    setEditing(category ?? { id: null, category_type: categoryType, modal_key: `${categoryType}-${Date.now()}` });
     setName(category?.name ?? "");
     setSelected(category?.groups?.map((g: any) => g.id) ?? []);
     if (category?.id) {
       void runAction(`open-category-${category.id}`, async () => {
         const response = await actions.getGroupCategoryDetail({ data: { auth, id: category.id } });
+        if (categorySaveRun.current !== openRun) return;
         setSelected((response.groups ?? []).map((g: any) => g.id));
         setDetail(response);
       });
     }
   }
+
+  async function openCheckedEditor(categoryType: "WRITABLE" | "SENDABLE") {
+    const ids = approvedGroups.map((group: any) => group.id);
+    if (!ids.length) {
+      setNotice("Approve groups before creating a checked category.");
+      return;
+    }
+    const joinIfRequired = confirm(
+      "Some groups may require joining before testing. Continue with Join & Test where required?",
+    );
+    if (!joinIfRequired) return;
+    await runAction(categoryType === "SENDABLE" ? "create-category-sendable" : "create-category-writable", async () => {
+      const response =
+        categoryType === "SENDABLE"
+          ? await actions.testSendableGroups({ data: { auth, groupIds: ids, joinIfRequired } })
+          : await actions.testWritableGroups({ data: { auth, groupIds: ids, joinIfRequired } });
+      setTestResult({ ...response, mode: categoryType });
+      setWritability(response.summary ?? writability);
+      const passed = (response.groups ?? [])
+        .filter((group: any) =>
+          categoryType === "SENDABLE"
+            ? group.sendable_status === "SENDABLE"
+            : group.writable_status === "WRITABLE" && group.can_send_messages === true,
+        )
+        .map((group: any) => String(group.id));
+      categorySaveRun.current += 1;
+      setDetail(null);
+      setCategorySaveBusy(false);
+      setCategoryError("");
+      setEditing({ id: null, category_type: categoryType, modal_key: `${categoryType}-${Date.now()}` });
+      setName("");
+      setSelected(passed);
+      setNotice(
+        `${categoryType === "SENDABLE" ? "Sendable" : "Writable"} check complete. ${passed.length} group(s) are ready for category save.`,
+      );
+      void reload();
+    });
+  }
+
+  async function saveCategory() {
+    if (!editing) return;
+    const runId = categorySaveRun.current + 1;
+    categorySaveRun.current = runId;
+    setCategorySaveBusy(true);
+    setCategoryError("");
+    try {
+      await actions.saveGroupCategory({
+        data: {
+          auth,
+          id: editing.id,
+          name,
+          group_ids: selected,
+          category_type: editorType,
+        },
+      });
+      if (categorySaveRun.current !== runId) return;
+      setNotice(editing.id ? "Category updated successfully." : "Category created successfully.");
+      closeEditor();
+      void reload();
+    } catch (error) {
+      if (categorySaveRun.current !== runId) return;
+      setCategoryError(error instanceof Error ? error.message : "Category save failed.");
+    } finally {
+      if (categorySaveRun.current === runId) setCategorySaveBusy(false);
+    }
+  }
+
   const editorType = (editing?.category_type ?? "NW_NS") as "NW_NS" | "WRITABLE" | "SENDABLE";
   const editorGroups = editing?.id
     ? approvedGroups
@@ -1916,26 +2008,39 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
   return (
     <div className="space-y-4">
       <section className={panelClass("space-y-3")}>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <Button onClick={() => openEditor()}>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button className="min-h-10 flex-1 rounded-md text-xs font-semibold sm:flex-none" onClick={() => openEditor()}>
             <Plus className="mr-2 size-4" /> CREATE CATEGORY
           </Button>
-          <Button variant="secondary" onClick={() => openEditor(undefined, "WRITABLE")}>
-            CREATE CATEGORY WITH WRITABLE CHECK
-          </Button>
-          <Button variant="secondary" onClick={() => openEditor(undefined, "SENDABLE")}>
-            CREATE CATEGORY WITH SENDABLE CHECK
+          <Button
+            className="min-h-10 flex-1 rounded-md text-xs font-semibold sm:flex-none"
+            disabled={actionBusy === "create-category-writable"}
+            onClick={() => void openCheckedEditor("WRITABLE")}
+          >
+            <Plus className="mr-2 size-4" />
+            {actionBusy === "create-category-writable" ? "CHECKING..." : "CREATE CATEGORY WITH WRITABLE CHECK"}
           </Button>
           <Button
+            className="min-h-10 flex-1 rounded-md text-xs font-semibold sm:flex-none"
+            disabled={actionBusy === "create-category-sendable"}
+            onClick={() => void openCheckedEditor("SENDABLE")}
+          >
+            <Plus className="mr-2 size-4" />
+            {actionBusy === "create-category-sendable" ? "CHECKING..." : "CREATE CATEGORY WITH SENDABLE CHECK"}
+          </Button>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
             variant="secondary"
-            disabled={actionBusy === "verify-writable-groups"}
+            className="min-h-10 rounded-md text-xs font-semibold"
+            disabled={actionBusy === "verify-unknown"}
             onClick={() => void verifyGroups()}
           >
-            {actionBusy === "verify-writable-groups" ? "Checking..." : "CHECK WRITABLE GROUPS"}
+            {actionBusy === "verify-unknown" ? "Verifying..." : "VERIFY UNKNOWN GROUPS"}
           </Button>
         </div>
         <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
-          <Stat label="Checking Groups" value={`${verification?.checked ?? 0}/${verification?.total ?? writability.unknown ?? 0}`} />
+          <Stat label="Verify Unknown" value={verification ? `${verification.checked}/${verification.total}` : (writability.unknown ?? 0)} />
           <Stat label="Writable" value={writability.writable ?? writableGroups.length} />
           <Stat label="Sendable" value={writability.sendable ?? sendableGroups.length} />
           <Stat label="Not Writable" value={writability.notWritable ?? 0} />
@@ -1963,21 +2068,31 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
             </div>
             <Button
               className="w-full"
-              disabled={!testSelected.length || actionBusy === "test-category-writable-groups"}
+              variant="secondary"
+              disabled={!testSelected.length || actionBusy === "check-writable"}
               onClick={() => runSelectedCheck("WRITABLE")}
             >
-              {actionBusy === "test-category-writable-groups" ? "Testing..." : "CHECK WRITABLE GROUPS"}
+              {actionBusy === "check-writable" ? "Testing..." : "CHECK WRITABLE GROUPS"}
             </Button>
             <Button
               className="w-full"
               variant="secondary"
-              disabled={!testSelected.length || actionBusy === "test-category-writable-groups"}
+              disabled={!testSelected.length || actionBusy === "check-sendable"}
               onClick={() => runSelectedCheck("SENDABLE")}
             >
-              {actionBusy === "test-category-writable-groups" ? "Testing..." : "CHECK SENDABLE GROUPS"}
+              {actionBusy === "check-sendable" ? "Testing..." : "CHECK SENDABLE GROUPS"}
             </Button>
             <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-5">
-              <Stat label="Tested" value={`${testResult?.checked ?? 0}/${testResult?.total ?? testSelected.length}`} />
+              <Stat
+                label={
+                  testResult?.mode === "SENDABLE"
+                    ? "Sendable Check"
+                    : testResult?.mode === "WRITABLE"
+                      ? "Writable Check"
+                      : "Selected"
+                }
+                value={testResult ? `${testResult.checked}/${testResult.total}` : testSelected.length}
+              />
               <Stat label="Writable" value={testResult?.writable ?? 0} />
               <Stat label="Sendable" value={testResult?.sendable ?? 0} />
               <Stat label="Not Writable" value={testResult?.notWritable ?? 0} />
@@ -2104,30 +2219,18 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
             className={panelClass("max-h-[88vh] w-full max-w-lg space-y-3 overflow-auto shadow-lg")}
             onSubmit={(e) => {
               e.preventDefault();
-              void runAction("save-category", async () => {
-                await actions.saveGroupCategory({
-                  data: {
-                    auth,
-                    id: editing.id,
-                    name,
-                    group_ids: selected,
-                    category_type: editorType,
-                  },
-                });
-                setNotice(editing.id ? "Category updated successfully." : "Category created successfully.");
-                setEditing(null);
-                await reload();
-              });
+              void saveCategory();
             }}
           >
             <div className="flex items-center justify-between">
               <p className="font-semibold">
                 {editing.id ? "Edit Category" : editorType === "SENDABLE" ? "Create Category With Sendable Check" : editorType === "WRITABLE" ? "Create Category With Writable Check" : "Create Category"}
               </p>
-              <button type="button" onClick={() => setEditing(null)} aria-label="Close">
+              <button type="button" onClick={closeEditor} aria-label="Close">
                 <X className="size-4" />
               </button>
             </div>
+            {categoryError ? <p className="text-sm text-destructive">{categoryError}</p> : null}
             <label className="block space-y-2">
               <span className="text-xs font-semibold uppercase text-muted-foreground">Category Name</span>
               <input className={inputClass()} value={name} onChange={(e) => setName(e.target.value)} />
@@ -2178,8 +2281,8 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
                 </p>
               ) : null}
             </div>
-            <Button className="w-full" type="submit" disabled={!name || !selected.length || actionBusy === "save-category"}>
-              {actionBusy === "save-category" ? "Saving..." : editing.id ? "SAVE" : "CREATE CATEGORY"}
+            <Button className="w-full" type="submit" disabled={!name || !selected.length || categorySaveBusy}>
+              {categorySaveBusy ? "Saving..." : editing.id ? "SAVE" : "CREATE CATEGORY"}
             </Button>
           </form>
         </div>
@@ -2782,6 +2885,63 @@ function CampaignSummary({ rows }: { rows: any[] }) {
   );
 }
 
+function campaignLogTitle(log: any) {
+  const details = log.details ?? {};
+  if (details.compacted) return log.message;
+  const group = details.group_title
+    ? `${details.group_title}${details.group_username ? ` (@${details.group_username})` : ""}`
+    : details.target
+      ? String(details.target)
+      : "Target unavailable";
+  return `${log.level}: ${group}`;
+}
+
+function CampaignLogEntry({ log }: { log: any }) {
+  const details = log.details ?? {};
+  if (details.compacted) {
+    return (
+      <p className="border border-border bg-background p-2 text-xs">
+        {log.message}
+      </p>
+    );
+  }
+  const session =
+    details.session_account_name ||
+    details.session_label ||
+    details.session_username ||
+    details.session_telegram_user_id ||
+    "Unknown session";
+  const reason = details.human_reason || log.message;
+  const raw = details.raw_error || details.telegram_code;
+  return (
+    <article className="space-y-1 border border-border bg-background p-3 text-xs">
+      <p className="font-semibold">{campaignLogTitle(log)}</p>
+      {details.group_title || details.group_username ? (
+        <p>
+          Group: {details.group_title ?? "Unknown"} {details.group_username ? `(@${details.group_username})` : ""}
+        </p>
+      ) : null}
+      <p>Session: {String(session)}</p>
+      <p>Result: {log.level === "ERROR" ? "Failed" : log.level}</p>
+      <p>Reason: {String(reason)}</p>
+      {raw ? <p>Telegram Error: {String(raw)}</p> : null}
+      {details.classification || details.telegram_scope ? (
+        <p>
+          Classification: {String(details.classification ?? details.telegram_scope)}
+        </p>
+      ) : null}
+      {details.group_status || details.writable_status || details.sendable_status ? (
+        <p>
+          State: group {String(details.group_status ?? "unknown")}, writable{" "}
+          {String(details.writable_status ?? "unknown")}, sendable {String(details.sendable_status ?? "unknown")}
+        </p>
+      ) : null}
+      {details.test_type ? <p>Test Type: {String(details.test_type)}</p> : null}
+      <p>Time: {new Date(log.created_at).toLocaleString()}</p>
+    </article>
+  );
+}
+
 function CampaignCards({ rows, auth, actions, reload, setNotice, actionBusy, runAction }: any) {
   const [detail, setDetail] = useState<any>(null);
   async function control(id: string, action: "START" | "PAUSE" | "RESTART" | "STOP") {
@@ -2892,9 +3052,7 @@ function CampaignCards({ rows, auth, actions, reload, setNotice, actionBusy, run
             <div className="space-y-2">
               <p className="text-sm font-semibold">Recent errors/logs</p>
               {(detail.logs ?? []).map((log: any) => (
-                <p key={log.id} className="border border-border bg-background p-2 text-xs">
-                  {log.level}: {log.message}
-                </p>
+                <CampaignLogEntry key={log.id} log={log} />
               ))}
               {!detail.logs?.length ? <p className="text-sm text-muted-foreground">No logs yet.</p> : null}
             </div>

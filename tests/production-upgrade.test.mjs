@@ -52,6 +52,64 @@ test("auto session checks use eligible sessions and sequential fallback", () => 
   assert(fn.includes("definitiveGroupStatus(status)"));
 });
 
+test("Verify Unknown joins then runs real writable and sendable checks", () => {
+  const src = read("src/lib/customer-data.server.ts");
+  const fn = src.slice(src.indexOf("export async function verifyWritableGroups"), src.indexOf("export async function testWritableGroups"));
+  assert(fn.includes("unresolvedGroupFilter()"));
+  assert(fn.includes("joinIfRequired: input.joinIfRequired"));
+  assert(fn.includes('mode: "WRITABLE"'));
+  assert(fn.includes('mode: "SENDABLE"'));
+});
+
+test("Unknown is not silently converted to success", () => {
+  const src = read("src/lib/customer-data.server.ts");
+  const fn = src.slice(src.indexOf("async function runAutoGroupChecks"), src.indexOf("export async function verifyWritableGroups"));
+  assert(fn.includes('status === "UNKNOWN" || status === "JOIN_REQUIRED" ? null : false'));
+  assert(!fn.includes('status === "UNKNOWN") result.writable'));
+  assert(!fn.includes('status === "UNKNOWN") result.sendable'));
+});
+
+test("category check UI uses independent busy states", () => {
+  const src = read("src/routes/mini-app.$section.tsx");
+  assert(src.includes('"check-writable"'));
+  assert(src.includes('"check-sendable"'));
+  assert(src.includes('"verify-unknown"'));
+  assert(!src.includes('"test-category-writable-groups"'));
+  const writableButton = src.slice(src.indexOf('actionBusy === "check-writable"'), src.indexOf('actionBusy === "check-sendable"'));
+  assert(!writableButton.includes('actionBusy === "check-sendable"'));
+});
+
+test("Category Save does not call Telegram testing and validates persisted statuses", () => {
+  const src = read("src/lib/customer-data.server.ts");
+  const fn = src.slice(src.indexOf("export async function saveGroupCategory"), src.indexOf("export async function deleteGroupCategory"));
+  assert(!fn.includes("testWritableGroups("));
+  assert(!fn.includes("testSendableGroups("));
+  assert(fn.includes('group.can_send_messages === true && group.writable_status === "WRITABLE"'));
+  assert(fn.includes('group.sendable_status === "SENDABLE"'));
+});
+
+test("modal save state is local and guarded against stale async results", () => {
+  const src = read("src/routes/mini-app.$section.tsx");
+  assert(src.includes("categorySaveBusy"));
+  assert(src.includes("categorySaveRun"));
+  assert(src.includes("if (categorySaveRun.current !== runId) return"));
+  assert(src.includes("if (categorySaveRun.current !== openRun) return"));
+});
+
+test("human log formatter shows group session raw RPC and human reason", () => {
+  const worker = read("src/lib/campaign-worker.server.ts");
+  assert(worker.includes("campaignFailureContext"));
+  assert(worker.includes("group_title"));
+  assert(worker.includes("session_account_name"));
+  assert(worker.includes("raw_error: rpc.raw"));
+  assert(worker.includes("human_reason: rpc.human"));
+  const ui = read("src/routes/mini-app.$section.tsx");
+  assert(ui.includes("function CampaignLogEntry"));
+  assert(ui.includes("Telegram Error:"));
+  assert(ui.includes("Classification:"));
+  assert(ui.includes("Reason:"));
+});
+
 test("temporary notices are auto-cleared without reload", () => {
   const src = read("src/routes/mini-app.$section.tsx");
   assert(src.includes("window.setTimeout(() => setNotice(\"\"), 5000)"));

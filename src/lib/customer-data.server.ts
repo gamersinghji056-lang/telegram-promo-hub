@@ -2084,6 +2084,16 @@ function definitiveGroupStatus(status: string | null | undefined) {
   return ["NOT_WRITABLE", "NOT_SENDABLE", "INACCESSIBLE"].includes(String(status));
 }
 
+function unresolvedGroupFilter() {
+  return [
+    "writable_status.is.null",
+    "writable_status.eq.UNKNOWN",
+    "sendable_status.is.null",
+    "sendable_status.eq.UNKNOWN",
+    "can_send_messages.is.null",
+  ].join(",");
+}
+
 async function runAutoGroupChecks(
   ctx: AuthContext,
   input: { groupIds: string[]; joinIfRequired?: boolean; mode: GroupCheckMode; limit?: number },
@@ -2218,7 +2228,10 @@ async function runAutoGroupChecks(
   return { ...result, summary: await groupWritabilitySummary(ctx) };
 }
 
-export async function verifyWritableGroups(ctx: AuthContext, limit = 40) {
+export async function verifyWritableGroups(
+  ctx: AuthContext,
+  input: { limit?: number; joinIfRequired?: boolean } = {},
+) {
   const client = db();
   const proofCount = await applySuccessfulSendWritableProof(ctx);
   const { data: unknownGroups } = await client
@@ -2226,33 +2239,69 @@ export async function verifyWritableGroups(ctx: AuthContext, limit = 40) {
     .select("id, title, username, telegram_group_id, access_hash, entity_type")
     .eq("tenant_id", ctx.tenantId)
     .in("status", ["APPROVED", "JOINED"])
-    .or("writable_status.is.null,writable_status.eq.UNKNOWN,can_send_messages.is.null")
+    .or(unresolvedGroupFilter())
     .order("updated_at", { ascending: true, nullsFirst: true })
-    .limit(Math.max(1, Math.min(100, Number(limit) || 40)));
+    .limit(Math.max(1, Math.min(100, Number(input.limit) || 40)));
   const rows = unknownGroups ?? [];
   const result = {
     checked: 0,
     total: rows.length,
     writable: proofCount,
+    sendable: 0,
     notWritable: 0,
+    notSendable: 0,
     unknown: 0,
+    joinRequired: 0,
+    inaccessible: 0,
+    joined: 0,
     errors: [] as { group: string; reason: string }[],
   };
   if (!rows.length) return { ...result, summary: await groupWritabilitySummary(ctx) };
-  const checked = await runAutoGroupChecks(ctx, {
+  const writableChecked = await runAutoGroupChecks(ctx, {
     groupIds: rows.map((row) => String(row.id)),
     mode: "WRITABLE",
-    limit,
+    limit: input.limit,
+    joinIfRequired: input.joinIfRequired,
   });
-  result.checked = checked.checked;
-  result.writable += checked.writable;
-  result.notWritable = checked.notWritable;
-  result.unknown = checked.unknown + checked.joinRequired + checked.inaccessible;
-  result.errors = checked.errors.map((error) => ({ group: error.group, reason: error.reason }));
+  const sendableCandidates = (writableChecked.groups ?? [])
+    .filter((group) => {
+      const writable = String(group.writable_status ?? "");
+      const sendable = String(group.sendable_status ?? "");
+      return (
+        writable === "WRITABLE" &&
+        (!sendable || sendable === "UNKNOWN" || sendable === "JOIN_REQUIRED")
+      );
+    })
+    .map((group) => String(group.id));
+  const sendableChecked = sendableCandidates.length
+    ? await runAutoGroupChecks(ctx, {
+        groupIds: sendableCandidates,
+        mode: "SENDABLE",
+        limit: input.limit,
+        joinIfRequired: input.joinIfRequired,
+      })
+    : null;
+  result.checked = writableChecked.checked + (sendableChecked?.checked ?? 0);
+  result.writable += writableChecked.writable;
+  result.sendable = sendableChecked?.sendable ?? 0;
+  result.notWritable = writableChecked.notWritable;
+  result.notSendable = sendableChecked?.notSendable ?? 0;
+  result.joinRequired = writableChecked.joinRequired + (sendableChecked?.joinRequired ?? 0);
+  result.inaccessible = writableChecked.inaccessible + (sendableChecked?.inaccessible ?? 0);
+  result.joined = writableChecked.joined + (sendableChecked?.joined ?? 0);
+  result.unknown =
+    writableChecked.unknown +
+    (sendableChecked?.unknown ?? 0) +
+    result.joinRequired +
+    result.inaccessible;
+  result.errors = [...writableChecked.errors, ...(sendableChecked?.errors ?? [])].map((error) => ({
+    group: error.group,
+    reason: error.reason,
+  }));
   await notify(
     ctx.tenantId,
     "Group verification completed",
-    `Checked ${result.checked} group(s). Writable: ${result.writable}. Not writable: ${result.notWritable}. Unknown: ${result.unknown}.`,
+    `Verified ${result.checked} check(s). Writable: ${result.writable}. Sendable: ${result.sendable}. Not writable: ${result.notWritable}. Unknown: ${result.unknown}.`,
     "INFO",
     "/mini-app/group-categories",
   );
@@ -2319,25 +2368,46 @@ export async function saveGroupCategory(
   if ((groups ?? []).length !== ids.length) {
     throw new Error("One or more selected groups are not approved.");
   }
-  let finalIds = ids;
-  if (!input.id && categoryType === "WRITABLE") {
-    const checked = await testWritableGroups(ctx, { groupIds: ids, joinIfRequired: input.joinIfRequired });
-    finalIds = checked.groups
-      .filter((group) => group.writable_status === "WRITABLE")
-      .map((group) => String(group.id));
+  const existingIds = new Set<string>();
+  if (input.id) {
+    const { data: existingMembers } = await client
+      .from("group_category_members")
+      .select("group_id")
+      .eq("tenant_id", ctx.tenantId)
+      .eq("category_id", input.id);
+    for (const member of existingMembers ?? []) {
+      if (member.group_id) existingIds.add(String(member.group_id));
+    }
   }
-  if (!input.id && categoryType === "SENDABLE") {
-    const checked = await testSendableGroups(ctx, { groupIds: ids, joinIfRequired: input.joinIfRequired });
-    finalIds = checked.groups
-      .filter((group) => group.sendable_status === "SENDABLE")
-      .map((group) => String(group.id));
+  const finalIds = ids;
+  if (categoryType === "WRITABLE") {
+    const validIds = new Set(
+      (groups ?? [])
+        .filter((group) => group.can_send_messages === true && group.writable_status === "WRITABLE")
+        .map((group) => String(group.id)),
+    );
+    const invalidIds = ids.filter((id) => !validIds.has(id) && !existingIds.has(id));
+    if (invalidIds.length) {
+      throw new Error("One or more selected groups do not have persisted WRITABLE status.");
+    }
+  }
+  if (categoryType === "SENDABLE") {
+    const validIds = new Set(
+      (groups ?? [])
+        .filter((group) => group.sendable_status === "SENDABLE")
+        .map((group) => String(group.id)),
+    );
+    const invalidIds = ids.filter((id) => !validIds.has(id) && !existingIds.has(id));
+    if (invalidIds.length) {
+      throw new Error("One or more selected groups do not have persisted SENDABLE status.");
+    }
   }
   if (!finalIds.length) {
     throw new Error(
       categoryType === "SENDABLE"
-        ? "No selected groups passed the sendable check."
+        ? "No selected groups have persisted SENDABLE status. Run CHECK SENDABLE GROUPS first."
         : categoryType === "WRITABLE"
-          ? "No selected groups passed the writable check."
+          ? "No selected groups have persisted WRITABLE status. Run CHECK WRITABLE GROUPS first."
           : "Select at least one approved group.",
     );
   }

@@ -277,6 +277,46 @@ async function logCampaign(
     });
 }
 
+async function campaignFailureContext(job: JobRow) {
+  const client = db();
+  const { data: connection } = job.connection_id
+    ? await client
+        .from("telegram_connections")
+        .select("id, label, account_name, username, telegram_user_id")
+        .eq("id", job.connection_id)
+        .eq("tenant_id", job.tenant_id)
+        .maybeSingle()
+    : { data: null };
+  if (job.job_type === "GROUP") {
+    const { data } = await client
+      .from("campaign_groups")
+      .select("id, discovered_groups(title, username, status, writable_status, sendable_status)")
+      .eq("id", job.target_id)
+      .eq("tenant_id", job.tenant_id)
+      .maybeSingle();
+    const group = Array.isArray(data?.discovered_groups)
+      ? data?.discovered_groups[0]
+      : data?.discovered_groups;
+    return {
+      group_title: group?.title ?? null,
+      group_username: group?.username ?? null,
+      group_status: group?.status ?? null,
+      writable_status: group?.writable_status ?? null,
+      sendable_status: group?.sendable_status ?? null,
+      session_label: connection?.label ?? null,
+      session_account_name: connection?.account_name ?? null,
+      session_username: connection?.username ?? null,
+      session_telegram_user_id: connection?.telegram_user_id ?? null,
+    };
+  }
+  return {
+    session_label: connection?.label ?? null,
+    session_account_name: connection?.account_name ?? null,
+    session_username: connection?.username ?? null,
+    session_telegram_user_id: connection?.telegram_user_id ?? null,
+  };
+}
+
 async function failJob(job: JobRow, error: string) {
   const rpc = classifyRpcError(error);
   const classification = classifyCampaignError(error, job.job_type);
@@ -330,11 +370,15 @@ async function failJob(job: JobRow, error: string) {
       completed_at: final ? new Date().toISOString() : null,
     })
     .eq("id", job.id);
+  const context = await campaignFailureContext(job);
   await logCampaign(job, final ? "ERROR" : "WARNING", rpc.human, {
+    ...context,
     classification,
     telegram_scope: rpc.scope,
     telegram_code: rpc.code,
     raw_error: rpc.raw,
+    human_reason: rpc.human,
+    test_type: "CAMPAIGN",
   });
   if (classification === "ENTITY_UNAVAILABLE" || classification === "NOT_WRITABLE") {
     const targetTable = job.job_type === "GROUP" ? "campaign_groups" : "campaign_recipients";

@@ -254,9 +254,12 @@ export const getGroupWritabilitySummary = createServerFn({ method: "POST" })
   .handler(async ({ data: i }) => data.groupWritabilitySummary(await resolveAuth(i.auth)));
 
 export const verifyWritableGroups = createServerFn({ method: "POST" })
-  .inputValidator((i: Auth & { limit?: number }) => i)
+  .inputValidator((i: Auth & { limit?: number; joinIfRequired?: boolean }) => i)
   .handler(async ({ data: i }) =>
-    data.verifyWritableGroups(await resolveAuth(i.auth), i.limit ?? 40),
+    data.verifyWritableGroups(await resolveAuth(i.auth), {
+      limit: i.limit ?? 40,
+      joinIfRequired: i.joinIfRequired,
+    }),
   );
 
 export const testWritableGroups = createServerFn({ method: "POST" })
