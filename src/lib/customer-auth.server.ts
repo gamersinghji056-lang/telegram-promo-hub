@@ -177,11 +177,16 @@ export async function registerCustomerWithPasswordHash(input: {
   const expires = plan
     ? new Date(Date.now() + (plan.duration_days as number) * 86400_000).toISOString()
     : null;
+  const requestedName = input.name?.trim() || null;
+  const { data: generatedName } = requestedName
+    ? { data: requestedName }
+    : await client.rpc("next_customer_profile_name");
+  const profileName = String(generatedName || requestedName || "User001");
 
   const { data: tenant, error: tenantError } = await client
     .from("tenants")
     .insert({
-      name: input.name?.trim() || email.split("@")[0],
+      name: profileName,
       plan_id: plan?.id ?? null,
       plan_expires_at: expires,
     })
@@ -195,7 +200,7 @@ export async function registerCustomerWithPasswordHash(input: {
       tenant_id: tenant.id,
       email,
       password_hash: input.passwordHash,
-      name: input.name?.trim() || null,
+      name: profileName,
       telegram_user_id: input.telegramUserId ?? null,
       telegram_username: input.telegramUsername ?? null,
       email_verified: !settings.email_verification_enabled,

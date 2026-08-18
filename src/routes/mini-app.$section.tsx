@@ -23,6 +23,7 @@ import {
   Send,
   Settings,
   Trash2,
+  UserCircle,
   Users,
   X,
 } from "lucide-react";
@@ -44,6 +45,7 @@ import {
   findAudience,
   getAudienceDiscoveryState,
   getAnalytics,
+  getAccountProfile,
   getBilling,
   getBulkJoinState,
   getCampaignDetail,
@@ -73,6 +75,8 @@ import {
   pauseAudienceDiscovery,
   pauseBulkJoin,
   saveGroupCategory,
+  testSendableGroups,
+  testSessionHealth,
   resumeBulkJoin,
   selectAudienceIds,
   startAudienceDiscovery,
@@ -80,6 +84,8 @@ import {
   startGroupDiscovery,
   startConnectionLogin,
   updateCampaign,
+  updateAccountName,
+  changeAccountPassword,
   verifyConnectionCode,
   verifyConnectionPassword,
   testWritableGroups,
@@ -186,6 +192,11 @@ function statusTone(status?: string) {
   return "text-primary";
 }
 
+function healthColor(score: number) {
+  const clamped = Math.max(0, Math.min(100, score));
+  return `hsl(${Math.round(clamped * 1.2)}, 78%, 45%)`;
+}
+
 function MiniAppSection() {
   const { section } = Route.useParams();
   const dashboardFn = useServerFn(getDashboard);
@@ -201,6 +212,7 @@ function MiniAppSection() {
   const notificationsFn = useServerFn(getNotifications);
   const markNotificationsReadFn = useServerFn(markNotificationsRead);
   const logoutFn = useServerFn(logoutCustomer);
+  const profileFn = useServerFn(getAccountProfile);
   const discoveryStateFn = useServerFn(getGroupDiscoveryState);
   const audienceFn = useServerFn(findAudience);
   const audienceDiscoveryFn = useServerFn(getAudienceDiscoveryState);
@@ -212,6 +224,7 @@ function MiniAppSection() {
     verifyConnectionCode: useServerFn(verifyConnectionCode),
     verifyConnectionPassword: useServerFn(verifyConnectionPassword),
     checkConnection: useServerFn(checkConnection),
+    testSessionHealth: useServerFn(testSessionHealth),
     reconnectConnection: useServerFn(reconnectConnection),
     disconnectConnection: useServerFn(disconnectConnection),
     removeConnection: useServerFn(removeConnection),
@@ -235,6 +248,7 @@ function MiniAppSection() {
     removeGroup: useServerFn(removeGroup),
     getGroupCategoryDetail: useServerFn(getGroupCategoryDetail),
     testWritableGroups: useServerFn(testWritableGroups),
+    testSendableGroups: useServerFn(testSendableGroups),
     verifyWritableGroups: useServerFn(verifyWritableGroups),
     saveGroupCategory: useServerFn(saveGroupCategory),
     deleteGroupCategory: useServerFn(deleteGroupCategory),
@@ -249,6 +263,9 @@ function MiniAppSection() {
     updateCampaign: useServerFn(updateCampaign),
     deleteCampaign: useServerFn(deleteCampaign),
     controlCampaign: useServerFn(controlCampaign),
+    updateAccountName: useServerFn(updateAccountName),
+    changeAccountPassword: useServerFn(changeAccountPassword),
+    logout: useServerFn(logoutCustomer),
   };
 
   const [auth, setAuth] = useState<string | null>(null);
@@ -260,7 +277,10 @@ function MiniAppSection() {
   const [actionBusy, setActionBusy] = useState("");
   const [notifications, setNotifications] = useState<any[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [profile, setProfile] = useState<any>(null);
+  const [showProfile, setShowProfile] = useState(false);
   const sectionRef = useRef(section);
+  const cacheRef = useRef(new Map<string, any>());
 
   const loaders = useMemo<Record<string, (auth: string) => Promise<any>>>(
     () => ({
@@ -316,19 +336,30 @@ function MiniAppSection() {
       billing: (a) => billingFn({ data: { auth: a } }),
       settings: async (a) => ({
         logs: await logsFn({ data: { auth: a } }),
+        profile: await profileFn({ data: { auth: a } }),
       }),
     }),
     [],
   );
 
-  async function load() {
+  async function load(force = false) {
     const targetSection = section;
-    setBusy(true);
-    setLoadedSection("");
-    setData(null);
-    setError("");
-    setNotice("");
     const nextAuth = await telegramAuthReady();
+    const cacheKey = `${nextAuth ?? "none"}:${targetSection}`;
+    const cached = cacheRef.current.get(cacheKey);
+    if (cached && !force) {
+      setAuth(nextAuth);
+      setData(cached.data);
+      setLoadedSection(targetSection);
+      setNotifications(cached.notifications ?? notifications);
+      setProfile(cached.profile ?? profile);
+      setBusy(false);
+    } else {
+      setBusy(true);
+      setLoadedSection("");
+      setData(null);
+    }
+    setError("");
     setAuth(nextAuth);
     if (!valid.has(section)) {
       setError("This section does not exist.");
@@ -344,8 +375,18 @@ function MiniAppSection() {
       const result = await loaders[targetSection]?.(nextAuth);
       setData(result);
       setLoadedSection(targetSection);
-      const notes = await notificationsFn({ data: { auth: nextAuth } });
-      setNotifications(notes ?? []);
+      setBusy(false);
+      void notificationsFn({ data: { auth: nextAuth } }).then((notes) => {
+        setNotifications(notes ?? []);
+        const current = cacheRef.current.get(cacheKey) ?? {};
+        cacheRef.current.set(cacheKey, { ...current, data: result, notifications: notes ?? [] });
+      });
+      void profileFn({ data: { auth: nextAuth } }).then((nextProfile) => {
+        setProfile(nextProfile);
+        const current = cacheRef.current.get(cacheKey) ?? {};
+        cacheRef.current.set(cacheKey, { ...current, data: result, profile: nextProfile });
+      });
+      cacheRef.current.set(cacheKey, { data: result, notifications, profile });
     } catch (e) {
       setError(
         e instanceof Error && e.message.includes("NO_ACCOUNT")
@@ -372,6 +413,8 @@ function MiniAppSection() {
     }
     sessionStorage.removeItem("customer-session");
     setData(null);
+    setProfile(null);
+    cacheRef.current.clear();
     setError("You have signed out. Return to the bot to open a secure session.");
   }
 
@@ -397,8 +440,20 @@ function MiniAppSection() {
 
   useEffect(() => {
     sectionRef.current = section;
-    void load();
+    void load(false);
   }, [section]);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(""), 5000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
+  useEffect(() => {
+    if (!error || error === AUTH_REQUIRED_MESSAGE) return;
+    const timer = window.setTimeout(() => setError(""), 5000);
+    return () => window.clearTimeout(timer);
+  }, [error]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -529,7 +584,7 @@ function MiniAppSection() {
           <h1 className="mt-1 text-2xl font-semibold">{titles[section] ?? section}</h1>
         </div>
         <div className="flex gap-2">
-          <Button size="icon" variant="secondary" aria-label="Refresh" onClick={load} disabled={busy}>
+          <Button size="icon" variant="secondary" aria-label="Refresh" onClick={() => load(true)} disabled={busy}>
             <RefreshCw className={busy ? "animate-spin" : ""} />
           </Button>
           <Button
@@ -546,8 +601,8 @@ function MiniAppSection() {
               </span>
             ) : null}
           </Button>
-          <Button size="icon" variant="secondary" aria-label="Sign out" onClick={signOut}>
-            <LogOut />
+          <Button size="icon" variant="secondary" aria-label="Profile" onClick={() => setShowProfile(true)}>
+            <UserCircle />
           </Button>
         </div>
       </div>
@@ -566,7 +621,7 @@ function MiniAppSection() {
           auth={auth ?? ""}
           data={data}
           actions={actions}
-          reload={load}
+          reload={() => load(true)}
           setNotice={guardedNotice(section)}
           actionBusy={actionBusy}
           runAction={runAction}
@@ -607,6 +662,30 @@ function MiniAppSection() {
               </a>
             ))}
             {!notifications.length ? <Empty message="No notifications yet." /> : null}
+          </section>
+        </div>
+      ) : null}
+      {showProfile ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4">
+          <section className={panelClass("w-full max-w-sm space-y-3 shadow-lg")}>
+            <div className="flex items-center justify-between">
+              <p className="font-semibold">Profile</p>
+              <button type="button" onClick={() => setShowProfile(false)} aria-label="Close">
+                <X className="size-4" />
+              </button>
+            </div>
+            <div className="space-y-1 text-sm">
+              <p className="font-semibold">{profile?.name ?? "User001"}</p>
+              <p className="text-muted-foreground">{profile?.email ?? ""}</p>
+              <p className="text-xs uppercase text-primary">{profile?.status ?? "ACTIVE"}</p>
+            </div>
+            <a
+              href="/mini-app/settings"
+              className="inline-flex w-full items-center justify-center border border-border bg-secondary px-3 py-2 text-sm font-semibold"
+              onClick={() => setShowProfile(false)}
+            >
+              Account Settings
+            </a>
           </section>
         </div>
       ) : null}
@@ -654,7 +733,7 @@ function CustomerContent(props: {
   if (section === "group-create") return <GroupCampaign {...props} />;
   if (section === "analytics") return <Analytics data={props.data} />;
   if (section === "billing") return <Billing data={props.data} />;
-  if (section === "settings") return <SettingsPanel data={props.data} />;
+  if (section === "settings") return <SettingsPanel {...props} />;
   return null;
 }
 
@@ -664,6 +743,7 @@ function Dashboard({ data }: { data: any }) {
     ["Connected Sessions", data?.connections?.active, Bot],
     ["Approved Groups", data?.groups?.approved, FolderOpen],
     ["Writable Groups", data?.groups?.writable, CheckCircle2],
+    ["Sendable Groups", data?.groups?.sendable, Send],
     ["Audience Users", data?.audience?.total, Users],
     ["Active Campaigns", data?.campaigns?.running, Send],
     ["Messages Sent", messageStats.sent_messages ?? 0, CheckCircle2],
@@ -840,6 +920,18 @@ function Sessions({ auth, data, actions, reload, setNotice, actionBusy, runActio
       await reload();
     });
   }
+  async function testHealth(id: string) {
+    await sessionAction(`test-health-${id}`, id, async () => {
+      const result = await actions.testSessionHealth({ data: { auth, id } });
+      const failed = (result.diagnostics ?? []).filter((item: any) => item.status === "FAIL").length;
+      const warned = (result.diagnostics ?? []).filter((item: any) => item.status === "WARN").length;
+      setCardMessage((current) => ({
+        ...current,
+        [id]: `Health ${result.health_score ?? 0}% - ${failed ? `${failed} failed` : warned ? `${warned} warning(s)` : "diagnostics passed"}`,
+      }));
+      await reload();
+    });
+  }
   async function reconnect(row: any) {
     await sessionAction(`reconnect-${row.id}`, row.id, async () => {
       const result = await actions.reconnectConnection({ data: { auth, id: row.id } });
@@ -966,6 +1058,7 @@ function Sessions({ auth, data, actions, reload, setNotice, actionBusy, runActio
               : row.status === "TWO_FACTOR_REQUIRED"
                 ? { step: "PASSWORD" as const, code: "", password: "" }
                 : null);
+          const score = Number(row.health_score ?? 75);
           return (
           <article key={row.id} className={panelClass()}>
             <div className="flex items-start justify-between gap-3">
@@ -982,6 +1075,18 @@ function Sessions({ auth, data, actions, reload, setNotice, actionBusy, runActio
               <span className={`text-xs font-semibold ${statusTone(row.status)}`}>
                 {row.status}
               </span>
+            </div>
+            <div className="mt-3 space-y-1">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-semibold">Health {score}%</span>
+                <span className="text-muted-foreground">{row.health_summary ?? "Health not tested yet."}</span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full transition-all"
+                  style={{ width: `${Math.max(0, Math.min(100, score))}%`, backgroundColor: healthColor(score) }}
+                />
+              </div>
             </div>
             <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
               <p>
@@ -1049,6 +1154,9 @@ function Sessions({ auth, data, actions, reload, setNotice, actionBusy, runActio
             <div className="mt-4 flex flex-wrap gap-2">
               <Button size="sm" variant="secondary" disabled={busy === `check-${row.id}`} onClick={() => check(row.id)}>
                 {busy === `check-${row.id}` ? "Checking..." : "CHECK STATUS"}
+              </Button>
+              <Button size="sm" variant="secondary" disabled={busy === `test-health-${row.id}`} onClick={() => testHealth(row.id)}>
+                {busy === `test-health-${row.id}` ? "Testing..." : "TEST HEALTH"}
               </Button>
               <Button size="sm" variant="secondary" disabled={busy === `reconnect-${row.id}`} onClick={() => reconnect(row)}>
                 {busy === `reconnect-${row.id}` ? "Sending..." : "RECONNECT"}
@@ -1423,12 +1531,30 @@ function GroupRows({ groups, connections, bulkJoin, auth, actions, reload, setNo
   }
   async function testWritable() {
     await runAction("test-writable-groups", async () => {
+      const joinIfRequired = confirm(
+        "Some groups may require joining before testing. Continue with Join & Test where required?",
+      );
       const result = await actions.testWritableGroups({
-        data: { auth, connectionId, groupIds: testSelected },
+        data: { auth, groupIds: testSelected, joinIfRequired },
       });
       setTestResult(result);
       setNotice(
         `Tested: ${result.checked}/${result.total}. Writable: ${result.writable}. Not Writable: ${result.notWritable}. Unknown: ${result.unknown}. Inaccessible: ${result.inaccessible}.`,
+      );
+      await reload();
+    });
+  }
+  async function testSendable() {
+    await runAction("test-sendable-groups", async () => {
+      const joinIfRequired = confirm(
+        "Some groups may require joining before testing. Continue with Join & Test where required?",
+      );
+      const result = await actions.testSendableGroups({
+        data: { auth, groupIds: testSelected, joinIfRequired },
+      });
+      setTestResult(result);
+      setNotice(
+        `Tested: ${result.checked}/${result.total}. Sendable: ${result.sendable}. Not Sendable: ${result.notSendable}. Unknown: ${result.unknown}. Join required: ${result.joinRequired}.`,
       );
       await reload();
     });
@@ -1489,10 +1615,10 @@ function GroupRows({ groups, connections, bulkJoin, auth, actions, reload, setNo
               </div>
             </div>
           ) : null}
-          {connectionId && testableGroups.length ? (
+          {testableGroups.length ? (
             <div className="space-y-3 border-t border-border pt-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-sm font-semibold">Test selected UNKNOWN/NOT_WRITABLE groups with a controlled send.</p>
+                <p className="text-sm font-semibold">Test selected groups with automatic session selection.</p>
                 <div className="flex gap-2">
                   <Button
                     type="button"
@@ -1512,11 +1638,20 @@ function GroupRows({ groups, connections, bulkJoin, auth, actions, reload, setNo
                 disabled={!testSelected.length || actionBusy === "test-writable-groups"}
                 onClick={testWritable}
               >
-                {actionBusy === "test-writable-groups" ? "Testing..." : "TEST WRITABLE GROUPS"}
+                {actionBusy === "test-writable-groups" ? "Testing..." : "CHECK WRITABLE GROUPS"}
+              </Button>
+              <Button
+                className="w-full"
+                variant="secondary"
+                disabled={!testSelected.length || actionBusy === "test-sendable-groups"}
+                onClick={testSendable}
+              >
+                {actionBusy === "test-sendable-groups" ? "Testing..." : "CHECK SENDABLE GROUPS"}
               </Button>
               <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-5">
                 <Stat label="Tested" value={`${testResult?.checked ?? 0}/${testResult?.total ?? testSelected.length}`} />
                 <Stat label="Writable" value={testResult?.writable ?? 0} />
+                <Stat label="Sendable" value={testResult?.sendable ?? 0} />
                 <Stat label="Not Writable" value={testResult?.notWritable ?? 0} />
                 <Stat label="Unknown" value={testResult?.unknown ?? 0} />
                 <Stat label="Inaccessible" value={testResult?.inaccessible ?? 0} />
@@ -1555,6 +1690,7 @@ function GroupRows({ groups, connections, bulkJoin, auth, actions, reload, setNo
                 <p className="mt-1 text-xs text-muted-foreground">
                   Writable: {g.writable_status ?? "UNKNOWN"} | Can send:{" "}
                   {g.can_send_messages === true ? "yes" : g.can_send_messages === false ? "no" : "unknown"}
+                  {" "} | Sendable: {g.sendable_status ?? "UNKNOWN"}
                 </p>
               ) : null}
               <p className="mt-1 text-xs text-muted-foreground">
@@ -1671,6 +1807,7 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
   const writableGroups = groups.filter(
     (g: any) => g.can_send_messages === true && g.writable_status === "WRITABLE",
   );
+  const sendableGroups = groups.filter((g: any) => g.sendable_status === "SENDABLE");
   const notWritableGroups = approvedGroups.filter((g: any) => g.writable_status === "NOT_WRITABLE");
   const testableGroups = groups.filter(
     (g: any) =>
@@ -1683,7 +1820,6 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
   const categories = data?.categories ?? [];
   const [writability, setWritability] = useState<any>(data?.writability ?? {});
   const [verification, setVerification] = useState<any>(null);
-  const [testConnectionId, setTestConnectionId] = useState("");
   const [testSelected, setTestSelected] = useState<string[]>([]);
   const [testResult, setTestResult] = useState<any>(null);
   const [editing, setEditing] = useState<any>(null);
@@ -1706,78 +1842,76 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
     });
   }
 
-  async function testWritable() {
+  function typeLabel(value?: string) {
+    return value === "NW_NS" || !value ? "NW/NS" : value;
+  }
+
+  async function runSelectedCheck(mode: "WRITABLE" | "SENDABLE") {
     await runAction("test-category-writable-groups", async () => {
-      const aggregate = {
-        checked: 0,
-        total: testSelected.length,
-        writable: 0,
-        notWritable: 0,
-        unknown: 0,
-        inaccessible: 0,
-        errors: [] as any[],
-      };
-      setTestResult(aggregate);
-      let summary = writability;
-      for (const groupId of testSelected) {
-        const response = await actions.testWritableGroups({
-          data: { auth, connectionId: testConnectionId, groupIds: [groupId] },
-        });
-        aggregate.checked += response.checked ?? 0;
-        aggregate.writable += response.writable ?? 0;
-        aggregate.notWritable += response.notWritable ?? 0;
-        aggregate.unknown += response.unknown ?? 0;
-        aggregate.inaccessible += response.inaccessible ?? 0;
-        aggregate.errors = [...aggregate.errors, ...(response.errors ?? [])];
-        summary = response.summary ?? summary;
-        setTestResult({ ...aggregate, errors: [...aggregate.errors] });
-      }
-      setWritability(summary);
+      const joinIfRequired = confirm(
+        "Some groups may require joining before testing. Continue with Join & Test where required?",
+      );
+      const response =
+        mode === "SENDABLE"
+          ? await actions.testSendableGroups({ data: { auth, groupIds: testSelected, joinIfRequired } })
+          : await actions.testWritableGroups({ data: { auth, groupIds: testSelected, joinIfRequired } });
+      setTestResult(response);
+      setWritability(response.summary ?? writability);
       setNotice(
-        `Tested: ${aggregate.checked}/${aggregate.total}. Writable: ${aggregate.writable}. Not Writable: ${aggregate.notWritable}. Unknown: ${aggregate.unknown}. Inaccessible: ${aggregate.inaccessible}.`,
+        mode === "SENDABLE"
+          ? `Tested: ${response.checked}/${response.total}. Sendable: ${response.sendable}. Not Sendable: ${response.notSendable}. Unknown: ${response.unknown}.`
+          : `Tested: ${response.checked}/${response.total}. Writable: ${response.writable}. Not Writable: ${response.notWritable}. Unknown: ${response.unknown}.`,
       );
       await reload();
     });
   }
 
-  async function checkOneWritable(groupId: string) {
-    await runAction(`check-write-${groupId}`, async () => {
-      const response = await actions.testWritableGroups({
-        data: { auth, connectionId: testConnectionId, groupIds: [groupId] },
+  async function checkOne(groupId: string, mode: "WRITABLE" | "SENDABLE") {
+    await runAction(`${mode === "SENDABLE" ? "check-send" : "check-write"}-${groupId}`, async () => {
+      let response = await (mode === "SENDABLE" ? actions.testSendableGroups : actions.testWritableGroups)({
+        data: { auth, groupIds: [groupId], joinIfRequired: false },
       });
+      if ((response.joinRequired ?? 0) > 0 && confirm("Join group to continue test?")) {
+        response = await (mode === "SENDABLE" ? actions.testSendableGroups : actions.testWritableGroups)({
+          data: { auth, groupIds: [groupId], joinIfRequired: true },
+        });
+      }
       setTestResult(response);
       setWritability(response.summary ?? writability);
       const error = response.errors?.[0]?.reason;
       setNotice(
-        response.writable
-          ? "Group is writable."
-          : response.notWritable
-            ? `Group is not writable${error ? `: ${error}` : "."}`
-            : response.inaccessible
-              ? `Group is inaccessible${error ? `: ${error}` : "."}`
-              : `Group write status is unknown${error ? `: ${error}` : "."}`,
+        mode === "SENDABLE"
+          ? response.sendable
+            ? "Group is sendable."
+            : `Group send status is ${error ? `unknown: ${error}` : "not sendable or unknown."}`
+          : response.writable
+            ? "Group is writable."
+            : `Group write status is ${error ? `unknown: ${error}` : "not writable or unknown."}`,
       );
-      await reload();
     });
   }
 
-  function openEditor(category?: any, bypassWritableCheck = false) {
+  function openEditor(category?: any, categoryType: "NW_NS" | "WRITABLE" | "SENDABLE" = "NW_NS") {
     setDetail(null);
-    setEditing(category ?? { id: null, bypassWritableCheck });
+    setEditing(category ?? { id: null, category_type: categoryType });
     setName(category?.name ?? "");
     setSelected(category?.groups?.map((g: any) => g.id) ?? []);
     if (category?.id) {
       void runAction(`open-category-${category.id}`, async () => {
         const response = await actions.getGroupCategoryDetail({ data: { auth, id: category.id } });
-        setSelected(
-          (response.groups ?? [])
-            .filter((g: any) => g.can_send_messages === true && g.writable_status === "WRITABLE")
-            .map((g: any) => g.id),
-        );
+        setSelected((response.groups ?? []).map((g: any) => g.id));
         setDetail(response);
       });
     }
   }
+  const editorType = (editing?.category_type ?? "NW_NS") as "NW_NS" | "WRITABLE" | "SENDABLE";
+  const editorGroups = editing?.id
+    ? approvedGroups
+    : editorType === "SENDABLE"
+      ? sendableGroups
+      : editorType === "WRITABLE"
+        ? writableGroups
+        : approvedGroups;
 
   return (
     <div className="space-y-4">
@@ -1786,31 +1920,29 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
           <Button onClick={() => openEditor()}>
             <Plus className="mr-2 size-4" /> CREATE CATEGORY
           </Button>
-          <Button variant="secondary" onClick={() => openEditor(undefined, true)}>
-            CREATE CATEGORY WITHOUT WRITABLE CHECK
+          <Button variant="secondary" onClick={() => openEditor(undefined, "WRITABLE")}>
+            CREATE CATEGORY WITH WRITABLE CHECK
+          </Button>
+          <Button variant="secondary" onClick={() => openEditor(undefined, "SENDABLE")}>
+            CREATE CATEGORY WITH SENDABLE CHECK
           </Button>
           <Button
             variant="secondary"
             disabled={actionBusy === "verify-writable-groups"}
             onClick={() => void verifyGroups()}
           >
-            {actionBusy === "verify-writable-groups" ? "Checking..." : "VERIFY GROUPS"}
+            {actionBusy === "verify-writable-groups" ? "Checking..." : "CHECK WRITABLE GROUPS"}
           </Button>
         </div>
         <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
           <Stat label="Checking Groups" value={`${verification?.checked ?? 0}/${verification?.total ?? writability.unknown ?? 0}`} />
           <Stat label="Writable" value={writability.writable ?? writableGroups.length} />
+          <Stat label="Sendable" value={writability.sendable ?? sendableGroups.length} />
           <Stat label="Not Writable" value={writability.notWritable ?? 0} />
           <Stat label="Unknown" value={writability.unknown ?? 0} />
         </div>
         {testableGroups.length ? (
           <div className="space-y-3 border-t border-border pt-3">
-            <SessionSelect
-              label="Select Test Session"
-              value={testConnectionId}
-              onChange={setTestConnectionId}
-              connections={data?.connections}
-            />
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-sm font-semibold">
                 Testable Groups: {testableGroups.length} | Selected: {testSelected.length}
@@ -1831,14 +1963,23 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
             </div>
             <Button
               className="w-full"
-              disabled={!testConnectionId || !testSelected.length || actionBusy === "test-category-writable-groups"}
-              onClick={testWritable}
+              disabled={!testSelected.length || actionBusy === "test-category-writable-groups"}
+              onClick={() => runSelectedCheck("WRITABLE")}
             >
-              {actionBusy === "test-category-writable-groups" ? "Testing..." : "TEST WRITABLE GROUPS"}
+              {actionBusy === "test-category-writable-groups" ? "Testing..." : "CHECK WRITABLE GROUPS"}
+            </Button>
+            <Button
+              className="w-full"
+              variant="secondary"
+              disabled={!testSelected.length || actionBusy === "test-category-writable-groups"}
+              onClick={() => runSelectedCheck("SENDABLE")}
+            >
+              {actionBusy === "test-category-writable-groups" ? "Testing..." : "CHECK SENDABLE GROUPS"}
             </Button>
             <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-5">
               <Stat label="Tested" value={`${testResult?.checked ?? 0}/${testResult?.total ?? testSelected.length}`} />
               <Stat label="Writable" value={testResult?.writable ?? 0} />
+              <Stat label="Sendable" value={testResult?.sendable ?? 0} />
               <Stat label="Not Writable" value={testResult?.notWritable ?? 0} />
               <Stat label="Unknown" value={testResult?.unknown ?? 0} />
               <Stat label="Inaccessible" value={testResult?.inaccessible ?? 0} />
@@ -1861,10 +2002,19 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
                     type="button"
                     size="sm"
                     variant="secondary"
-                    disabled={!testConnectionId || actionBusy === `check-write-${group.id}`}
-                    onClick={() => void checkOneWritable(group.id)}
+                    disabled={actionBusy === `check-write-${group.id}`}
+                    onClick={() => void checkOne(group.id, "WRITABLE")}
                   >
                     {actionBusy === `check-write-${group.id}` ? "Checking..." : "CHECK WRITE"}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    disabled={actionBusy === `check-send-${group.id}`}
+                    onClick={() => void checkOne(group.id, "SENDABLE")}
+                  >
+                    {actionBusy === `check-send-${group.id}` ? "Checking..." : "CHECK SEND"}
                   </Button>
                 </div>
               ))}
@@ -1877,7 +2027,7 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
           <article key={category.id} className={panelClass()}>
             <p className="font-semibold">{category.name}</p>
             <p className="mt-1 text-sm text-muted-foreground">
-              {category.usable_count ?? 0} usable / {category.unavailable_count ?? 0} unavailable
+              {category.group_count ?? 0} groups ({typeLabel(category.category_type)})
             </p>
             <div className="mt-4 flex flex-wrap gap-2">
               <Button
@@ -1961,7 +2111,7 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
                     id: editing.id,
                     name,
                     group_ids: selected,
-                    bypass_writable_check: Boolean(editing.bypassWritableCheck && !editing.id),
+                    category_type: editorType,
                   },
                 });
                 setNotice(editing.id ? "Category updated successfully." : "Category created successfully.");
@@ -1972,11 +2122,7 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
           >
             <div className="flex items-center justify-between">
               <p className="font-semibold">
-                {editing.id
-                  ? "Edit Category"
-                  : editing.bypassWritableCheck
-                    ? "Create Category Without Writable Check"
-                    : "Create Category"}
+                {editing.id ? "Edit Category" : editorType === "SENDABLE" ? "Create Category With Sendable Check" : editorType === "WRITABLE" ? "Create Category With Writable Check" : "Create Category"}
               </p>
               <button type="button" onClick={() => setEditing(null)} aria-label="Close">
                 <X className="size-4" />
@@ -1988,9 +2134,7 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
             </label>
             <div className="flex items-center justify-between gap-2">
               <p className="text-sm font-semibold">
-                {editing.bypassWritableCheck
-                  ? `Approved Groups: ${approvedGroups.length}`
-                  : `Writable Groups: ${writableGroups.length}`}{" "}
+                {editing.id ? `Saved Groups: ${selected.length}` : editorType === "SENDABLE" ? `Sendable Groups: ${sendableGroups.length}` : editorType === "WRITABLE" ? `Writable Groups: ${writableGroups.length}` : `Approved Groups: ${approvedGroups.length}`}{" "}
                 | Selected Groups: {selected.length}
               </p>
               <div className="flex gap-2">
@@ -1998,11 +2142,7 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
                   type="button"
                   size="sm"
                   variant="secondary"
-                  onClick={() =>
-                    setSelected(
-                      (editing.bypassWritableCheck ? approvedGroups : writableGroups).map((g: any) => g.id),
-                    )
-                  }
+                  onClick={() => setSelected(editorGroups.map((g: any) => g.id))}
                 >
                   SELECT ALL
                 </Button>
@@ -2012,7 +2152,7 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
               </div>
             </div>
             <div className="max-h-72 space-y-2 overflow-auto">
-              {(editing.bypassWritableCheck ? approvedGroups : writableGroups).map((g: any) => (
+              {editorGroups.map((g: any) => (
                 <label key={g.id} className="flex items-center gap-3 border border-border bg-background p-3 text-sm">
                   <input
                     type="checkbox"
@@ -2028,11 +2168,13 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
                   <span>{g.title}</span>
                 </label>
               ))}
-              {!(editing.bypassWritableCheck ? approvedGroups : writableGroups).length ? (
+              {!editorGroups.length ? (
                 <p className="text-sm text-muted-foreground">
-                  {editing.bypassWritableCheck
-                    ? "No approved groups available."
-                    : "No confirmed writable groups available. Tap VERIFY GROUPS to check approved groups with your healthy Telegram session."}
+                  {editorType === "SENDABLE"
+                    ? "No confirmed sendable groups available. Run CHECK SENDABLE GROUPS first."
+                    : editorType === "WRITABLE"
+                      ? "No confirmed writable groups available. Run CHECK WRITABLE GROUPS first."
+                      : "No approved groups available."}
                 </p>
               ) : null}
             </div>
@@ -2065,6 +2207,7 @@ function DMAudience({ auth, data, actions, reload, setNotice, actionBusy, runAct
   const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
   const [filter, setFilter] = useState("ALL_ELIGIBLE");
   const [excludeInactive, setExcludeInactive] = useState(true);
+  const [audienceTab, setAudienceTab] = useState<"GROUPS" | "USERS">("USERS");
   const [audiencePage, setAudiencePage] = useState<any>(data?.discovery?.audience ?? { users: [] });
   const discovery = data?.discovery ?? {};
   const state = discovery.state ?? {};
@@ -2146,7 +2289,7 @@ function DMAudience({ auth, data, actions, reload, setNotice, actionBusy, runAct
               size="sm"
               variant={filter === value ? "default" : "secondary"}
               disabled={actionBusy === "filter-audience"}
-              onClick={() => void changeFilter(value)}
+              onClick={() => void changeFilter(String(value))}
             >
               {label}
             </Button>
@@ -2161,65 +2304,22 @@ function DMAudience({ auth, data, actions, reload, setNotice, actionBusy, runAct
           Exclude inactive &gt;30 days
         </label>
       </section>
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <section className={panelClass("space-y-3")}>
-          <p className="font-semibold">Source Groups</p>
-          <GroupPicker
-            groups={data?.groups ?? []}
-            selected={selectedGroups}
-            setSelected={setSelectedGroups}
-            allowAll
-          />
-          <div className="grid grid-cols-3 gap-2 text-sm">
-            <Stat label="Selected Groups" value={selectedCount} />
-            <Stat label="Processed" value={processed} />
-            <Stat label="Remaining" value={Math.max(selectedCount - processed, 0)} />
-          </div>
-        </section>
-        <section className={panelClass("space-y-3")}>
-          <p className="font-semibold">Users Found</p>
-          <div className="grid grid-cols-2 gap-2 text-sm">
-            <Stat label="Users Found" value={audience.totalFound ?? 0} />
-            <Stat label="Showing" value={`${audience.showingFrom ?? 0}-${audience.showingTo ?? 0}`} />
-            <Stat label="New Users" value={state.new_users ?? 0} />
-            <Stat label="With Username" value={audience.withUsername ?? 0} />
-            <Stat label="Excluded Inactive" value={audience.excludedInactive ?? 0} />
-            <Stat label="Active Posters" value={audience.activePosters ?? 0} />
-            <Stat label="Duplicates" value={state.duplicates ?? 0} />
-            <Stat label="Previously Saved" value={state.previously_saved ?? 0} />
-          </div>
-          <div className="max-h-72 space-y-2 overflow-auto">
-            {(audience.users ?? []).map((user: any, index: number) => (
-              <p key={user.id} className="border border-border bg-background p-2 text-sm">
-                {index + 1}. {user.username ? `@${user.username}` : (user.display_name ?? user.telegram_user_id)}
-                <span className="mt-1 block text-xs text-muted-foreground">
-                  Source: {sourceGroupLabel(user)}
-                  {" | "}
-                  Presence: {presenceLabel(user.presence_status)}{" "}
-                  {user.last_seen_at ? `| Last seen ${new Date(user.last_seen_at).toLocaleDateString()}` : ""}
-                  {user.recent_activity_at ? `| Recent group activity ${new Date(user.recent_activity_at).toLocaleDateString()}` : ""}
-                  {` | Messages observed ${user.messages_observed ?? 0}`}
-                </span>
-              </p>
-            ))}
-            {!audience.users?.length ? <p className="text-sm text-muted-foreground">No saved users yet.</p> : null}
-          </div>
-          {audience.hasMore ? (
-            <Button
-              type="button"
-              variant="secondary"
-              className="w-full"
-              disabled={actionBusy === "load-more-audience"}
-              onClick={() => void loadAudience((audience.page ?? 1) + 1, true)}
-            >
-              {actionBusy === "load-more-audience" ? "Loading..." : "LOAD MORE"}
-            </Button>
-          ) : null}
-        </section>
-      </div>
+      <section className={panelClass("space-y-3")}>
+        <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+          <Stat label="Selected Groups" value={selectedCount} />
+          <Stat label="Processed" value={processed} />
+          <Stat label="Remaining" value={Math.max(selectedCount - processed, 0)} />
+          <Stat label="Users Found" value={audience.totalFound ?? 0} />
+          <Stat label="New Users" value={state.new_users ?? 0} />
+          <Stat label="With Username" value={audience.withUsername ?? 0} />
+          <Stat label="Excluded Inactive" value={audience.excludedInactive ?? 0} />
+          <Stat label="Active Posters" value={audience.activePosters ?? 0} />
+          <Stat label="Previously Saved" value={state.previously_saved ?? 0} />
+        </div>
+      </section>
       <details className={panelClass("space-y-3")}>
         <summary className="cursor-pointer font-semibold">DISCOVERY ISSUES ({issues.length})</summary>
-        <div className="mt-3 space-y-2">
+        <div className="mt-3 max-h-72 space-y-2 overflow-auto">
           {issues.map((row: any) => {
             const group = Array.isArray(row.discovered_groups) ? row.discovered_groups[0] : row.discovered_groups;
             return (
@@ -2236,6 +2336,53 @@ function DMAudience({ auth, data, actions, reload, setNotice, actionBusy, runAct
           {!issues.length ? <p className="text-sm text-muted-foreground">No discovery issues yet.</p> : null}
         </div>
       </details>
+      <section className={panelClass("space-y-3")}>
+        <div className="grid grid-cols-2 gap-2">
+          {(["GROUPS", "USERS"] as const).map((tab) => (
+            <Button key={tab} variant={audienceTab === tab ? "default" : "secondary"} onClick={() => setAudienceTab(tab)}>
+              {tab}
+            </Button>
+          ))}
+        </div>
+        {audienceTab === "GROUPS" ? (
+          <div className="max-h-[52vh] overflow-auto">
+          <GroupPicker
+            groups={data?.groups ?? []}
+            selected={selectedGroups}
+            setSelected={setSelectedGroups}
+            allowAll
+          />
+          </div>
+        ) : (
+          <div className="max-h-[52vh] space-y-2 overflow-auto">
+            {(audience.users ?? []).map((user: any, index: number) => (
+              <p key={user.id} className="border border-border bg-background p-2 text-sm">
+                {index + 1}. {user.username ? `@${user.username}` : (user.display_name ?? user.telegram_user_id)}
+                <span className="mt-1 block text-xs text-muted-foreground">
+                  Source: {sourceGroupLabel(user)}
+                  {" | "}
+                  Presence: {presenceLabel(user.presence_status)}{" "}
+                  {user.last_seen_at ? `| Last seen ${new Date(user.last_seen_at).toLocaleDateString()}` : ""}
+                  {user.recent_activity_at ? `| Recent group activity ${new Date(user.recent_activity_at).toLocaleDateString()}` : ""}
+                  {` | Messages observed ${user.messages_observed ?? 0}`}
+                </span>
+              </p>
+            ))}
+            {!audience.users?.length ? <p className="text-sm text-muted-foreground">No saved users yet.</p> : null}
+          </div>
+        )}
+          {audience.hasMore ? (
+            <Button
+              type="button"
+              variant="secondary"
+              className="w-full"
+              disabled={actionBusy === "load-more-audience"}
+              onClick={() => void loadAudience((audience.page ?? 1) + 1, true)}
+            >
+              {actionBusy === "load-more-audience" ? "Loading..." : "LOAD MORE"}
+            </Button>
+          ) : null}
+      </section>
     </div>
   );
 }
@@ -2414,7 +2561,7 @@ function GroupCampaign({ auth, data, actions, reload, setNotice, actionBusy, run
   const [minDelay, setMinDelay] = useState(30);
   const [maxDelay, setMaxDelay] = useState(60);
   const [cycleDelay, setCycleDelay] = useState(20);
-  async function submitCampaign(bypassWritableCheck = false) {
+  async function submitCampaign() {
     const buttons = buttonText && buttonUrl ? [{ text: buttonText, url: buttonUrl }] : [];
     await runAction("create-group-campaign", async () => {
       await actions.createCampaign({
@@ -2437,15 +2584,10 @@ function GroupCampaign({ auth, data, actions, reload, setNotice, actionBusy, run
           min_delay_seconds: minDelay,
           max_delay_seconds: maxDelay,
           cycle_delay_minutes: cycleDelay,
-          bypass_writable_check: bypassWritableCheck,
         },
       });
       setNotice(
-        bypassWritableCheck
-          ? "Group campaign queued without pre-check."
-          : scheduledAt
-            ? "Group campaign scheduled."
-            : "Group campaign queued.",
+        scheduledAt ? "Group campaign scheduled." : "Group campaign queued.",
       );
       await reload();
       setCreateMode(false);
@@ -2453,7 +2595,7 @@ function GroupCampaign({ auth, data, actions, reload, setNotice, actionBusy, run
   }
   async function submit(e: FormEvent) {
     e.preventDefault();
-    await submitCampaign(false);
+    await submitCampaign();
   }
   if (!createMode) {
     const rows = data?.campaigns ?? [];
@@ -2492,7 +2634,7 @@ function GroupCampaign({ auth, data, actions, reload, setNotice, actionBusy, run
           <option value="">Select category</option>
           {(data?.categories ?? []).map((c: any) => (
             <option key={c.id} value={c.id}>
-              {c.name} - {c.usable_count ?? 0} usable / {c.unavailable_count ?? 0} unavailable
+              {c.name} - {c.group_count ?? 0} groups ({c.category_type === "NW_NS" || !c.category_type ? "NW/NS" : c.category_type})
             </option>
           ))}
         </select>
@@ -2546,15 +2688,6 @@ function GroupCampaign({ auth, data, actions, reload, setNotice, actionBusy, run
         disabled={!connectionId || !categoryId || (!message && !mediaUrl) || minDelay > maxDelay || actionBusy === "create-group-campaign"}
       >
         {actionBusy === "create-group-campaign" ? "Queuing..." : "APPROVE AND QUEUE"}
-      </Button>
-      <Button
-        className="w-full"
-        type="button"
-        variant="secondary"
-        disabled={!connectionId || !categoryId || (!message && !mediaUrl) || minDelay > maxDelay || actionBusy === "create-group-campaign"}
-        onClick={() => submitCampaign(true)}
-      >
-        {actionBusy === "create-group-campaign" ? "Queuing..." : "CREATE CAMPAIGN WITHOUT WRITABLE CHECK"}
       </Button>
     </form>
   );
@@ -3141,12 +3274,14 @@ function Analytics({ data }: { data: any }) {
             ["Discovered", groups.discovered],
             ["Approved", groups.approved],
             ["Writable", groups.writable],
+            ["Sendable", groups.sendable],
             ["Not Writable", groups.notWritable],
             ["Joined", groups.joined],
           ]}
           bars={[
             ["Approved", groups.approved, "bg-primary"],
             ["Writable", groups.writable, "bg-success"],
+            ["Sendable", groups.sendable, "bg-primary"],
             ["Not Writable", groups.notWritable, "bg-destructive"],
             ["Joined", groups.joined, "bg-warning"],
           ]}
@@ -3234,15 +3369,89 @@ function Billing({ data }: { data: any }) {
   );
 }
 
-function SettingsPanel({ data }: { data: any }) {
+function SettingsPanel({ auth, data, actions, setNotice, actionBusy, runAction }: any) {
+  const profile = data?.profile ?? {};
+  const [name, setName] = useState(profile.name ?? "");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
   return (
     <div className="space-y-3">
-      <section className={panelClass()}>
+      <section className={panelClass("space-y-3")}>
         <Settings className="size-5 text-primary" />
         <p className="mt-3 font-semibold">Account Settings</p>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Security and session settings are managed through the bot-authenticated Mini App session.
-        </p>
+        <div className="text-sm text-muted-foreground">
+          <p>{profile.name ?? "User001"}</p>
+          <p>{profile.email}</p>
+          <p>{profile.status ?? "ACTIVE"}</p>
+        </div>
+      </section>
+      <section className={panelClass("space-y-3")}>
+        <p className="font-semibold">Edit Name</p>
+        <input className={inputClass()} value={name} onChange={(e) => setName(e.target.value)} />
+        <Button
+          type="button"
+          disabled={!name || actionBusy === "update-name"}
+          onClick={() =>
+            runAction("update-name", async () => {
+              await actions.updateAccountName({ data: { auth, name } });
+              setNotice("Name updated.");
+            })
+          }
+        >
+          {actionBusy === "update-name" ? "Saving..." : "SAVE NAME"}
+        </Button>
+      </section>
+      <section className={panelClass("space-y-3")}>
+        <p className="font-semibold">Change Password</p>
+        <input
+          className={inputClass()}
+          type="password"
+          value={currentPassword}
+          onChange={(e) => setCurrentPassword(e.target.value)}
+          placeholder="Current password"
+        />
+        <input
+          className={inputClass()}
+          type="password"
+          value={newPassword}
+          onChange={(e) => setNewPassword(e.target.value)}
+          placeholder="New password"
+        />
+        <Button
+          type="button"
+          disabled={!currentPassword || !newPassword || actionBusy === "change-password"}
+          onClick={() =>
+            runAction("change-password", async () => {
+              await actions.changeAccountPassword({ data: { auth, currentPassword, newPassword } });
+              setCurrentPassword("");
+              setNewPassword("");
+              setNotice("Password changed.");
+            })
+          }
+        >
+          {actionBusy === "change-password" ? "Saving..." : "CHANGE PASSWORD"}
+        </Button>
+      </section>
+      <section className={panelClass("space-y-3")}>
+        <p className="font-semibold">Refer & Earn</p>
+        <p className="text-sm text-muted-foreground">Coming Soon</p>
+      </section>
+      <section className={panelClass("space-y-3")}>
+        <Button
+          type="button"
+          variant="secondary"
+          disabled={actionBusy === "logout"}
+          onClick={() =>
+            runAction("logout", async () => {
+              await actions.logout({ data: { auth } });
+              sessionStorage.removeItem("customer-session");
+              window.location.href = "/mini-app/dashboard";
+            })
+          }
+        >
+          <LogOut className="mr-2 size-4" />
+          {actionBusy === "logout" ? "Signing out..." : "LOGOUT"}
+        </Button>
       </section>
       <section className={panelClass("space-y-3")}>
         <p className="font-semibold">History / Logs</p>

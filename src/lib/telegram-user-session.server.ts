@@ -5,6 +5,8 @@ import bigInt from "big-integer";
 import type { AuthContext } from "./customer-auth.server";
 import { db, logSystem } from "./db.server";
 import { decryptSecret, encryptSecret } from "./security.server";
+import { classifyTelegramError, telegramErrorMessage } from "./telegram-errors.server";
+import { recordSessionHealthEvidence } from "./telegram-session-health.server";
 import type { MessagePayload } from "./telegram.server";
 
 const CONNECTION_RETRIES = 3;
@@ -23,6 +25,8 @@ type ConnectionRow = {
   status: string;
   cooldown_until?: string | null;
   health?: string | null;
+  health_score?: number | null;
+  health_summary?: string | null;
 };
 
 function credentials() {
@@ -83,11 +87,7 @@ function normalizePhone(phone: string) {
 }
 
 function errorMessage(error: unknown) {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "object" && error && "errorMessage" in error) {
-    return String((error as { errorMessage?: string }).errorMessage);
-  }
-  return "Telegram operation failed.";
+  return telegramErrorMessage(error);
 }
 
 function accessHash(value: unknown) {
@@ -143,6 +143,58 @@ function channelWritable(entity: Api.Channel) {
   if (row.bannedRights?.sendMessages) return false;
   if (row.defaultBannedRights?.sendMessages) return false;
   return true;
+}
+
+function inspectWritableState(entity: Api.Channel | Api.Chat) {
+  if (entity instanceof Api.Chat) {
+    return {
+      writableStatus: "WRITABLE" as const,
+      canSendMessages: true,
+      reason: "Basic chat is accessible to this session.",
+    };
+  }
+  const row = entity as Api.Channel & {
+    creator?: boolean;
+    left?: boolean;
+    broadcast?: boolean;
+    megagroup?: boolean;
+    adminRights?: { postMessages?: boolean } | null;
+    bannedRights?: { sendMessages?: boolean } | null;
+    defaultBannedRights?: { sendMessages?: boolean } | null;
+  };
+  if (row.left) {
+    return {
+      writableStatus: "JOIN_REQUIRED" as const,
+      canSendMessages: null,
+      reason: "This session has not joined the group.",
+    };
+  }
+  if (row.broadcast && !row.creator && !row.adminRights?.postMessages) {
+    return {
+      writableStatus: "NOT_WRITABLE" as const,
+      canSendMessages: false,
+      reason: "Only admins may post in this channel.",
+    };
+  }
+  if (row.bannedRights?.sendMessages) {
+    return {
+      writableStatus: "NOT_WRITABLE" as const,
+      canSendMessages: false,
+      reason: "Posting is disabled for this session.",
+    };
+  }
+  if (row.defaultBannedRights?.sendMessages) {
+    return {
+      writableStatus: "NOT_WRITABLE" as const,
+      canSendMessages: false,
+      reason: "Posting is disabled by default group permissions.",
+    };
+  }
+  return {
+    writableStatus: "WRITABLE" as const,
+    canSendMessages: true,
+    reason: "Telegram permissions indicate this session can write.",
+  };
 }
 
 function inputChannelFromStored(target: { id?: number | null; accessHash?: string | null }) {
@@ -224,7 +276,7 @@ function classifyAudienceError(error: unknown) {
 }
 
 function publicFields() {
-  return "id, tenant_id, label, account_name, username, telegram_id, telegram_user_id, phone_masked, status, health, error_message, restriction_status, restriction_reason, last_active_at, last_used_at, last_sync_at, cooldown_until, auth_step, created_at, updated_at";
+  return "id, tenant_id, label, account_name, username, telegram_id, telegram_user_id, phone_masked, status, health, health_score, health_updated_at, health_summary, error_message, restriction_status, restriction_reason, last_active_at, last_used_at, last_sync_at, cooldown_until, auth_step, created_at, updated_at";
 }
 
 async function ownedConnection(ctx: AuthContext, connectionId: string) {
@@ -268,6 +320,9 @@ async function saveConnectedProfile(
       account_name: fullName || user.username || "Telegram account",
       status: "CONNECTED",
       health: "HEALTHY",
+      health_score: 90,
+      health_updated_at: new Date().toISOString(),
+      health_summary: "Healthy - authorization valid",
       restriction_status: "NONE",
       restriction_reason: null,
       error_message: null,
@@ -614,6 +669,12 @@ export async function withAuthorizedUserClient<T>(
       })
       .eq("id", connectionId)
       .eq("tenant_id", tenantId);
+    await recordSessionHealthEvidence({
+      tenantId,
+      connectionId,
+      evidence: "AUTH_OK",
+      reason: "Healthy - authorization valid",
+    });
     return await fn(client, row);
   } catch (error) {
     if (invalidSessionError(error)) {
@@ -632,6 +693,12 @@ export async function withAuthorizedUserClient<T>(
         })
         .eq("id", connectionId)
         .eq("tenant_id", tenantId);
+      await recordSessionHealthEvidence({
+        tenantId,
+        connectionId,
+        evidence: "AUTH_FAILURE",
+        reason: message,
+      });
     }
     throw error;
   } finally {
@@ -709,30 +776,70 @@ export async function verifyGroupWritableViaUserSession(
           accessHash: group.access_hash ?? null,
           entityType: group.entity_type ?? "UNKNOWN",
           canSendMessages: false,
-          writableStatus: "NOT_WRITABLE",
-          reason: "Resolved entity is not a writable group or channel.",
+          writableStatus: "INACCESSIBLE",
+          reason: "Resolved entity is not a group or channel.",
         };
       }
-      const canSend = entity instanceof Api.Channel ? channelWritable(entity) : true;
+      const writable = inspectWritableState(entity);
+      await recordSessionHealthEvidence({
+        tenantId,
+        connectionId,
+        evidence: "RESOLVE_OK",
+        reason: "Group resolution successful",
+      });
       return {
         title: "title" in entity ? String(entity.title) : null,
         username: "username" in entity && entity.username ? String(entity.username) : group.username ?? null,
         telegramGroupId: Number(entity.id),
         accessHash: accessHash(entity),
         entityType: entityType(entity),
-        canSendMessages: canSend ? true : null,
-        writableStatus: canSend ? "WRITABLE" : "UNKNOWN",
-        reason: canSend ? null : "Static Telegram permissions could not confirm writability.",
+        canSendMessages: writable.canSendMessages,
+        writableStatus: writable.writableStatus,
+        reason: writable.reason,
       };
     } catch (error) {
-      const message = errorMessage(error);
-      const upper = message.toUpperCase();
+      const classified = classifyTelegramError(error);
+      const upper = classified.raw.toUpperCase();
+      const writableStatus = upper.includes("USER_NOT_PARTICIPANT")
+        ? "JOIN_REQUIRED"
+        : upper.includes("CHAT_WRITE_FORBIDDEN") ||
+            upper.includes("CHAT_ADMIN_REQUIRED") ||
+            upper.includes("CHAT_GUEST_SEND_FORBIDDEN") ||
+            upper.includes("USER_BANNED_IN_CHANNEL") ||
+            upper.includes("WRITE_FORBIDDEN") ||
+            upper.includes("NOT ENOUGH RIGHTS")
+          ? "NOT_WRITABLE"
+          : upper.includes("CHANNEL_PRIVATE") ||
+              upper.includes("CHAT_FORBIDDEN") ||
+              upper.includes("PEER_ID_INVALID") ||
+              upper.includes("ACCESS_HASH")
+            ? "INACCESSIBLE"
+            : "UNKNOWN";
+      const evidence =
+        classified.scope === "AUTH"
+          ? "AUTH_FAILURE"
+          : classified.scope === "RATE_LIMIT"
+            ? "RATE_LIMIT"
+            : classified.sessionLevel
+              ? "SESSION_FAILURE"
+              : classified.groupLevel
+                ? "GROUP_FAILURE"
+                : classified.scope === "TRANSIENT"
+                  ? "TRANSIENT"
+                  : null;
+      if (evidence) {
+        await recordSessionHealthEvidence({
+          tenantId,
+          connectionId,
+          evidence,
+          reason: classified.human,
+          details: { raw: classified.raw, code: classified.code, scope: classified.scope },
+        });
+      }
       if (
-        upper.includes("CHAT_WRITE_FORBIDDEN") ||
-        upper.includes("CHAT_ADMIN_REQUIRED") ||
-        upper.includes("USER_BANNED_IN_CHANNEL") ||
-        upper.includes("WRITE_FORBIDDEN") ||
-        upper.includes("NOT ENOUGH RIGHTS")
+        writableStatus === "NOT_WRITABLE" ||
+        writableStatus === "JOIN_REQUIRED" ||
+        writableStatus === "INACCESSIBLE"
       ) {
         return {
           title: null,
@@ -740,9 +847,12 @@ export async function verifyGroupWritableViaUserSession(
           telegramGroupId: group.telegram_group_id ?? null,
           accessHash: group.access_hash ?? null,
           entityType: group.entity_type ?? null,
-          canSendMessages: false,
-          writableStatus: "NOT_WRITABLE",
-          reason: message,
+          canSendMessages: writableStatus === "JOIN_REQUIRED" ? null : false,
+          writableStatus,
+          reason: classified.human,
+          rawError: classified.raw,
+          errorCode: classified.code,
+          classification: classified.scope,
         };
       }
       return {
@@ -753,13 +863,16 @@ export async function verifyGroupWritableViaUserSession(
         entityType: group.entity_type ?? null,
         canSendMessages: null,
         writableStatus: "UNKNOWN",
-        reason: message,
+        reason: classified.human,
+        rawError: classified.raw,
+        errorCode: classified.code,
+        classification: classified.scope,
       };
     }
   });
 }
 
-export async function testGroupWritableViaUserSession(
+export async function testGroupSendableViaUserSession(
   tenantId: string,
   connectionId: string,
   group: {
@@ -779,7 +892,7 @@ export async function testGroupWritableViaUserSession(
           });
       if (!seed) {
         return {
-          writableStatus: "UNKNOWN",
+          sendableStatus: "UNKNOWN",
           canSendMessages: null,
           reason: "Group entity cannot be resolved without username or access hash.",
         };
@@ -787,13 +900,27 @@ export async function testGroupWritableViaUserSession(
       const entity = await client.getEntity(seed as never);
       if (!(entity instanceof Api.Channel) && !(entity instanceof Api.Chat)) {
         return {
-          writableStatus: "INACCESSIBLE",
+          sendableStatus: "INACCESSIBLE",
           canSendMessages: false,
           reason: "Resolved entity is not a group or channel.",
         };
       }
+      const writable = inspectWritableState(entity);
+      if (writable.writableStatus === "JOIN_REQUIRED") {
+        return {
+          sendableStatus: "JOIN_REQUIRED",
+          canSendMessages: null,
+          reason: writable.reason,
+          title: "title" in entity ? String(entity.title) : null,
+          username: "username" in entity && entity.username ? String(entity.username) : group.username ?? null,
+          telegramGroupId: Number(entity.id),
+          accessHash: accessHash(entity),
+          entityType: entityType(entity),
+        };
+      }
       const sent = await client.sendMessage(entity, { message: "hey" });
       const sentId = sent && typeof sent === "object" && "id" in sent ? Number(sent.id) : null;
+      let deleted = false;
       if (sentId) {
         try {
           if (entity instanceof Api.Channel) {
@@ -801,12 +928,27 @@ export async function testGroupWritableViaUserSession(
           } else {
             await client.invoke(new Api.messages.DeleteMessages({ id: [sentId], revoke: true }));
           }
+          deleted = true;
         } catch {
           /* Best-effort cleanup only. A confirmed send still proves writability. */
         }
       }
+      await recordSessionHealthEvidence({
+        tenantId,
+        connectionId,
+        evidence: "SEND_OK",
+        reason: "Sendable test message succeeded",
+      });
+      if (deleted) {
+        await recordSessionHealthEvidence({
+          tenantId,
+          connectionId,
+          evidence: "DELETE_OK",
+          reason: "Sendable test message cleanup succeeded",
+        });
+      }
       return {
-        writableStatus: "WRITABLE",
+        sendableStatus: "SENDABLE",
         canSendMessages: true,
         reason: null,
         title: "title" in entity ? String(entity.title) : null,
@@ -816,26 +958,48 @@ export async function testGroupWritableViaUserSession(
         entityType: entityType(entity),
       };
     } catch (error) {
-      const message = errorMessage(error);
-      const upper = message.toUpperCase();
-      if (
-        upper.includes("CHAT_WRITE_FORBIDDEN") ||
-        upper.includes("CHAT_ADMIN_REQUIRED") ||
-        upper.includes("USER_BANNED_IN_CHANNEL") ||
-        upper.includes("WRITE_FORBIDDEN") ||
-        upper.includes("NOT ENOUGH RIGHTS")
-      ) {
-        return { writableStatus: "NOT_WRITABLE", canSendMessages: false, reason: message };
+      const classified = classifyTelegramError(error);
+      const upper = classified.raw.toUpperCase();
+      const sendableStatus = upper.includes("USER_NOT_PARTICIPANT")
+        ? "JOIN_REQUIRED"
+        : upper.includes("CHANNEL_PRIVATE") ||
+            upper.includes("CHAT_FORBIDDEN") ||
+            upper.includes("PEER_ID_INVALID") ||
+            upper.includes("ACCESS_HASH")
+          ? "INACCESSIBLE"
+          : classified.groupLevel
+            ? "NOT_SENDABLE"
+            : "UNKNOWN";
+      const evidence =
+        classified.scope === "AUTH"
+          ? "AUTH_FAILURE"
+          : classified.scope === "RATE_LIMIT"
+            ? "RATE_LIMIT"
+            : classified.sessionLevel
+              ? "SESSION_FAILURE"
+              : classified.groupLevel
+                ? "GROUP_FAILURE"
+                : classified.scope === "TRANSIENT"
+                  ? "TRANSIENT"
+                  : null;
+      if (evidence) {
+        await recordSessionHealthEvidence({
+          tenantId,
+          connectionId,
+          evidence,
+          reason: classified.human,
+          details: { raw: classified.raw, code: classified.code, scope: classified.scope },
+        });
       }
-      if (
-        upper.includes("CHANNEL_PRIVATE") ||
-        upper.includes("USER_NOT_PARTICIPANT") ||
-        upper.includes("CHAT_FORBIDDEN") ||
-        upper.includes("PEER_ID_INVALID")
-      ) {
-        return { writableStatus: "INACCESSIBLE", canSendMessages: false, reason: message };
-      }
-      return { writableStatus: "UNKNOWN", canSendMessages: null, reason: message };
+      return {
+        sendableStatus,
+        canSendMessages:
+          sendableStatus === "UNKNOWN" || sendableStatus === "JOIN_REQUIRED" ? null : false,
+        reason: classified.human,
+        rawError: classified.raw,
+        errorCode: classified.code,
+        classification: classified.scope,
+      };
     }
   });
 }
@@ -1198,20 +1362,42 @@ export async function sendViaUserSession(
   message: MessagePayload,
 ) {
   return withAuthorizedUserClient(tenantId, connectionId, async (client) => {
-    const text = [message.text ?? ""]
-      .concat((message.buttons ?? []).map((button) => `${button.text}: ${button.url}`))
-      .filter(Boolean)
-      .join("\n\n");
-    await client.sendMessage(target, {
-      ...(text ? { message: text } : {}),
-      ...(message.media_url ? { file: message.media_url } : {}),
-      linkPreview: true,
-    });
-    await db()
-      .from("telegram_connections")
-      .update({ last_used_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-      .eq("id", connectionId)
-      .eq("tenant_id", tenantId);
+    try {
+      const text = [message.text ?? ""]
+        .concat((message.buttons ?? []).map((button) => `${button.text}: ${button.url}`))
+        .filter(Boolean)
+        .join("\n\n");
+      await client.sendMessage(target, {
+        ...(text ? { message: text } : {}),
+        ...(message.media_url ? { file: message.media_url } : {}),
+        linkPreview: true,
+      });
+      await recordSessionHealthEvidence({ tenantId, connectionId, evidence: "SEND_OK", reason: "Message sent successfully" });
+      await db()
+        .from("telegram_connections")
+        .update({ last_used_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+        .eq("id", connectionId)
+        .eq("tenant_id", tenantId);
+    } catch (error) {
+      const classified = classifyTelegramError(error);
+      await recordSessionHealthEvidence({
+        tenantId,
+        connectionId,
+        evidence:
+          classified.scope === "AUTH"
+            ? "AUTH_FAILURE"
+            : classified.scope === "RATE_LIMIT"
+              ? "RATE_LIMIT"
+              : classified.sessionLevel
+                ? "SESSION_FAILURE"
+                : classified.groupLevel
+                  ? "GROUP_FAILURE"
+                  : "TRANSIENT",
+        reason: classified.human,
+        details: { raw: classified.raw, code: classified.code, scope: classified.scope },
+      });
+      throw error;
+    }
   });
 }
 
@@ -1227,29 +1413,51 @@ export async function sendGroupViaUserSession(
   message: MessagePayload,
 ) {
   return withAuthorizedUserClient(tenantId, connectionId, async (client) => {
-    const entity = await resolveSendEntity(client, {
-      id: target.telegramGroupId ?? null,
-      username: target.username ?? null,
-      accessHash: target.accessHash ?? null,
-      entityType: target.entityType ?? null,
-    });
-    if (entity instanceof Api.Channel && !channelWritable(entity)) {
-      throw new Error("NOT_WRITABLE: selected Telegram session cannot post to this group/channel.");
+    try {
+      const entity = await resolveSendEntity(client, {
+        id: target.telegramGroupId ?? null,
+        username: target.username ?? null,
+        accessHash: target.accessHash ?? null,
+        entityType: target.entityType ?? null,
+      });
+      if (entity instanceof Api.Channel && !channelWritable(entity)) {
+        throw new Error("CHAT_WRITE_FORBIDDEN: selected Telegram session cannot post to this group/channel.");
+      }
+      const text = [message.text ?? ""]
+        .concat((message.buttons ?? []).map((button) => `${button.text}: ${button.url}`))
+        .filter(Boolean)
+        .join("\n\n");
+      await client.sendMessage(entity, {
+        ...(text ? { message: text } : {}),
+        ...(message.media_url ? { file: message.media_url } : {}),
+        linkPreview: true,
+      });
+      await recordSessionHealthEvidence({ tenantId, connectionId, evidence: "SEND_OK", reason: "Group message sent successfully" });
+      await db()
+        .from("telegram_connections")
+        .update({ last_used_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+        .eq("id", connectionId)
+        .eq("tenant_id", tenantId);
+    } catch (error) {
+      const classified = classifyTelegramError(error);
+      await recordSessionHealthEvidence({
+        tenantId,
+        connectionId,
+        evidence:
+          classified.scope === "AUTH"
+            ? "AUTH_FAILURE"
+            : classified.scope === "RATE_LIMIT"
+              ? "RATE_LIMIT"
+              : classified.sessionLevel
+                ? "SESSION_FAILURE"
+                : classified.groupLevel
+                  ? "GROUP_FAILURE"
+                  : "TRANSIENT",
+        reason: classified.human,
+        details: { raw: classified.raw, code: classified.code, scope: classified.scope },
+      });
+      throw error;
     }
-    const text = [message.text ?? ""]
-      .concat((message.buttons ?? []).map((button) => `${button.text}: ${button.url}`))
-      .filter(Boolean)
-      .join("\n\n");
-    await client.sendMessage(entity, {
-      ...(text ? { message: text } : {}),
-      ...(message.media_url ? { file: message.media_url } : {}),
-      linkPreview: true,
-    });
-    await db()
-      .from("telegram_connections")
-      .update({ last_used_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-      .eq("id", connectionId)
-      .eq("tenant_id", tenantId);
   });
 }
 
@@ -1260,25 +1468,47 @@ export async function sendDirectViaUserSession(
   message: MessagePayload,
 ) {
   return withAuthorizedUserClient(tenantId, connectionId, async (client) => {
-    const entity = await resolveSendEntity(client, {
-      id: target.telegramUserId,
-      username: target.username ?? null,
-      accessHash: target.accessHash ?? null,
-      entityType: "USER",
-    });
-    const text = [message.text ?? ""]
-      .concat((message.buttons ?? []).map((button) => `${button.text}: ${button.url}`))
-      .filter(Boolean)
-      .join("\n\n");
-    await client.sendMessage(entity, {
-      ...(text ? { message: text } : {}),
-      ...(message.media_url ? { file: message.media_url } : {}),
-      linkPreview: true,
-    });
-    await db()
-      .from("telegram_connections")
-      .update({ last_used_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-      .eq("id", connectionId)
-      .eq("tenant_id", tenantId);
+    try {
+      const entity = await resolveSendEntity(client, {
+        id: target.telegramUserId,
+        username: target.username ?? null,
+        accessHash: target.accessHash ?? null,
+        entityType: "USER",
+      });
+      const text = [message.text ?? ""]
+        .concat((message.buttons ?? []).map((button) => `${button.text}: ${button.url}`))
+        .filter(Boolean)
+        .join("\n\n");
+      await client.sendMessage(entity, {
+        ...(text ? { message: text } : {}),
+        ...(message.media_url ? { file: message.media_url } : {}),
+        linkPreview: true,
+      });
+      await recordSessionHealthEvidence({ tenantId, connectionId, evidence: "SEND_OK", reason: "Direct message sent successfully" });
+      await db()
+        .from("telegram_connections")
+        .update({ last_used_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+        .eq("id", connectionId)
+        .eq("tenant_id", tenantId);
+    } catch (error) {
+      const classified = classifyTelegramError(error);
+      await recordSessionHealthEvidence({
+        tenantId,
+        connectionId,
+        evidence:
+          classified.scope === "AUTH"
+            ? "AUTH_FAILURE"
+            : classified.scope === "RATE_LIMIT"
+              ? "RATE_LIMIT"
+              : classified.sessionLevel
+                ? "SESSION_FAILURE"
+                : classified.groupLevel
+                  ? "GROUP_FAILURE"
+                  : "TRANSIENT",
+        reason: classified.human,
+        details: { raw: classified.raw, code: classified.code, scope: classified.scope },
+      });
+      throw error;
+    }
   });
 }

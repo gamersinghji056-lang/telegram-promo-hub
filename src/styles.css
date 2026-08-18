@@ -150,3 +150,21 @@
     color: var(--color-foreground);
   }
 }
+
+@layer components {
+  .mini-app-compact {
+    font-size: 14px;
+  }
+
+  .mini-app-compact h1 {
+    font-size: 1.375rem;
+    line-height: 1.75rem;
+  }
+
+  .mini-app-compact button,
+  .mini-app-compact input,
+  .mini-app-compact select,
+  .mini-app-compact textarea {
+    font-size: 0.8125rem;
+  }
+}

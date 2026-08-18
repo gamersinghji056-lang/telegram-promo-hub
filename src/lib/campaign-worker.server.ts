@@ -1,6 +1,7 @@
 import { db, logSystem } from "./db.server";
 import type { MessagePayload } from "./telegram.server";
 import { sendDirectViaUserSession, sendGroupViaUserSession } from "./telegram-user-session.server";
+import { classifyTelegramError as classifyRpcError } from "./telegram-errors.server";
 
 const DEFAULT_BATCH_LIMIT = 10;
 const DEFAULT_SEND_DELAY_MS = 2_000;
@@ -21,7 +22,16 @@ function sendDelayMs() {
   return Number.isFinite(raw) && raw >= 1000 ? raw : DEFAULT_SEND_DELAY_MS;
 }
 
-function classifyTelegramError(error: string, jobType?: JobRow["job_type"]) {
+function classifyCampaignError(error: string, jobType?: JobRow["job_type"]) {
+  const rpc = classifyRpcError(error);
+  if (rpc.scope === "RATE_LIMIT") return "FLOOD";
+  if (rpc.scope === "AUTH" || rpc.sessionLevel) return "RESTRICTED";
+  if (rpc.groupLevel && jobType === "GROUP") {
+    if (rpc.code.includes("PRIVATE") || rpc.code.includes("FORBIDDEN") || rpc.code.includes("PEER_ID_INVALID")) {
+      return "ENTITY_UNAVAILABLE";
+    }
+    return "NOT_WRITABLE";
+  }
   const lower = error.toLowerCase();
   if (lower.includes("cooldown_until:") || lower.includes("cooling down")) return "COOLDOWN";
   if (
@@ -123,7 +133,7 @@ async function resolveTarget(job: JobRow) {
   if (job.job_type === "GROUP") {
     const { data } = await client
       .from("campaign_groups")
-      .select("id, status, discovered_groups(id, title, username, telegram_group_id, access_hash, entity_type, status, can_send_messages, writable_status)")
+    .select("id, status, discovered_groups(id, title, username, telegram_group_id, access_hash, entity_type, status, can_send_messages, writable_status, sendable_status)")
       .eq("id", job.target_id)
       .eq("tenant_id", job.tenant_id)
       .maybeSingle();
@@ -133,11 +143,7 @@ async function resolveTarget(job: JobRow) {
     if (!data || !group) throw new Error("Group target not found.");
     if (!["APPROVED", "JOINED"].includes(String(group.status)))
       throw new Error("Group is not approved.");
-    const bypassWritableCheck = data.status === "PENDING_BYPASS";
-    if (!bypassWritableCheck && (group.can_send_messages === false || group.writable_status === "NOT_WRITABLE")) {
-      throw new Error("NOT_WRITABLE: selected session cannot post to this group/channel.");
-    }
-    if (group.writable_status === "INACCESSIBLE") {
+    if (group.writable_status === "INACCESSIBLE" && group.sendable_status !== "SENDABLE") {
       throw new Error("ENTITY_UNAVAILABLE: group is inaccessible.");
     }
     return {
@@ -272,7 +278,8 @@ async function logCampaign(
 }
 
 async function failJob(job: JobRow, error: string) {
-  const classification = classifyTelegramError(error, job.job_type);
+  const rpc = classifyRpcError(error);
+  const classification = classifyCampaignError(error, job.job_type);
   if (classification === "COOLDOWN") {
     const cooldown = error.match(/COOLDOWN_UNTIL:([^\s]+)/)?.[1];
     const runAfter =
@@ -323,7 +330,12 @@ async function failJob(job: JobRow, error: string) {
       completed_at: final ? new Date().toISOString() : null,
     })
     .eq("id", job.id);
-  await logCampaign(job, final ? "ERROR" : "WARNING", error, { classification });
+  await logCampaign(job, final ? "ERROR" : "WARNING", rpc.human, {
+    classification,
+    telegram_scope: rpc.scope,
+    telegram_code: rpc.code,
+    raw_error: rpc.raw,
+  });
   if (classification === "ENTITY_UNAVAILABLE" || classification === "NOT_WRITABLE") {
     const targetTable = job.job_type === "GROUP" ? "campaign_groups" : "campaign_recipients";
     await db()
@@ -344,6 +356,8 @@ async function failJob(job: JobRow, error: string) {
           .update({
             can_send_messages: false,
             writable_status: "NOT_WRITABLE",
+            last_write_error: rpc.human,
+            last_send_error: rpc.raw,
             updated_at: new Date().toISOString(),
           })
           .eq("id", target.group_id)
@@ -446,6 +460,8 @@ async function processJob(job: JobRow) {
           .update({
             can_send_messages: true,
             writable_status: "WRITABLE",
+            sendable_status: "SENDABLE",
+            sendable_checked_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           })
           .eq("id", sentTarget.group_id)
@@ -485,7 +501,7 @@ async function processJob(job: JobRow) {
         .eq("id", job.connection_id)
         .eq("tenant_id", job.tenant_id);
     }
-    await logCampaign(job, "INFO", "Message sent.", { target: target.label });
+    await logCampaign(job, "INFO", "Message sent.", { target: target.label, compact_success: true });
     return { sent: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Campaign job failed.";

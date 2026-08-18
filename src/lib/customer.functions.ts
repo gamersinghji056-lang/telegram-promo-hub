@@ -9,6 +9,10 @@ import * as data from "./customer-data.server";
 
 type Auth = { auth: string };
 
+function jsonSafe<T>(value: T) {
+  return JSON.parse(JSON.stringify(value));
+}
+
 export const completeRegistration = createServerFn({ method: "POST" })
   .inputValidator(
     (i: {
@@ -32,6 +36,23 @@ export const logout = createServerFn({ method: "POST" })
 export const getDashboard = createServerFn({ method: "POST" })
   .inputValidator((i: Auth) => i)
   .handler(async ({ data: i }) => data.dashboard(await resolveAuth(i.auth)));
+
+export const getAccountProfile = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth) => i)
+  .handler(async ({ data: i }) => data.accountProfile(await resolveAuth(i.auth)));
+
+export const updateAccountName = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { name: string }) => i)
+  .handler(async ({ data: i }) => data.updateAccountName(await resolveAuth(i.auth), i.name));
+
+export const changeAccountPassword = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { currentPassword: string; newPassword: string }) => i)
+  .handler(async ({ data: i }) =>
+    data.changeAccountPassword(await resolveAuth(i.auth), {
+      currentPassword: i.currentPassword,
+      newPassword: i.newPassword,
+    }),
+  );
 
 export const getConnections = createServerFn({ method: "POST" })
   .inputValidator((i: Auth) => i)
@@ -68,6 +89,10 @@ export const verifyConnectionPassword = createServerFn({ method: "POST" })
 export const checkConnection = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { id: string }) => i)
   .handler(async ({ data: i }) => data.checkConnection(await resolveAuth(i.auth), i.id));
+
+export const testSessionHealth = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { id: string }) => i)
+  .handler(async ({ data: i }) => jsonSafe(await data.testSessionHealth(await resolveAuth(i.auth), i.id)));
 
 export const reconnectConnection = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { id: string }) => i)
@@ -140,7 +165,7 @@ export const addApprovedGroupByUsername = createServerFn({ method: "POST" })
 export const importApprovedGroups = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { folderLink: string }) => i)
   .handler(async ({ data: i }) =>
-    data.importApprovedGroups(await resolveAuth(i.auth), i.folderLink),
+    jsonSafe(await data.importApprovedGroups(await resolveAuth(i.auth), i.folderLink)),
   );
 
 export const getGroups = createServerFn({ method: "POST" })
@@ -206,12 +231,21 @@ export const verifyWritableGroups = createServerFn({ method: "POST" })
   );
 
 export const testWritableGroups = createServerFn({ method: "POST" })
-  .inputValidator((i: Auth & { connectionId: string; groupIds: string[] }) => i)
+  .inputValidator((i: Auth & { groupIds: string[]; joinIfRequired?: boolean }) => i)
   .handler(async ({ data: i }) =>
-    data.testWritableGroups(await resolveAuth(i.auth), {
-      connectionId: i.connectionId,
+    jsonSafe(await data.testWritableGroups(await resolveAuth(i.auth), {
       groupIds: i.groupIds,
-    }),
+      joinIfRequired: i.joinIfRequired,
+    })),
+  );
+
+export const testSendableGroups = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { groupIds: string[]; joinIfRequired?: boolean }) => i)
+  .handler(async ({ data: i }) =>
+    jsonSafe(await data.testSendableGroups(await resolveAuth(i.auth), {
+      groupIds: i.groupIds,
+      joinIfRequired: i.joinIfRequired,
+    })),
   );
 
 export const getGroupCategoryDetail = createServerFn({ method: "POST" })
@@ -220,14 +254,21 @@ export const getGroupCategoryDetail = createServerFn({ method: "POST" })
 
 export const saveGroupCategory = createServerFn({ method: "POST" })
   .inputValidator(
-    (i: Auth & { id?: string | null; name: string; group_ids: string[]; bypass_writable_check?: boolean }) => i,
+    (i: Auth & {
+      id?: string | null;
+      name: string;
+      group_ids: string[];
+      category_type?: "NW_NS" | "WRITABLE" | "SENDABLE";
+      joinIfRequired?: boolean;
+    }) => i,
   )
   .handler(async ({ data: i }) =>
     data.saveGroupCategory(await resolveAuth(i.auth), {
       id: i.id ?? null,
       name: i.name,
       group_ids: i.group_ids,
-      bypass_writable_check: i.bypass_writable_check,
+      category_type: i.category_type,
+      joinIfRequired: i.joinIfRequired,
     }),
   );
 
@@ -354,7 +395,6 @@ export const createCampaign = createServerFn({ method: "POST" })
         min_delay_seconds?: number | null;
         max_delay_seconds?: number | null;
         cycle_delay_minutes?: number | null;
-        bypass_writable_check?: boolean;
       },
     ) => i,
   )

@@ -174,9 +174,9 @@ async function mainMenu(chatId: number, userId: number) {
       { text: "LOGIN", callback_data: "login" },
     ],
     [
-      url
+      (url
         ? [{ text: "OPEN MINI APP", web_app: { url } }][0]
-        : { text: "OPEN MINI APP (NOT CONFIGURED)", callback_data: "miniapp_missing" },
+        : { text: "OPEN MINI APP (NOT CONFIGURED)", callback_data: "miniapp_missing" }) as Record<string, unknown>,
       { text: "HELP", callback_data: "help" },
     ],
   ];

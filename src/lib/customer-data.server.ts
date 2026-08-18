@@ -2,6 +2,7 @@ import { db, getSetting, logSystem, notify } from "./db.server";
 import type { AuthContext } from "./customer-auth.server";
 import { callBot, botToken } from "./telegram.server";
 import { createHash, randomBytes } from "node:crypto";
+import { hashPassword, verifyPassword } from "./security.server";
 import {
   checkUserSession,
   completeUserSessionCode,
@@ -14,9 +15,13 @@ import {
   searchPublicGroupsViaUserSession,
   startUserSessionReconnect,
   startUserSessionLogin,
-  testGroupWritableViaUserSession,
+  testGroupSendableViaUserSession,
   verifyGroupWritableViaUserSession,
 } from "./telegram-user-session.server";
+import {
+  bestTenantSession,
+  eligibleTenantSessions,
+} from "./telegram-session-health.server";
 
 const MAX_TELEGRAM_SESSIONS = 20;
 const LINK_CODE_TTL_MS = 15 * 60_000;
@@ -51,22 +56,7 @@ async function requireConnection(ctx: AuthContext, connectionId?: string | null)
 }
 
 async function defaultHealthyConnection(ctx: AuthContext) {
-  const { data } = await db()
-    .from("telegram_connections")
-    .select("*")
-    .eq("tenant_id", ctx.tenantId)
-    .not("encrypted_session", "is", null)
-    .not("status", "in", "(DISCONNECTED,AUTH_CODE_SENT,TWO_FACTOR_REQUIRED)")
-    .order("last_used_at", { ascending: true, nullsFirst: true })
-    .order("created_at", { ascending: true })
-    .limit(10);
-  const now = Date.now();
-  const connection = (data ?? []).find((row) => {
-    const cooldown = row.cooldown_until ? new Date(row.cooldown_until as string).getTime() : 0;
-    return (
-      !cooldown || cooldown <= now
-    );
-  });
+  const connection = await bestTenantSession(ctx.tenantId);
   if (!connection) throw new Error("Connect a Telegram session first.");
   return connection;
 }
@@ -216,6 +206,7 @@ export async function dashboard(ctx: AuthContext) {
     groupsPending,
     groupsApproved,
     groupsWritable,
+    groupsSendable,
     groupsJoined,
     audienceTotal,
     audienceContacted,
@@ -240,6 +231,7 @@ export async function dashboard(ctx: AuthContext) {
     count("discovered_groups", { status: "FOUND" }),
     count("discovered_groups", { status: "APPROVED" }),
     count("discovered_groups", { can_send_messages: true, writable_status: "WRITABLE" }),
+    count("discovered_groups", { sendable_status: "SENDABLE" }),
     count("discovered_groups", { status: "JOINED" }),
     count("audience_contacts"),
     count("audience_contacts", { status: "CONTACTED" }),
@@ -278,6 +270,7 @@ export async function dashboard(ctx: AuthContext) {
       pending: groupsPending,
       approved: groupsApproved,
       writable: groupsWritable,
+      sendable: groupsSendable,
       joined: groupsJoined,
     },
     audience: {
@@ -313,6 +306,62 @@ export async function dashboard(ctx: AuthContext) {
   };
 }
 
+export async function accountProfile(ctx: AuthContext) {
+  const { data } = await db()
+    .from("customers")
+    .select("id, email, name, status")
+    .eq("id", ctx.customerId)
+    .eq("tenant_id", ctx.tenantId)
+    .maybeSingle();
+  if (!data) throw new Error("Account not found.");
+  return {
+    name: (data.name as string | null) || ctx.name || "User001",
+    email: data.email as string,
+    status: (data.status as string | null) ?? "ACTIVE",
+  };
+}
+
+export async function updateAccountName(ctx: AuthContext, name: string) {
+  const trimmed = name.trim();
+  if (trimmed.length < 2) throw new Error("Enter a display name.");
+  if (trimmed.length > 80) throw new Error("Display name is too long.");
+  const { data, error } = await db()
+    .from("customers")
+    .update({ name: trimmed, updated_at: new Date().toISOString() })
+    .eq("id", ctx.customerId)
+    .eq("tenant_id", ctx.tenantId)
+    .select("email, name, status")
+    .single();
+  if (error || !data) throw new Error(error?.message ?? "Could not update display name.");
+  return { name: data.name, email: data.email, status: data.status };
+}
+
+export async function changeAccountPassword(
+  ctx: AuthContext,
+  input: { currentPassword: string; newPassword: string },
+) {
+  if (!input.newPassword || input.newPassword.length < 8) {
+    throw new Error("Password must be at least 8 characters.");
+  }
+  const client = db();
+  const { data } = await client
+    .from("customers")
+    .select("password_hash")
+    .eq("id", ctx.customerId)
+    .eq("tenant_id", ctx.tenantId)
+    .maybeSingle();
+  if (!data || !(await verifyPassword(input.currentPassword, data.password_hash as string))) {
+    throw new Error("Current password is incorrect.");
+  }
+  const { error } = await client
+    .from("customers")
+    .update({ password_hash: await hashPassword(input.newPassword), updated_at: new Date().toISOString() })
+    .eq("id", ctx.customerId)
+    .eq("tenant_id", ctx.tenantId);
+  if (error) throw new Error(error.message);
+  return { ok: true };
+}
+
 /* -------------------------------- connections ------------------------------------ */
 
 export async function listConnections(ctx: AuthContext) {
@@ -320,34 +369,11 @@ export async function listConnections(ctx: AuthContext) {
   const { data } = await client
     .from("telegram_connections")
     .select(
-      "id, tenant_id, label, account_name, username, telegram_id, telegram_user_id, phone_masked, status, health, error_message, restriction_status, restriction_reason, last_active_at, last_used_at, last_sync_at, link_expires_at, cooldown_until, auth_step, encrypted_session, created_at, updated_at",
+      "id, tenant_id, label, account_name, username, telegram_id, telegram_user_id, phone_masked, status, health, health_score, health_updated_at, health_summary, error_message, restriction_status, restriction_reason, last_active_at, last_used_at, last_sync_at, link_expires_at, cooldown_until, auth_step, encrypted_session, created_at, updated_at",
     )
     .eq("tenant_id", ctx.tenantId)
     .order("created_at", { ascending: false });
-  const staleStoredSessions = (data ?? []).filter((row) => {
-    if (!row.encrypted_session) return false;
-    if (["DISCONNECTED", "AUTH_CODE_SENT", "TWO_FACTOR_REQUIRED"].includes(String(row.status))) {
-      return false;
-    }
-    return (
-      ["ERROR", "UNKNOWN", "RESTRICTED"].includes(String(row.status)) ||
-      ["ERROR", "UNKNOWN", "REQUIRES_ACTION"].includes(String(row.health))
-    );
-  });
-  for (const row of staleStoredSessions) {
-    await checkUserSession(ctx, String(row.id));
-  }
-  const rows = staleStoredSessions.length
-    ? (
-        await client
-          .from("telegram_connections")
-          .select(
-            "id, tenant_id, label, account_name, username, telegram_id, telegram_user_id, phone_masked, status, health, error_message, restriction_status, restriction_reason, last_active_at, last_used_at, last_sync_at, link_expires_at, cooldown_until, auth_step, encrypted_session, created_at, updated_at",
-          )
-          .eq("tenant_id", ctx.tenantId)
-          .order("created_at", { ascending: false })
-      ).data ?? []
-    : data ?? [];
+  const rows = data ?? [];
   return rows.map(({ encrypted_session, ...row }) => ({
     ...row,
     has_session: Boolean(encrypted_session),
@@ -360,6 +386,107 @@ export async function createConnection(ctx: AuthContext, label: string) {
 
 export async function checkConnection(ctx: AuthContext, connectionId: string) {
   return checkUserSession(ctx, connectionId);
+}
+
+export async function testSessionHealth(ctx: AuthContext, connectionId: string) {
+  const connection = await requireConnection(ctx, connectionId);
+  const diagnostics: {
+    name: string;
+    status: "PASS" | "WARN" | "FAIL" | "SKIPPED";
+    message: string;
+    details?: Record<string, unknown>;
+  }[] = [];
+  try {
+    const checked = await checkUserSession(ctx, String(connection.id));
+    const connected = checked.ok && (checked.connection as { status?: string })?.status === "CONNECTED";
+    diagnostics.push({
+      name: "Authorization",
+      status: connected ? "PASS" : "FAIL",
+      message: connected ? "Authorization is valid." : "Authorization needs attention.",
+    });
+  } catch (error) {
+    diagnostics.push({
+      name: "Authorization",
+      status: "FAIL",
+      message: error instanceof Error ? error.message : "Authorization check failed.",
+    });
+  }
+  diagnostics.push({
+    name: "Cooldown",
+    status:
+      connection.cooldown_until && new Date(connection.cooldown_until as string) > new Date()
+        ? "WARN"
+        : "PASS",
+    message:
+      connection.cooldown_until && new Date(connection.cooldown_until as string) > new Date()
+        ? "Telegram rate limit is active."
+        : "No active cooldown.",
+  });
+  const { data: groups } = await db()
+    .from("discovered_groups")
+    .select("id, title, username, telegram_group_id, access_hash, entity_type, status")
+    .eq("tenant_id", ctx.tenantId)
+    .in("status", ["APPROVED", "JOINED"])
+    .order("updated_at", { ascending: false })
+    .limit(5);
+  if (groups?.length) {
+    const checks = await runAutoGroupChecks(ctx, {
+      groupIds: groups.map((group) => String(group.id)),
+      mode: "WRITABLE",
+      limit: 5,
+    });
+    diagnostics.push({
+      name: "Entity resolution",
+      status: checks.checked > 0 && checks.inaccessible === checks.checked ? "FAIL" : "PASS",
+      message: `Resolved ${checks.checked - checks.inaccessible}/${checks.checked} eligible groups.`,
+      details: checks,
+    });
+    const joinedSendable = (groups ?? []).find((group) => group.status === "JOINED" && group.username);
+    if (joinedSendable) {
+      const send = await testGroupSendableViaUserSession(ctx.tenantId, String(connection.id), {
+        username: joinedSendable.username as string | null,
+        telegram_group_id: joinedSendable.telegram_group_id as number | null,
+        access_hash: joinedSendable.access_hash as string | null,
+        entity_type: joinedSendable.entity_type as string | null,
+      });
+      diagnostics.push({
+        name: "Safe send/delete",
+        status: send.sendableStatus === "SENDABLE" ? "PASS" : "WARN",
+        message: send.reason ?? String(send.sendableStatus),
+        details: send as Record<string, unknown>,
+      });
+    } else {
+      diagnostics.push({
+        name: "Safe send/delete",
+        status: "SKIPPED",
+        message: "No joined eligible test group is configured.",
+      });
+    }
+  } else {
+    diagnostics.push({
+      name: "Entity resolution",
+      status: "SKIPPED",
+      message: "No approved groups are available for diagnostics.",
+    });
+  }
+  diagnostics.push({
+    name: "DM diagnostic",
+    status: "SKIPPED",
+    message: "DM diagnostic not configured/skipped.",
+  });
+  const { data: refreshed } = await db()
+    .from("telegram_connections")
+    .select("health_score, health_updated_at, health_summary")
+    .eq("id", connection.id)
+    .eq("tenant_id", ctx.tenantId)
+    .maybeSingle();
+  return {
+    connection_id: connection.id,
+    health_score: refreshed?.health_score ?? connection.health_score ?? 75,
+    health_summary: refreshed?.health_summary ?? "Health test completed.",
+    health_updated_at: refreshed?.health_updated_at ?? new Date().toISOString(),
+    diagnostics,
+  };
 }
 
 export async function startConnectionLogin(
@@ -832,7 +959,7 @@ export async function addGroupByUsername(
         access_hash: group.accessHash,
         entity_type: group.entityType,
         can_send_messages: group.canSendMessages,
-        writable_status: group.canSendMessages === false ? "NOT_WRITABLE" : "WRITABLE",
+        writable_status: group.canSendMessages ? "WRITABLE" : "NOT_WRITABLE",
         last_resolved_connection_id: connection.id,
         member_count: group.memberCount,
         matched_keywords: keywords,
@@ -1264,6 +1391,7 @@ export async function processBulkJoinJobs(limit = 2) {
       telegramUserId: null,
     };
     const groupId = ids[index];
+    if (!groupId) break;
     const { data: group } = await db()
       .from("discovered_groups")
       .select("status")
@@ -1374,17 +1502,9 @@ function normalizeAudienceOptions(
   };
 }
 
-type AudienceQueryBuilder = {
-  eq: (column: string, value: unknown) => AudienceQueryBuilder;
-  in: (column: string, values: unknown[]) => AudienceQueryBuilder;
-  gt: (column: string, value: unknown) => AudienceQueryBuilder;
-  neq: (column: string, value: unknown) => AudienceQueryBuilder;
-  or: (filters: string) => AudienceQueryBuilder;
-  order: (
-    column: string,
-    options?: { ascending?: boolean; nullsFirst?: boolean },
-  ) => AudienceQueryBuilder;
-};
+// Supabase's fluent query builder is a thenable with result typing that changes at each chained method.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AudienceQueryBuilder = any;
 
 function applyAudienceFilters(
   query: AudienceQueryBuilder,
@@ -1529,7 +1649,7 @@ export async function selectAudienceIds(
       .eq("tenant_id", ctx.tenantId),
     options,
   )).range(from, Math.min(to, 4999));
-  return { ids: (data ?? []).map((row) => row.id as string) };
+  return { ids: (data ?? []).map((row: { id: string }) => row.id) };
 }
 
 export async function discoverAudience(
@@ -1824,7 +1944,7 @@ export async function listGroupCategories(ctx: AuthContext) {
   if (!categories?.length) return [];
   const { data: members } = await client
     .from("group_category_members")
-    .select("category_id, group_id, discovered_groups(can_send_messages, writable_status)")
+    .select("category_id, group_id, discovered_groups(can_send_messages, writable_status, sendable_status)")
     .eq("tenant_id", ctx.tenantId)
     .in(
       "category_id",
@@ -1832,6 +1952,7 @@ export async function listGroupCategories(ctx: AuthContext) {
     );
   const counts = new Map<string, number>();
   const usableCounts = new Map<string, number>();
+  const sendableCounts = new Map<string, number>();
   for (const member of members ?? []) {
     const categoryId = member.category_id as string;
     counts.set(categoryId, (counts.get(categoryId) ?? 0) + 1);
@@ -1841,11 +1962,16 @@ export async function listGroupCategories(ctx: AuthContext) {
     if (group?.can_send_messages === true && group?.writable_status === "WRITABLE") {
       usableCounts.set(categoryId, (usableCounts.get(categoryId) ?? 0) + 1);
     }
+    if (group?.sendable_status === "SENDABLE") {
+      sendableCounts.set(categoryId, (sendableCounts.get(categoryId) ?? 0) + 1);
+    }
   }
   return categories.map((category) => ({
     ...category,
+    category_type: category.category_type ?? "NW_NS",
     group_count: counts.get(category.id as string) ?? 0,
     usable_count: usableCounts.get(category.id as string) ?? 0,
+    sendable_count: sendableCounts.get(category.id as string) ?? 0,
     unavailable_count:
       (counts.get(category.id as string) ?? 0) - (usableCounts.get(category.id as string) ?? 0),
   }));
@@ -1873,10 +1999,12 @@ export async function groupCategoryDetail(ctx: AuthContext, id: string) {
   const usableCount = groups.filter(
     (g) => g.can_send_messages === true && g.writable_status === "WRITABLE",
   ).length;
+  const sendableCount = groups.filter((g) => g.sendable_status === "SENDABLE").length;
   return {
-    category,
+    category: { ...category, category_type: category.category_type ?? "NW_NS" },
     groups,
     usable_count: usableCount,
+    sendable_count: sendableCount,
     unavailable_count: groups.length - usableCount,
   };
 }
@@ -1896,6 +2024,8 @@ async function applySuccessfulSendWritableProof(ctx: AuthContext) {
     .update({
       can_send_messages: true,
       writable_status: "WRITABLE",
+      sendable_status: "SENDABLE",
+      sendable_checked_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })
     .eq("tenant_id", ctx.tenantId)
@@ -1907,7 +2037,7 @@ async function applySuccessfulSendWritableProof(ctx: AuthContext) {
 export async function groupWritabilitySummary(ctx: AuthContext) {
   const client = db();
   await applySuccessfulSendWritableProof(ctx);
-  const [total, writable, notWritable, unknown] = await Promise.all([
+  const [total, writable, sendable, notWritable, unknown] = await Promise.all([
     client
       .from("discovered_groups")
       .select("id", { count: "exact", head: true })
@@ -1925,6 +2055,12 @@ export async function groupWritabilitySummary(ctx: AuthContext) {
       .select("id", { count: "exact", head: true })
       .eq("tenant_id", ctx.tenantId)
       .in("status", ["APPROVED", "JOINED"])
+      .eq("sendable_status", "SENDABLE"),
+    client
+      .from("discovered_groups")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", ctx.tenantId)
+      .in("status", ["APPROVED", "JOINED"])
       .eq("writable_status", "NOT_WRITABLE"),
     client
       .from("discovered_groups")
@@ -1936,9 +2072,150 @@ export async function groupWritabilitySummary(ctx: AuthContext) {
   return {
     total: total.count ?? 0,
     writable: writable.count ?? 0,
+    sendable: sendable.count ?? 0,
     notWritable: notWritable.count ?? 0,
     unknown: unknown.count ?? 0,
   };
+}
+
+type GroupCheckMode = "WRITABLE" | "SENDABLE";
+
+function definitiveGroupStatus(status: string | null | undefined) {
+  return ["NOT_WRITABLE", "NOT_SENDABLE", "INACCESSIBLE"].includes(String(status));
+}
+
+async function runAutoGroupChecks(
+  ctx: AuthContext,
+  input: { groupIds: string[]; joinIfRequired?: boolean; mode: GroupCheckMode; limit?: number },
+) {
+  const ids = [...new Set(input.groupIds)].slice(0, input.limit ?? 100);
+  if (!ids.length) throw new Error("Select at least one group to test.");
+  const client = db();
+  const { data: rows, error } = await client
+    .from("discovered_groups")
+    .select("id, title, username, telegram_group_id, access_hash, entity_type, writable_status, sendable_status")
+    .eq("tenant_id", ctx.tenantId)
+    .in("status", ["APPROVED", "JOINED"])
+    .in("id", ids);
+  if (error) throw new Error(error.message);
+  const sessions = await eligibleTenantSessions(ctx.tenantId);
+  if (!sessions.length) throw new Error("Connect an authorized Telegram session first.");
+
+  const result = {
+    checked: 0,
+    total: rows?.length ?? 0,
+    writable: 0,
+    sendable: 0,
+    notWritable: 0,
+    notSendable: 0,
+    joinRequired: 0,
+    inaccessible: 0,
+    unknown: 0,
+    joined: 0,
+    errors: [] as { group: string; reason: string; raw?: string | null; classification?: string | null }[],
+    groups: [] as Record<string, unknown>[],
+  };
+
+  for (const group of rows ?? []) {
+    result.checked += 1;
+    let final: Record<string, unknown> | null = null;
+    let usedConnectionId: string | null = null;
+    for (const session of sessions) {
+      usedConnectionId = String(session.id);
+      const args = {
+        username: group.username as string | null,
+        telegram_group_id: group.telegram_group_id as number | null,
+        access_hash: group.access_hash as string | null,
+        entity_type: group.entity_type as string | null,
+      };
+      const tested =
+        input.mode === "SENDABLE"
+          ? await testGroupSendableViaUserSession(ctx.tenantId, usedConnectionId, args)
+          : await verifyGroupWritableViaUserSession(ctx.tenantId, usedConnectionId, args);
+      let status = String(
+        input.mode === "SENDABLE"
+          ? (tested as Record<string, unknown>).sendableStatus
+          : (tested as Record<string, unknown>).writableStatus,
+      );
+      if (status === "JOIN_REQUIRED" && input.joinIfRequired && group.username) {
+        const joined = await joinGroupViaUserSession(ctx.tenantId, usedConnectionId, String(group.username));
+        if (joined.status === "JOINED") {
+          result.joined += 1;
+          const retried =
+            input.mode === "SENDABLE"
+              ? await testGroupSendableViaUserSession(ctx.tenantId, usedConnectionId, args)
+              : await verifyGroupWritableViaUserSession(ctx.tenantId, usedConnectionId, args);
+          final = retried as Record<string, unknown>;
+          status = String(input.mode === "SENDABLE" ? final.sendableStatus : final.writableStatus);
+        } else {
+          final = {
+            ...tested,
+            reason: joined.error ?? "Join failed.",
+            rawError: joined.error ?? null,
+          } as Record<string, unknown>;
+        }
+      } else {
+        final = tested as Record<string, unknown>;
+      }
+      if (
+        (input.mode === "SENDABLE" && status === "SENDABLE") ||
+        (input.mode === "WRITABLE" && status === "WRITABLE")
+      ) {
+        break;
+      }
+      if (status === "JOIN_REQUIRED" || definitiveGroupStatus(status)) break;
+    }
+    if (!final) continue;
+    const status = String(input.mode === "SENDABLE" ? final.sendableStatus : final.writableStatus);
+    const patch: Record<string, unknown> = {
+      updated_at: new Date().toISOString(),
+    };
+    if (final.title) patch.title = final.title;
+    if (final.username) patch.username = final.username;
+    if (final.telegramGroupId) patch.telegram_group_id = final.telegramGroupId;
+    if ("accessHash" in final) patch.access_hash = final.accessHash;
+    if (final.entityType) patch.entity_type = final.entityType;
+    if (input.mode === "SENDABLE") {
+      patch.sendable_status = status;
+      patch.sendable_checked_at = new Date().toISOString();
+      patch.last_send_test_connection_id = usedConnectionId;
+      patch.last_send_error = final.reason ?? final.rawError ?? null;
+      if (status === "SENDABLE") {
+        patch.can_send_messages = true;
+        patch.writable_status = "WRITABLE";
+      }
+    } else {
+      patch.can_send_messages = status === "WRITABLE" ? true : status === "UNKNOWN" || status === "JOIN_REQUIRED" ? null : false;
+      patch.writable_status = status;
+      patch.writable_checked_at = new Date().toISOString();
+      patch.last_write_error = final.reason ?? final.rawError ?? null;
+      patch.last_resolved_connection_id = usedConnectionId;
+    }
+    const { data: updated } = await client
+      .from("discovered_groups")
+      .update(patch)
+      .eq("tenant_id", ctx.tenantId)
+      .eq("id", group.id)
+      .select("*")
+      .maybeSingle();
+    if (updated) result.groups.push(updated as Record<string, unknown>);
+    if (status === "WRITABLE") result.writable += 1;
+    else if (status === "SENDABLE") result.sendable += 1;
+    else if (status === "NOT_WRITABLE") result.notWritable += 1;
+    else if (status === "NOT_SENDABLE") result.notSendable += 1;
+    else if (status === "JOIN_REQUIRED") result.joinRequired += 1;
+    else if (status === "INACCESSIBLE") result.inaccessible += 1;
+    else result.unknown += 1;
+    if (final.reason) {
+      result.errors.push({
+        group: String(group.title ?? group.username ?? group.id),
+        reason: String(final.reason),
+        raw: final.rawError ? String(final.rawError) : null,
+        classification: final.classification ? String(final.classification) : null,
+      });
+    }
+  }
+  return { ...result, summary: await groupWritabilitySummary(ctx) };
 }
 
 export async function verifyWritableGroups(ctx: AuthContext, limit = 40) {
@@ -1962,45 +2239,16 @@ export async function verifyWritableGroups(ctx: AuthContext, limit = 40) {
     errors: [] as { group: string; reason: string }[],
   };
   if (!rows.length) return { ...result, summary: await groupWritabilitySummary(ctx) };
-  const connection = await defaultHealthyConnection(ctx);
-  for (const group of rows) {
-    result.checked += 1;
-    try {
-      const verified = await verifyGroupWritableViaUserSession(ctx.tenantId, connection.id as string, {
-        username: group.username as string | null,
-        telegram_group_id: group.telegram_group_id as number | null,
-        access_hash: group.access_hash as string | null,
-        entity_type: group.entity_type as string | null,
-      });
-      const writable = verified.writableStatus === "WRITABLE";
-      const notWritable = verified.writableStatus === "NOT_WRITABLE";
-      await client
-        .from("discovered_groups")
-        .update({
-          title: verified.title ?? group.title,
-          username: verified.username ?? group.username,
-          telegram_group_id: verified.telegramGroupId ?? group.telegram_group_id,
-          access_hash: verified.accessHash ?? group.access_hash,
-          entity_type: verified.entityType ?? group.entity_type,
-          can_send_messages: writable ? true : notWritable ? false : null,
-          writable_status: verified.writableStatus,
-          last_resolved_connection_id: connection.id,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("tenant_id", ctx.tenantId)
-        .eq("id", group.id);
-      if (writable) result.writable += 1;
-      else if (notWritable) result.notWritable += 1;
-      else result.unknown += 1;
-    } catch (error) {
-      result.unknown += 1;
-      result.errors.push({
-        group: String(group.title ?? group.username ?? group.id),
-        reason: error instanceof Error ? error.message : "Verification failed.",
-      });
-    }
-  }
-  await clientConnectionUsed(ctx.tenantId, connection.id as string);
+  const checked = await runAutoGroupChecks(ctx, {
+    groupIds: rows.map((row) => String(row.id)),
+    mode: "WRITABLE",
+    limit,
+  });
+  result.checked = checked.checked;
+  result.writable += checked.writable;
+  result.notWritable = checked.notWritable;
+  result.unknown = checked.unknown + checked.joinRequired + checked.inaccessible;
+  result.errors = checked.errors.map((error) => ({ group: error.group, reason: error.reason }));
   await notify(
     ctx.tenantId,
     "Group verification completed",
@@ -2013,115 +2261,84 @@ export async function verifyWritableGroups(ctx: AuthContext, limit = 40) {
 
 export async function testWritableGroups(
   ctx: AuthContext,
-  input: { connectionId: string; groupIds: string[] },
+  input: { groupIds: string[]; joinIfRequired?: boolean },
 ) {
-  const connection = await requireConnection(ctx, input.connectionId);
-  const ids = [...new Set(input.groupIds)].slice(0, 100);
-  if (!ids.length) throw new Error("Select at least one group to test.");
-  const client = db();
-  const { data: rows, error } = await client
-    .from("discovered_groups")
-    .select("id, title, username, telegram_group_id, access_hash, entity_type, writable_status")
-    .eq("tenant_id", ctx.tenantId)
-    .in("status", ["APPROVED", "JOINED"])
-    .in("id", ids);
-  if (error) throw new Error(error.message);
-  const result = {
-    checked: 0,
-    total: rows?.length ?? 0,
-    writable: 0,
-    notWritable: 0,
-    unknown: 0,
-    inaccessible: 0,
-    paused: false,
-    errors: [] as { group: string; reason: string }[],
-  };
-  for (const group of rows ?? []) {
-    result.checked += 1;
-    let tested;
-    try {
-      tested = await testGroupWritableViaUserSession(ctx.tenantId, connection.id as string, {
-        username: group.username as string | null,
-        telegram_group_id: group.telegram_group_id as number | null,
-        access_hash: group.access_hash as string | null,
-        entity_type: group.entity_type as string | null,
-      });
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : "Writable test failed.";
-      tested = {
-        writableStatus: "UNKNOWN",
-        canSendMessages: null,
-        reason,
-      };
-    }
-    const status = tested.writableStatus;
-    const patch: Record<string, unknown> = {
-      can_send_messages: status === "WRITABLE" ? true : status === "UNKNOWN" ? null : false,
-      writable_status: status,
-      last_resolved_connection_id: connection.id,
-      updated_at: new Date().toISOString(),
-    };
-    if ("title" in tested && tested.title) patch.title = tested.title;
-    if ("username" in tested && tested.username) patch.username = tested.username;
-    if ("telegramGroupId" in tested && tested.telegramGroupId) patch.telegram_group_id = tested.telegramGroupId;
-    if ("accessHash" in tested) patch.access_hash = tested.accessHash;
-    if ("entityType" in tested && tested.entityType) patch.entity_type = tested.entityType;
-    await client
-      .from("discovered_groups")
-      .update(patch)
-      .eq("tenant_id", ctx.tenantId)
-      .eq("id", group.id);
-    if (status === "WRITABLE") result.writable += 1;
-    else if (status === "NOT_WRITABLE") result.notWritable += 1;
-    else if (status === "INACCESSIBLE") result.inaccessible += 1;
-    else result.unknown += 1;
-    if (tested.reason) {
-      result.errors.push({
-        group: String(group.title ?? group.username ?? group.id),
-        reason: tested.reason,
-      });
-    }
-    if ((rows?.length ?? 0) > 1) {
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-    }
-  }
-  await clientConnectionUsed(ctx.tenantId, connection.id as string);
-  if (ids.length > 1) {
+  const result = await runAutoGroupChecks(ctx, { ...input, mode: "WRITABLE" });
+  if (input.groupIds.length > 1) {
     await notify(
       ctx.tenantId,
       "Writable group test completed",
-      `Tested ${result.checked}/${result.total}. Writable: ${result.writable}. Not writable: ${result.notWritable}. Unknown: ${result.unknown}. Inaccessible: ${result.inaccessible}.`,
+      `Tested ${result.checked}/${result.total}. Writable: ${result.writable}. Not writable: ${result.notWritable}. Unknown: ${result.unknown}. Join required: ${result.joinRequired}.`,
       "INFO",
       "/mini-app/groups-approved",
     );
   }
-  return { ...result, summary: await groupWritabilitySummary(ctx) };
+  return result;
+}
+
+export async function testSendableGroups(
+  ctx: AuthContext,
+  input: { groupIds: string[]; joinIfRequired?: boolean },
+) {
+  const result = await runAutoGroupChecks(ctx, { ...input, mode: "SENDABLE" });
+  if (input.groupIds.length > 1) {
+    await notify(
+      ctx.tenantId,
+      "Sendable group test completed",
+      `Tested ${result.checked}/${result.total}. Sendable: ${result.sendable}. Not sendable: ${result.notSendable}. Unknown: ${result.unknown}. Join required: ${result.joinRequired}.`,
+      "INFO",
+      "/mini-app/groups-approved",
+    );
+  }
+  return result;
 }
 
 export async function saveGroupCategory(
   ctx: AuthContext,
-  input: { id?: string | null; name: string; group_ids: string[]; bypass_writable_check?: boolean },
+  input: {
+    id?: string | null;
+    name: string;
+    group_ids: string[];
+    category_type?: "NW_NS" | "WRITABLE" | "SENDABLE";
+    joinIfRequired?: boolean;
+  },
 ) {
   const client = db();
   const name = input.name.trim();
   if (!name) throw new Error("Category name is required.");
   const ids = [...new Set(input.group_ids)];
   if (!ids.length) throw new Error("Select at least one approved group.");
-  let groupQuery = client
+  const categoryType = input.category_type ?? "NW_NS";
+  const groupQuery = client
     .from("discovered_groups")
-    .select("id, can_send_messages, writable_status, entity_type")
+    .select("id, can_send_messages, writable_status, sendable_status, entity_type")
     .eq("tenant_id", ctx.tenantId)
     .in("id", ids)
     .in("status", ["APPROVED", "JOINED"]);
-  if (!input.bypass_writable_check) {
-    groupQuery = groupQuery.eq("can_send_messages", true).eq("writable_status", "WRITABLE");
-  }
   const { data: groups } = await groupQuery;
   if ((groups ?? []).length !== ids.length) {
+    throw new Error("One or more selected groups are not approved.");
+  }
+  let finalIds = ids;
+  if (!input.id && categoryType === "WRITABLE") {
+    const checked = await testWritableGroups(ctx, { groupIds: ids, joinIfRequired: input.joinIfRequired });
+    finalIds = checked.groups
+      .filter((group) => group.writable_status === "WRITABLE")
+      .map((group) => String(group.id));
+  }
+  if (!input.id && categoryType === "SENDABLE") {
+    const checked = await testSendableGroups(ctx, { groupIds: ids, joinIfRequired: input.joinIfRequired });
+    finalIds = checked.groups
+      .filter((group) => group.sendable_status === "SENDABLE")
+      .map((group) => String(group.id));
+  }
+  if (!finalIds.length) {
     throw new Error(
-      input.bypass_writable_check
-        ? "One or more selected groups are not approved."
-        : "One or more selected groups are not confirmed writable.",
+      categoryType === "SENDABLE"
+        ? "No selected groups passed the sendable check."
+        : categoryType === "WRITABLE"
+          ? "No selected groups passed the writable check."
+          : "Select at least one approved group.",
     );
   }
 
@@ -2129,14 +2346,14 @@ export async function saveGroupCategory(
   if (categoryId) {
     const { error } = await client
       .from("group_categories")
-      .update({ name, updated_at: new Date().toISOString() })
+      .update({ name, category_type: categoryType, updated_at: new Date().toISOString() })
       .eq("id", categoryId)
       .eq("tenant_id", ctx.tenantId);
     if (error) throw new Error(error.message);
   } else {
     const { data: category, error } = await client
       .from("group_categories")
-      .insert({ tenant_id: ctx.tenantId, name })
+      .insert({ tenant_id: ctx.tenantId, name, category_type: categoryType })
       .select("*")
       .single();
     if (error || !category) throw new Error(error?.message ?? "Could not create category.");
@@ -2149,7 +2366,7 @@ export async function saveGroupCategory(
     .eq("tenant_id", ctx.tenantId)
     .eq("category_id", categoryId);
   await client.from("group_category_members").insert(
-    ids.map((groupId) => ({
+    finalIds.map((groupId) => ({
       tenant_id: ctx.tenantId,
       category_id: categoryId,
       group_id: groupId,
@@ -2266,11 +2483,33 @@ export async function campaignDetail(ctx: AuthContext, id: string) {
       .limit(100),
     campaignJobStatsMap(client, ctx.tenantId, [id]),
   ]);
+  const rawLogs = logs ?? [];
+  const successLogs = rawLogs.filter((log) => log.level === "INFO" && log.message === "Message sent.");
+  const compactSuccess =
+    successLogs.length > 1
+      ? [
+          {
+            id: `compact-success-${id}`,
+            tenant_id: ctx.tenantId,
+            campaign_id: id,
+            level: "INFO",
+            message: `${successLogs.length} messages sent successfully.`,
+            details: { compacted: true, count: successLogs.length },
+            created_at: successLogs[0]?.created_at,
+          },
+        ]
+      : successLogs;
+  const priorityLogs = rawLogs
+    .filter((log) => !(log.level === "INFO" && log.message === "Message sent."))
+    .sort((a, b) => {
+      const rank = (level: unknown) => (level === "ERROR" ? 0 : level === "WARNING" ? 1 : 2);
+      return rank(a.level) - rank(b.level);
+    });
   return {
     campaign: withCampaignJobStats(campaign, stats.get(id)),
     groups: groups ?? [],
     recipients: recipients ?? [],
-    logs: logs ?? [],
+    logs: [...priorityLogs, ...compactSuccess].slice(0, 100),
   };
 }
 
@@ -2296,13 +2535,11 @@ export async function createCampaign(
     min_delay_seconds?: number | null;
     max_delay_seconds?: number | null;
     cycle_delay_minutes?: number | null;
-    bypass_writable_check?: boolean;
   },
 ) {
   const client = db();
   let groupIds = [...new Set(input.group_ids ?? [])];
-  let categoryGroupCount = 0;
-  let categoryUnavailableCount = 0;
+  let categoryGroupCount = groupIds.length;
   if (input.group_category_id) {
     const { data: category } = await client
       .from("group_categories")
@@ -2333,26 +2570,17 @@ export async function createCampaign(
   const connection = await requireConnection(ctx, input.connection_id);
 
   let campaignGroups: { id: string }[] = [];
-  if (input.type === "GROUP" && groupIds.length) {
-    let groupQuery = client
+  if (input.type !== "DM" && groupIds.length) {
+    const { data: groups } = await client
       .from("discovered_groups")
       .select("id")
       .eq("tenant_id", ctx.tenantId)
       .in("id", groupIds)
       .in("status", ["APPROVED", "JOINED"]);
-    groupQuery = input.bypass_writable_check
-      ? groupQuery.or("writable_status.is.null,writable_status.neq.INACCESSIBLE")
-      : groupQuery.eq("can_send_messages", true).eq("writable_status", "WRITABLE");
-    const { data: groups } = await groupQuery;
     campaignGroups = ((groups ?? []) as { id: string }[]);
     groupIds = campaignGroups.map((g) => g.id);
-    categoryUnavailableCount = Math.max(categoryGroupCount - groupIds.length, 0);
     if (!groupIds.length) {
-      throw new Error(
-        input.bypass_writable_check
-          ? "Selected category has no approved accessible groups to try."
-          : "Selected category has no confirmed writable groups. Run TEST WRITABLE GROUPS with a connected session.",
-      );
+      throw new Error("Selected category has no approved saved groups.");
     }
   }
 
@@ -2397,7 +2625,7 @@ export async function createCampaign(
       campaign_id: campaign.id,
       tenant_id: ctx.tenantId,
       group_id: g.id,
-      status: input.bypass_writable_check ? "PENDING_BYPASS" : "PENDING",
+      status: "PENDING",
     }));
     if (rows.length)
       await client.from("campaign_groups").upsert(rows, { onConflict: "campaign_id,group_id" });
@@ -2463,7 +2691,7 @@ export async function createCampaign(
       recipients: recipientCount,
       connection_id: connection.id,
       category_groups: categoryGroupCount || groupCount,
-      unavailable_groups: categoryUnavailableCount,
+      unavailable_groups: Math.max((categoryGroupCount || groupCount) - groupCount, 0),
     },
   });
   await clientConnectionUsed(ctx.tenantId, connection.id as string);
@@ -2651,7 +2879,7 @@ export async function analytics(ctx: AuthContext) {
       .eq("tenant_id", t),
     client
       .from("discovered_groups")
-      .select("status, discovered_at, can_send_messages, writable_status")
+      .select("status, discovered_at, can_send_messages, writable_status, sendable_status")
       .eq("tenant_id", t),
     client
       .from("audience_contacts")
@@ -2734,6 +2962,7 @@ export async function analytics(ctx: AuthContext) {
       writableGroups:
         groups?.filter((g) => g.can_send_messages === true && g.writable_status === "WRITABLE")
           .length ?? 0,
+      sendableGroups: groups?.filter((g) => g.sendable_status === "SENDABLE").length ?? 0,
       totalCampaigns: campaigns?.length ?? 0,
       messagesSent: allMessages.sent_messages,
       failed: allMessages.failed_messages,
@@ -2774,6 +3003,7 @@ export async function analytics(ctx: AuthContext) {
       writable:
         groups?.filter((g) => g.can_send_messages === true && g.writable_status === "WRITABLE")
           .length ?? 0,
+      sendable: groups?.filter((g) => g.sendable_status === "SENDABLE").length ?? 0,
       notWritable: groups?.filter((g) => g.writable_status === "NOT_WRITABLE").length ?? 0,
       joined: groups?.filter((g) => g.status === "JOINED").length ?? 0,
     },

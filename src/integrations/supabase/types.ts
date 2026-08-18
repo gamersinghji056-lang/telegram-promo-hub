@@ -564,52 +564,85 @@ export type Database = {
       }
       discovered_groups: {
         Row: {
+          access_hash: string | null
           approved_at: string | null
+          can_send_messages: boolean | null
           connection_id: string | null
           discovered_at: string
+          entity_type: string | null
           id: string
           join_error: string | null
           joined_at: string | null
+          last_resolved_connection_id: string | null
+          last_send_error: string | null
+          last_send_test_connection_id: string | null
+          last_write_error: string | null
           last_promoted_at: string | null
           matched_keywords: string[]
           member_count: number | null
+          sendable_checked_at: string | null
+          sendable_status: string
           status: string
           telegram_group_id: number | null
           tenant_id: string
           title: string
           username: string | null
+          writable_checked_at: string | null
+          writable_status: string | null
         }
         Insert: {
+          access_hash?: string | null
           approved_at?: string | null
+          can_send_messages?: boolean | null
           connection_id?: string | null
           discovered_at?: string
+          entity_type?: string | null
           id?: string
           join_error?: string | null
           joined_at?: string | null
+          last_resolved_connection_id?: string | null
+          last_send_error?: string | null
+          last_send_test_connection_id?: string | null
+          last_write_error?: string | null
           last_promoted_at?: string | null
           matched_keywords?: string[]
           member_count?: number | null
+          sendable_checked_at?: string | null
+          sendable_status?: string
           status?: string
           telegram_group_id?: number | null
           tenant_id: string
           title: string
           username?: string | null
+          writable_checked_at?: string | null
+          writable_status?: string | null
         }
         Update: {
+          access_hash?: string | null
           approved_at?: string | null
+          can_send_messages?: boolean | null
           connection_id?: string | null
           discovered_at?: string
+          entity_type?: string | null
           id?: string
           join_error?: string | null
           joined_at?: string | null
+          last_resolved_connection_id?: string | null
+          last_send_error?: string | null
+          last_send_test_connection_id?: string | null
+          last_write_error?: string | null
           last_promoted_at?: string | null
           matched_keywords?: string[]
           member_count?: number | null
+          sendable_checked_at?: string | null
+          sendable_status?: string
           status?: string
           telegram_group_id?: number | null
           tenant_id?: string
           title?: string
           username?: string | null
+          writable_checked_at?: string | null
+          writable_status?: string | null
         }
         Relationships: [
           {
@@ -621,6 +654,87 @@ export type Database = {
           },
           {
             foreignKeyName: "discovered_groups_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      group_category_members: {
+        Row: {
+          category_id: string
+          created_at: string
+          group_id: string
+          id: string
+          tenant_id: string
+        }
+        Insert: {
+          category_id: string
+          created_at?: string
+          group_id: string
+          id?: string
+          tenant_id: string
+        }
+        Update: {
+          category_id?: string
+          created_at?: string
+          group_id?: string
+          id?: string
+          tenant_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "group_category_members_category_id_fkey"
+            columns: ["category_id"]
+            isOneToOne: false
+            referencedRelation: "group_categories"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "group_category_members_group_id_fkey"
+            columns: ["group_id"]
+            isOneToOne: false
+            referencedRelation: "discovered_groups"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "group_category_members_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      group_categories: {
+        Row: {
+          category_type: string
+          created_at: string
+          id: string
+          name: string
+          tenant_id: string
+          updated_at: string
+        }
+        Insert: {
+          category_type?: string
+          created_at?: string
+          id?: string
+          name: string
+          tenant_id: string
+          updated_at?: string
+        }
+        Update: {
+          category_type?: string
+          created_at?: string
+          id?: string
+          name?: string
+          tenant_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "group_categories_tenant_id_fkey"
             columns: ["tenant_id"]
             isOneToOne: false
             referencedRelation: "tenants"
@@ -964,12 +1078,20 @@ export type Database = {
           account_name: string | null
           created_at: string
           error_message: string | null
+          health: string | null
+          health_score: number
+          health_summary: string
+          health_updated_at: string
           id: string
           label: string
           last_active_at: string | null
+          last_used_at: string | null
           last_sync_at: string | null
+          restriction_reason: string | null
+          restriction_status: string | null
           status: string
           telegram_id: number | null
+          telegram_user_id: number | null
           tenant_id: string
           updated_at: string
           username: string | null
@@ -978,12 +1100,20 @@ export type Database = {
           account_name?: string | null
           created_at?: string
           error_message?: string | null
+          health?: string | null
+          health_score?: number
+          health_summary?: string
+          health_updated_at?: string
           id?: string
           label: string
           last_active_at?: string | null
+          last_used_at?: string | null
           last_sync_at?: string | null
+          restriction_reason?: string | null
+          restriction_status?: string | null
           status?: string
           telegram_id?: number | null
+          telegram_user_id?: number | null
           tenant_id: string
           updated_at?: string
           username?: string | null
@@ -992,12 +1122,20 @@ export type Database = {
           account_name?: string | null
           created_at?: string
           error_message?: string | null
+          health?: string | null
+          health_score?: number
+          health_summary?: string
+          health_updated_at?: string
           id?: string
           label?: string
           last_active_at?: string | null
+          last_used_at?: string | null
           last_sync_at?: string | null
+          restriction_reason?: string | null
+          restriction_status?: string | null
           status?: string
           telegram_id?: number | null
+          telegram_user_id?: number | null
           tenant_id?: string
           updated_at?: string
           username?: string | null
@@ -1005,6 +1143,54 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "telegram_connections_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      session_health_events: {
+        Row: {
+          connection_id: string | null
+          created_at: string
+          details: Json
+          evidence_type: string
+          id: string
+          reason: string | null
+          score_delta: number
+          tenant_id: string
+        }
+        Insert: {
+          connection_id?: string | null
+          created_at?: string
+          details?: Json
+          evidence_type: string
+          id?: string
+          reason?: string | null
+          score_delta?: number
+          tenant_id: string
+        }
+        Update: {
+          connection_id?: string | null
+          created_at?: string
+          details?: Json
+          evidence_type?: string
+          id?: string
+          reason?: string | null
+          score_delta?: number
+          tenant_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "session_health_events_connection_id_fkey"
+            columns: ["connection_id"]
+            isOneToOne: false
+            referencedRelation: "telegram_connections"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "session_health_events_tenant_id_fkey"
             columns: ["tenant_id"]
             isOneToOne: false
             referencedRelation: "tenants"
