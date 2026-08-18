@@ -2547,36 +2547,92 @@ export async function createCampaign(
       .eq("id", input.group_category_id)
       .eq("tenant_id", ctx.tenantId)
       .maybeSingle();
-    if (!category) throw new Error("Selected group category was not found.");
-    const { data: members } = await client
+
+    if (!category) {
+      throw new Error(
+        "Selected group category was not found.",
+      );
+    }
+
+    const { data: members, error: membersError } = await client
       .from("group_category_members")
       .select("group_id")
       .eq("tenant_id", ctx.tenantId)
       .eq("category_id", input.group_category_id);
-    groupIds = [...new Set((members ?? []).map((m) => m.group_id as string))];
+    if (membersError) throw new Error(membersError.message);
+    groupIds = [...new Set((members ?? []).map((member) => member.group_id as string).filter(Boolean))];
     categoryGroupCount = groupIds.length;
   }
-  const minDelay = Math.max(1, Number(input.min_delay_seconds ?? 30));
-  const maxDelay = Math.max(1, Number(input.max_delay_seconds ?? 60));
-  if (minDelay > maxDelay) throw new Error("Minimum delay must be less than or equal to maximum delay.");
-  const cycleDelay = Math.max(1, Number(input.cycle_delay_minutes ?? 20));
-  if (!input.name.trim()) throw new Error("Give the campaign a name.");
-  if (!input.message.text && !input.message.media_url)
-    throw new Error("The message cannot be empty.");
-  if (input.type !== "DM" && groupIds.length === 0)
-    throw new Error("Select at least one group.");
-  if (input.type !== "GROUP" && input.contact_ids.length === 0)
-    throw new Error("Select at least one recipient.");
-  const connection = await requireConnection(ctx, input.connection_id);
+
+  const minDelay = Math.max(
+    1,
+    Number(input.min_delay_seconds ?? 30),
+  );
+
+  const maxDelay = Math.max(
+    1,
+    Number(input.max_delay_seconds ?? 60),
+  );
+
+  if (minDelay > maxDelay) {
+    throw new Error(
+      "Minimum delay must be less than or equal to maximum delay.",
+    );
+  }
+
+  const cycleDelay = Math.max(
+    1,
+    Number(input.cycle_delay_minutes ?? 20),
+  );
+
+  if (!input.name.trim()) {
+    throw new Error(
+      "Give the campaign a name.",
+    );
+  }
+
+  if (
+    !input.message.text &&
+    !input.message.media_url
+  ) {
+    throw new Error(
+      "The message cannot be empty.",
+    );
+  }
+
+  if (
+    input.type !== "DM" &&
+    groupIds.length === 0
+  ) {
+    throw new Error(
+      "Select at least one group.",
+    );
+  }
+
+  if (
+    input.type !== "GROUP" &&
+    input.contact_ids.length === 0
+  ) {
+    throw new Error(
+      "Select at least one recipient.",
+    );
+  }
+
+  const connection = await requireConnection(
+    ctx,
+    input.connection_id,
+  );
 
   let campaignGroups: { id: string }[] = [];
+
   if (input.type !== "DM" && groupIds.length) {
-    const { data: groups } = await client
+    const { data: groups, error: groupsError } = await client
       .from("discovered_groups")
       .select("id")
       .eq("tenant_id", ctx.tenantId)
       .in("id", groupIds)
       .in("status", ["APPROVED", "JOINED"]);
+    if (groupsError) throw new Error(groupsError.message);
     campaignGroups = ((groups ?? []) as { id: string }[]);
     groupIds = campaignGroups.map((g) => g.id);
     if (!groupIds.length) {
@@ -2585,12 +2641,37 @@ export async function createCampaign(
   }
 
   const tenant = await tenantOverview(ctx);
-  const plan = (tenant as { plans?: Record<string, number> } | null)?.plans ?? {};
-  const messagesUsed = (tenant as { messages_used?: number } | null)?.messages_used ?? 0;
-  const limit = Number(plan["monthly_message_limit"] ?? 0);
-  const targetCount = groupIds.length + input.contact_ids.length;
-  if (limit && messagesUsed + targetCount > limit)
-    throw new Error(`This campaign exceeds your monthly message limit (${limit}).`);
+
+  const plan =
+    (
+      tenant as {
+        plans?: Record<string, number>;
+      } | null
+    )?.plans ?? {};
+
+  const messagesUsed =
+    (
+      tenant as {
+        messages_used?: number;
+      } | null
+    )?.messages_used ?? 0;
+
+  const limit = Number(
+    plan["monthly_message_limit"] ?? 0,
+  );
+
+  const targetCount =
+    groupIds.length +
+    input.contact_ids.length;
+
+  if (
+    limit &&
+    messagesUsed + targetCount > limit
+  ) {
+    throw new Error(
+      `This campaign exceeds your monthly message limit (${limit}).`,
+    );
+  }
 
   const status = input.start_now
     ? "RUNNING"
@@ -2598,39 +2679,79 @@ export async function createCampaign(
       ? "SCHEDULED"
       : "PENDING_APPROVAL";
 
-  const { data: campaign, error } = await client
-    .from("campaigns")
-    .insert({
-      tenant_id: ctx.tenantId,
-      name: input.name.trim(),
-      type: input.type,
-      status,
-      connection_id: input.connection_id ?? null,
-      template_id: input.template_id ?? null,
-      message: input.message,
-      group_category_id: input.group_category_id ?? null,
-      min_delay_seconds: minDelay,
-      max_delay_seconds: maxDelay,
-      cycle_delay_minutes: cycleDelay,
-      scheduled_at: input.scheduled_at ?? null,
-      started_at: input.start_now ? new Date().toISOString() : null,
-      total_targets: targetCount,
-    })
-    .select("*")
-    .single();
-  if (error || !campaign) throw new Error(error?.message ?? "Could not create the campaign.");
+  const { data: campaign, error } =
+    await client
+      .from("campaigns")
+      .insert({
+        tenant_id: ctx.tenantId,
+        name: input.name.trim(),
+        type: input.type,
+        status,
+        connection_id:
+          input.connection_id ?? null,
+        template_id:
+          input.template_id ?? null,
+        message: input.message,
+        group_category_id:
+          input.group_category_id ?? null,
+        min_delay_seconds: minDelay,
+        max_delay_seconds: maxDelay,
+        cycle_delay_minutes: cycleDelay,
+        scheduled_at:
+          input.scheduled_at ?? null,
+        started_at: input.start_now
+          ? new Date().toISOString()
+          : null,
+        total_targets: targetCount,
+      })
+      .select("*")
+      .single();
 
-  if (groupIds.length) {
-    const rows = campaignGroups.map((g) => ({
-      campaign_id: campaign.id,
-      tenant_id: ctx.tenantId,
-      group_id: g.id,
-      status: "PENDING",
-    }));
-    if (rows.length)
-      await client.from("campaign_groups").upsert(rows, { onConflict: "campaign_id,group_id" });
+  if (error || !campaign) {
+    throw new Error(
+      error?.message ??
+        "Could not create the campaign.",
+    );
   }
 
+  if (groupIds.length) {
+    const rows = campaignGroups.map(
+      (group) => ({
+        campaign_id: campaign.id,
+        tenant_id: ctx.tenantId,
+        group_id: group.id,
+        status: "PENDING",
+      }),
+    );
+
+    if (rows.length) {
+      const { error: groupInsertError } =
+        await client
+          .from("campaign_groups")
+          .upsert(rows, {
+            onConflict:
+              "campaign_id,group_id",
+          });
+
+      if (groupInsertError) {
+        await client
+          .from("campaigns")
+          .delete()
+          .eq("id", campaign.id)
+          .eq("tenant_id", ctx.tenantId);
+
+        throw new Error(
+          groupInsertError.message,
+        );
+      }
+    }
+  }
+
+  /*
+   * DM TARGETS
+   *
+   * Existing DM logic remains unchanged.
+   */
   if (input.contact_ids.length) {
     let contactQuery = client
       .from("audience_contacts")
@@ -2638,63 +2759,142 @@ export async function createCampaign(
       .eq("tenant_id", ctx.tenantId)
       .in("id", input.contact_ids)
       .eq("eligibility", "OPTED_IN");
-    if (input.exclude_previously_contacted !== false)
-      contactQuery = contactQuery.eq("contact_count", 0);
-    const { data: contacts } = await contactQuery;
-    // Dedupe by telegram user id so a user in several groups is contacted once.
-    const unique = new Map<number, { id: string; telegram_user_id: number }>();
-    for (const c of contacts ?? []) unique.set(c.telegram_user_id as number, c as never);
-    if (unique.size === 0) {
-      await client.from("campaigns").delete().eq("id", campaign.id).eq("tenant_id", ctx.tenantId);
-      throw new Error("No selected recipients are eligible for DM promotion.");
+
+    if (
+      input.exclude_previously_contacted !==
+      false
+    ) {
+      contactQuery =
+        contactQuery.eq("contact_count", 0);
     }
-    const rows = [...unique.values()].map((c) => ({
+
+    const { data: contacts } =
+      await contactQuery;
+
+    /*
+     * Deduplicate by Telegram user id so a user present
+     * in multiple groups receives this campaign once.
+     */
+    const unique = new Map<
+      number,
+      {
+        id: string;
+        telegram_user_id: number;
+      }
+    >();
+
+    for (const contact of contacts ?? []) {
+      unique.set(
+        contact.telegram_user_id as number,
+        contact as never,
+      );
+    }
+
+    if (unique.size === 0) {
+      await client
+        .from("campaigns")
+        .delete()
+        .eq("id", campaign.id)
+        .eq("tenant_id", ctx.tenantId);
+
+      throw new Error(
+        "No selected recipients are eligible for DM promotion.",
+      );
+    }
+
+    const rows = [
+      ...unique.values(),
+    ].map((contact) => ({
       campaign_id: campaign.id,
       tenant_id: ctx.tenantId,
-      contact_id: c.id,
-      telegram_user_id: c.telegram_user_id,
+      contact_id: contact.id,
+      telegram_user_id:
+        contact.telegram_user_id,
       status: "PENDING",
     }));
-    if (rows.length)
+
+    if (rows.length) {
       await client
         .from("campaign_recipients")
-        .upsert(rows, { onConflict: "campaign_id,telegram_user_id" });
+        .upsert(rows, {
+          onConflict:
+            "campaign_id,telegram_user_id",
+        });
+    }
   }
 
-  await enqueueCampaignJobs(campaign.id as string, ctx.tenantId, input.start_now);
+  /*
+   * Existing campaign worker/job creation remains
+   * responsible for the real send attempts.
+   */
+  await enqueueCampaignJobs(
+    campaign.id as string,
+    ctx.tenantId,
+    input.start_now,
+  );
 
+  /*
+   * Recalculate real target counts after rows have been
+   * created.
+   */
   const groupCount =
     (
       await client
         .from("campaign_groups")
-        .select("id", { count: "exact", head: true })
-        .eq("campaign_id", campaign.id)
+        .select("id", {
+          count: "exact",
+          head: true,
+        })
+        .eq(
+          "campaign_id",
+          campaign.id,
+        )
     ).count ?? 0;
+
   const recipientCount =
     (
       await client
         .from("campaign_recipients")
-        .select("id", { count: "exact", head: true })
-        .eq("campaign_id", campaign.id)
+        .select("id", {
+          count: "exact",
+          head: true,
+        })
+        .eq(
+          "campaign_id",
+          campaign.id,
+        )
     ).count ?? 0;
+
   await client
     .from("campaigns")
-    .update({ total_targets: groupCount + recipientCount })
+    .update({
+      total_targets:
+        groupCount + recipientCount,
+    })
     .eq("id", campaign.id);
-  await client.from("campaign_logs").insert({
-    tenant_id: ctx.tenantId,
-    campaign_id: campaign.id,
-    level: "INFO",
-    message: "Campaign approved and jobs created.",
-    details: {
-      groups: groupCount,
-      recipients: recipientCount,
-      connection_id: connection.id,
-      category_groups: categoryGroupCount || groupCount,
-      unavailable_groups: Math.max((categoryGroupCount || groupCount) - groupCount, 0),
-    },
-  });
-  await clientConnectionUsed(ctx.tenantId, connection.id as string);
+  await client
+    .from("campaign_logs")
+    .insert({
+      tenant_id: ctx.tenantId,
+      campaign_id: campaign.id,
+      level: "INFO",
+      message:
+        "Campaign approved and jobs created.",
+      details: {
+        groups: groupCount,
+        recipients: recipientCount,
+        connection_id: connection.id,
+        category_groups:
+          categoryGroupCount ||
+          groupCount,
+        unavailable_groups: Math.max((categoryGroupCount || groupCount) - groupCount, 0),
+      },
+    });
+
+  await clientConnectionUsed(
+    ctx.tenantId,
+    connection.id as string,
+  );
 
   await logSystem({
     tenant_id: ctx.tenantId,
@@ -2702,7 +2902,13 @@ export async function createCampaign(
     action: "CAMPAIGN_CREATED",
     resource: campaign.name,
   });
-  await notify(ctx.tenantId, "Campaign created", `${campaign.name} is ${status.toLowerCase()}.`);
+
+  await notify(
+    ctx.tenantId,
+    "Campaign created",
+    `${campaign.name} is ${status.toLowerCase()}.`,
+  );
+
   return campaign;
 }
 

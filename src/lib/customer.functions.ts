@@ -1,5 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import {
+  changeCustomerPassword,
+  getCustomerAccountSettings,
   loginCustomerFromFlow,
   logoutCustomer,
   registerCustomerFromFlow,
@@ -32,6 +34,33 @@ export const completeLogin = createServerFn({ method: "POST" })
 export const logout = createServerFn({ method: "POST" })
   .inputValidator((i: Auth) => i)
   .handler(async ({ data: i }) => logoutCustomer(i.auth));
+
+export const getAccountSettings = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth) => i)
+  .handler(async ({ data: i }) =>
+    getCustomerAccountSettings(await resolveAuth(i.auth)),
+  );
+
+export const updateAccountPassword = createServerFn({ method: "POST" })
+  .inputValidator(
+    (
+      i: Auth & {
+        currentPassword: string;
+        newPassword: string;
+        confirmPassword: string;
+      },
+    ) => i,
+  )
+  .handler(async ({ data: i }) =>
+    changeCustomerPassword(
+      await resolveAuth(i.auth),
+      {
+        currentPassword: i.currentPassword,
+        newPassword: i.newPassword,
+        confirmPassword: i.confirmPassword,
+      },
+    ),
+  );
 
 export const getDashboard = createServerFn({ method: "POST" })
   .inputValidator((i: Auth) => i)
@@ -277,14 +306,16 @@ export const deleteGroupCategory = createServerFn({ method: "POST" })
   .handler(async ({ data: i }) => data.deleteGroupCategory(await resolveAuth(i.auth), i.id));
 
 export const findAudience = createServerFn({ method: "POST" })
-  .inputValidator((i: Auth & {
-    groupIds?: string[];
-    onlyNew?: boolean;
-    filter?: "ALL_ELIGIBLE" | "ACTIVE_POSTERS" | "ACTIVE_30_DAYS" | "RECENTLY_ONLINE";
-    excludeInactive?: boolean;
-    page?: number;
-    pageSize?: number;
-  }) => i)
+  .inputValidator(
+    (i: Auth & {
+      groupIds?: string[];
+      onlyNew?: boolean;
+      filter?: "ALL_ELIGIBLE" | "ACTIVE_POSTERS" | "ACTIVE_30_DAYS" | "RECENTLY_ONLINE";
+      excludeInactive?: boolean;
+      page?: number;
+      pageSize?: number;
+    }) => i,
+  )
   .handler(async ({ data: i }) =>
     data.findAudience(await resolveAuth(i.auth), {
       groupIds: i.groupIds ?? [],
@@ -297,14 +328,16 @@ export const findAudience = createServerFn({ method: "POST" })
   );
 
 export const selectAudienceIds = createServerFn({ method: "POST" })
-  .inputValidator((i: Auth & {
-    groupIds?: string[];
-    onlyNew?: boolean;
-    filter?: "ALL_ELIGIBLE" | "ACTIVE_POSTERS" | "ACTIVE_30_DAYS" | "RECENTLY_ONLINE";
-    excludeInactive?: boolean;
-    rangeFrom?: number | null;
-    rangeTo?: number | null;
-  }) => i)
+  .inputValidator(
+    (i: Auth & {
+      groupIds?: string[];
+      onlyNew?: boolean;
+      filter?: "ALL_ELIGIBLE" | "ACTIVE_POSTERS" | "ACTIVE_30_DAYS" | "RECENTLY_ONLINE";
+      excludeInactive?: boolean;
+      rangeFrom?: number | null;
+      rangeTo?: number | null;
+    }) => i,
+  )
   .handler(async ({ data: i }) =>
     data.selectAudienceIds(await resolveAuth(i.auth), {
       groupIds: i.groupIds ?? [],
@@ -402,9 +435,16 @@ export const createCampaign = createServerFn({ method: "POST" })
 
 export const controlCampaign = createServerFn({ method: "POST" })
   .inputValidator(
-    (i: Auth & { id: string; action: "START" | "PAUSE" | "RESUME" | "RESTART" | "STOP" }) => i,
+    (
+      i: Auth & {
+        id: string;
+        action: "START" | "PAUSE" | "RESUME" | "RESTART" | "STOP";
+      },
+    ) => i,
   )
-  .handler(async ({ data: i }) => data.controlCampaign(await resolveAuth(i.auth), i.id, i.action));
+  .handler(async ({ data: i }) =>
+    data.controlCampaign(await resolveAuth(i.auth), i.id, i.action),
+  );
 
 export const updateCampaign = createServerFn({ method: "POST" })
   .inputValidator(
@@ -473,5 +513,9 @@ export const getSessionInfo = createServerFn({ method: "POST" })
   .inputValidator((i: Auth) => i)
   .handler(async ({ data: i }) => {
     const ctx = await resolveAuth(i.auth);
-    return { email: ctx.email, name: ctx.name, telegramUserId: ctx.telegramUserId };
+    return {
+      email: ctx.email,
+      name: ctx.name,
+      telegramUserId: ctx.telegramUserId,
+    };
   });
