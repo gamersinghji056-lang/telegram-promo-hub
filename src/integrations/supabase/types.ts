@@ -104,8 +104,10 @@ export type Database = {
       billing_transactions: {
         Row: {
           amount: number
+          confirmed_by: string | null
           created_at: string
           currency: string
+          failure_reason: string | null
           id: string
           network: string
           paid_at: string | null
@@ -113,12 +115,15 @@ export type Database = {
           status: string
           tenant_id: string
           tx_hash: string | null
+          updated_at: string
           wallet_address: string | null
         }
         Insert: {
           amount?: number
+          confirmed_by?: string | null
           created_at?: string
           currency?: string
+          failure_reason?: string | null
           id?: string
           network?: string
           paid_at?: string | null
@@ -126,12 +131,15 @@ export type Database = {
           status?: string
           tenant_id: string
           tx_hash?: string | null
+          updated_at?: string
           wallet_address?: string | null
         }
         Update: {
           amount?: number
+          confirmed_by?: string | null
           created_at?: string
           currency?: string
+          failure_reason?: string | null
           id?: string
           network?: string
           paid_at?: string | null
@@ -139,6 +147,7 @@ export type Database = {
           status?: string
           tenant_id?: string
           tx_hash?: string | null
+          updated_at?: string
           wallet_address?: string | null
         }
         Relationships: [
@@ -870,12 +879,63 @@ export type Database = {
           },
         ]
       }
+      monthly_usage: {
+        Row: {
+          audience_found: number
+          created_at: string
+          dm_messages: number
+          groups_found: number
+          id: string
+          period_start: string
+          promotion_messages: number
+          sendable_checks: number
+          tenant_id: string
+          updated_at: string
+          writable_checks: number
+        }
+        Insert: {
+          audience_found?: number
+          created_at?: string
+          dm_messages?: number
+          groups_found?: number
+          id?: string
+          period_start: string
+          promotion_messages?: number
+          sendable_checks?: number
+          tenant_id: string
+          updated_at?: string
+          writable_checks?: number
+        }
+        Update: {
+          audience_found?: number
+          created_at?: string
+          dm_messages?: number
+          groups_found?: number
+          id?: string
+          period_start?: string
+          promotion_messages?: number
+          sendable_checks?: number
+          tenant_id?: string
+          updated_at?: string
+          writable_checks?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "monthly_usage_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       notifications: {
         Row: {
           body: string | null
           created_at: string
           id: string
           kind: string
+          link: string | null
           read_at: string | null
           tenant_id: string
           title: string
@@ -885,6 +945,7 @@ export type Database = {
           created_at?: string
           id?: string
           kind?: string
+          link?: string | null
           read_at?: string | null
           tenant_id: string
           title: string
@@ -894,6 +955,7 @@ export type Database = {
           created_at?: string
           id?: string
           kind?: string
+          link?: string | null
           read_at?: string | null
           tenant_id?: string
           title?: string
@@ -910,50 +972,92 @@ export type Database = {
       }
       plans: {
         Row: {
+          analytics_level: string
           code: string
           created_at: string
+          description: string | null
           duration_days: number
           id: string
           is_active: boolean
-          max_audience: number
-          max_campaigns: number
+          is_custom: boolean
+          is_public: boolean
+          max_active_campaigns: number | null
+          max_audience: number | null
+          max_campaigns: number | null
+          max_categories: number | null
           max_connections: number
-          max_groups: number
-          monthly_message_limit: number
+          max_groups: number | null
+          max_saved_groups: number | null
+          monthly_audience_found_limit: number | null
+          monthly_dm_message_limit: number | null
+          monthly_groups_found_limit: number | null
+          monthly_message_limit: number | null
+          monthly_sendable_check_limit: number | null
+          monthly_writable_check_limit: number | null
           name: string
           price_usd: number
+          scheduling_enabled: boolean
+          session_health_level: string
           sort_order: number
           updated_at: string
         }
         Insert: {
+          analytics_level?: string
           code: string
           created_at?: string
+          description?: string | null
           duration_days?: number
           id?: string
           is_active?: boolean
-          max_audience?: number
-          max_campaigns?: number
+          is_custom?: boolean
+          is_public?: boolean
+          max_active_campaigns?: number | null
+          max_audience?: number | null
+          max_campaigns?: number | null
+          max_categories?: number | null
           max_connections?: number
-          max_groups?: number
-          monthly_message_limit?: number
+          max_groups?: number | null
+          max_saved_groups?: number | null
+          monthly_audience_found_limit?: number | null
+          monthly_dm_message_limit?: number | null
+          monthly_groups_found_limit?: number | null
+          monthly_message_limit?: number | null
+          monthly_sendable_check_limit?: number | null
+          monthly_writable_check_limit?: number | null
           name: string
           price_usd?: number
+          scheduling_enabled?: boolean
+          session_health_level?: string
           sort_order?: number
           updated_at?: string
         }
         Update: {
+          analytics_level?: string
           code?: string
           created_at?: string
+          description?: string | null
           duration_days?: number
           id?: string
           is_active?: boolean
-          max_audience?: number
-          max_campaigns?: number
+          is_custom?: boolean
+          is_public?: boolean
+          max_active_campaigns?: number | null
+          max_audience?: number | null
+          max_campaigns?: number | null
+          max_categories?: number | null
           max_connections?: number
-          max_groups?: number
-          monthly_message_limit?: number
+          max_groups?: number | null
+          max_saved_groups?: number | null
+          monthly_audience_found_limit?: number | null
+          monthly_dm_message_limit?: number | null
+          monthly_groups_found_limit?: number | null
+          monthly_message_limit?: number | null
+          monthly_sendable_check_limit?: number | null
+          monthly_writable_check_limit?: number | null
           name?: string
           price_usd?: number
+          scheduling_enabled?: boolean
+          session_health_level?: string
           sort_order?: number
           updated_at?: string
         }
@@ -961,9 +1065,14 @@ export type Database = {
       }
       subscriptions: {
         Row: {
+          cancelled_at: string | null
           created_at: string
           expires_at: string | null
+          grant_reason: string | null
+          granted_by: string | null
           id: string
+          metadata: Json
+          no_expiry: boolean
           payment_status: string
           plan_id: string
           started_at: string
@@ -971,9 +1080,14 @@ export type Database = {
           tenant_id: string
         }
         Insert: {
+          cancelled_at?: string | null
           created_at?: string
           expires_at?: string | null
+          grant_reason?: string | null
+          granted_by?: string | null
           id?: string
+          metadata?: Json
+          no_expiry?: boolean
           payment_status?: string
           plan_id: string
           started_at?: string
@@ -981,9 +1095,14 @@ export type Database = {
           tenant_id: string
         }
         Update: {
+          cancelled_at?: string | null
           created_at?: string
           expires_at?: string | null
+          grant_reason?: string | null
+          granted_by?: string | null
           id?: string
+          metadata?: Json
+          no_expiry?: boolean
           payment_status?: string
           plan_id?: string
           started_at?: string
@@ -1198,6 +1317,83 @@ export type Database = {
           },
         ]
       }
+      tenant_entitlement_overrides: {
+        Row: {
+          analytics_level: string | null
+          created_at: string
+          expires_at: string | null
+          grant_reason: string | null
+          granted_by: string | null
+          max_active_campaigns: number | null
+          max_categories: number | null
+          max_connections: number | null
+          max_saved_groups: number | null
+          monthly_audience_found_limit: number | null
+          monthly_dm_message_limit: number | null
+          monthly_groups_found_limit: number | null
+          monthly_message_limit: number | null
+          monthly_sendable_check_limit: number | null
+          monthly_writable_check_limit: number | null
+          override_type: string
+          scheduling_enabled: boolean | null
+          session_health_level: string | null
+          tenant_id: string
+          updated_at: string
+        }
+        Insert: {
+          analytics_level?: string | null
+          created_at?: string
+          expires_at?: string | null
+          grant_reason?: string | null
+          granted_by?: string | null
+          max_active_campaigns?: number | null
+          max_categories?: number | null
+          max_connections?: number | null
+          max_saved_groups?: number | null
+          monthly_audience_found_limit?: number | null
+          monthly_dm_message_limit?: number | null
+          monthly_groups_found_limit?: number | null
+          monthly_message_limit?: number | null
+          monthly_sendable_check_limit?: number | null
+          monthly_writable_check_limit?: number | null
+          override_type?: string
+          scheduling_enabled?: boolean | null
+          session_health_level?: string | null
+          tenant_id: string
+          updated_at?: string
+        }
+        Update: {
+          analytics_level?: string | null
+          created_at?: string
+          expires_at?: string | null
+          grant_reason?: string | null
+          granted_by?: string | null
+          max_active_campaigns?: number | null
+          max_categories?: number | null
+          max_connections?: number | null
+          max_saved_groups?: number | null
+          monthly_audience_found_limit?: number | null
+          monthly_dm_message_limit?: number | null
+          monthly_groups_found_limit?: number | null
+          monthly_message_limit?: number | null
+          monthly_sendable_check_limit?: number | null
+          monthly_writable_check_limit?: number | null
+          override_type?: string
+          scheduling_enabled?: boolean | null
+          session_health_level?: string | null
+          tenant_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tenant_entitlement_overrides_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: true
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       tenant_members: {
         Row: {
           created_at: string
@@ -1316,6 +1512,19 @@ export type Database = {
           _user_id: string
         }
         Returns: boolean
+      }
+      increment_monthly_usage: {
+        Args: {
+          p_audience_found?: number
+          p_dm_messages?: number
+          p_groups_found?: number
+          p_period_start: string
+          p_promotion_messages?: number
+          p_sendable_checks?: number
+          p_tenant_id: string
+          p_writable_checks?: number
+        }
+        Returns: Database["public"]["Tables"]["monthly_usage"]["Row"]
       }
     }
     Enums: {

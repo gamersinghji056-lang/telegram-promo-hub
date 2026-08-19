@@ -65,6 +65,7 @@ import {
   removeKeyword,
   removeConnection,
   removeGroup,
+  requestPayment,
   runGroupDiscovery,
   pauseGroupDiscovery,
   searchGroupDiscoveryNow,
@@ -732,7 +733,7 @@ function CustomerContent(props: {
     return <CampaignHistory {...props} />;
   if (section === "group-create") return <GroupCampaign {...props} />;
   if (section === "analytics") return <Analytics data={props.data} />;
-  if (section === "billing") return <Billing data={props.data} />;
+  if (section === "billing") return <Billing {...props} />;
   if (section === "settings") return <SettingsPanel {...props} />;
   return null;
 }
@@ -3500,20 +3501,81 @@ function AnalyticsSection({
   );
 }
 
-function Billing({ data }: { data: any }) {
+function Billing({ auth, data, actions, setNotice, actionBusy, runAction, reload }: any) {
+  const usage = data?.usage ?? {};
+  const currentPlan = data?.subscription?.plans ?? data?.tenant?.plans ?? usage.plan ?? {};
+  const currentCode = currentPlan?.code ?? "";
+  const usageRows = [
+    ["Sessions", usage.counts?.sessions ?? 0, usage.limits?.max_connections ?? null],
+    ["Campaigns", usage.counts?.active_campaigns ?? 0, usage.limits?.max_active_campaigns ?? null],
+    ["Groups", usage.counts?.saved_groups ?? 0, usage.limits?.max_saved_groups ?? null],
+    ["Groups Found", usage.counts?.groups_found ?? 0, usage.limits?.monthly_groups_found_limit ?? null],
+    ["Users Found", usage.counts?.audience_found ?? 0, usage.limits?.monthly_audience_found_limit ?? null],
+    ["Messages", usage.counts?.promotion_messages ?? 0, usage.limits?.monthly_message_limit ?? null],
+    ["DM", usage.counts?.dm_messages ?? 0, usage.limits?.monthly_dm_message_limit ?? null],
+    ["Categories", usage.counts?.categories ?? 0, usage.limits?.max_categories ?? null],
+  ];
+  const requestPlan = async (planId: string) => {
+    await runAction(`billing-${planId}`, async () => {
+      await requestPayment({ data: { auth, planId } });
+      setNotice("Payment order created. Admin will confirm after payment.");
+      await reload();
+    });
+  };
   return (
-    <div className="space-y-3">
-      <section className={panelClass()}>
+    <div className="space-y-4">
+      <section className={panelClass("space-y-4")}>
         <CreditCard className="size-5 text-primary" />
-        <p className="mt-3 font-semibold">
-          {data?.subscription?.plans?.name ?? data?.tenant?.plans?.name ?? "Current plan"}
+        <div className="flex items-end justify-between gap-3">
+          <div>
+            <p className="text-4xl font-semibold">${Number(currentPlan?.price_usd ?? 0)}</p>
+            <p className="text-lg font-semibold">{currentPlan?.name ?? "TEST"}</p>
+          </div>
+          <div className="text-right text-sm">
+            <p className={usage.expired ? "text-warning" : "text-success"}>{usage.expired ? "Expired - TEST limits active" : "Active"}</p>
+            <p className="text-muted-foreground">
+              {data?.tenant?.plan_expires_at ? `Renews ${new Date(data.tenant.plan_expires_at).toLocaleDateString()}` : "No expiry"}
+            </p>
+          </div>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {usageRows.map(([label, used, limit]) => (
+            <MiniUsageBar key={String(label)} label={String(label)} used={Number(used ?? 0)} limit={limit as number | null} />
+          ))}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Payments: {data?.payments?.enabled ? `${data.payments.network} wallet configured` : "not configured"}
         </p>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Payments:{" "}
-          {data?.payments?.enabled
-            ? `${data.payments.network} wallet configured`
-            : "not configured"}
-        </p>
+      </section>
+      <section className="grid gap-3 sm:grid-cols-2">
+        {(data?.plans ?? []).map((plan: any) => {
+          const isCurrent = String(plan.code) === String(currentCode);
+          return (
+            <article key={plan.id} className={panelClass("space-y-3")}>
+              <div>
+                <p className="text-4xl font-semibold">${Number(plan.price_usd ?? 0)}</p>
+                <p className="text-lg font-semibold">{plan.name}</p>
+                <p className="text-sm text-muted-foreground">{plan.description}</p>
+              </div>
+              <div className="space-y-1 text-xs">
+                <p>Sessions: {limitLabel(plan.max_connections)}{plan.code === "ENTERPRISE" ? " hard max" : ""}</p>
+                <p>Campaigns: {limitLabel(plan.max_active_campaigns)}</p>
+                <p>Groups: {limitLabel(plan.max_saved_groups)}</p>
+                <p>Messages: {limitLabel(plan.monthly_message_limit)}</p>
+                <p>DM: {limitLabel(plan.monthly_dm_message_limit)}</p>
+                <p>Analytics: {plan.analytics_level}</p>
+              </div>
+              <Button
+                className="w-full"
+                variant={isCurrent ? "secondary" : "default"}
+                disabled={isCurrent || actionBusy === `billing-${plan.id}`}
+                onClick={() => void requestPlan(plan.id)}
+              >
+                {isCurrent ? "CURRENT PLAN" : Number(plan.price_usd ?? 0) > 0 ? "UPGRADE" : "SELECT PLAN"}
+              </Button>
+            </article>
+          );
+        })}
       </section>
       {(data?.transactions ?? []).map((t: any) => (
         <article key={t.id} className={panelClass()}>
@@ -3523,6 +3585,26 @@ function Billing({ data }: { data: any }) {
           <p className={`mt-1 text-xs font-semibold ${statusTone(t.status)}`}>{t.status}</p>
         </article>
       ))}
+    </div>
+  );
+}
+
+function limitLabel(value: unknown) {
+  return value === null || value === undefined ? "Unlimited" : Number(value).toLocaleString();
+}
+
+function MiniUsageBar({ label, used, limit }: { label: string; used: number; limit: number | null }) {
+  const pct = limit == null ? 0 : Math.min(100, Math.round((used / Math.max(limit, 1)) * 100));
+  const tone = pct >= 90 ? "bg-destructive" : pct >= 80 ? "bg-warning" : "bg-primary";
+  return (
+    <div>
+      <div className="flex items-center justify-between text-xs">
+        <span>{label}</span>
+        <span>{used.toLocaleString()} / {limitLabel(limit)}</span>
+      </div>
+      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted">
+        <div className={`h-full ${tone}`} style={{ width: `${limit == null ? 100 : pct}%` }} />
+      </div>
     </div>
   );
 }

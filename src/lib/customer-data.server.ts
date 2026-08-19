@@ -22,8 +22,13 @@ import {
   bestTenantSession,
   eligibleTenantSessions,
 } from "./telegram-session-health.server";
-
-const MAX_TELEGRAM_SESSIONS = 20;
+import {
+  assertEntitlement,
+  assertUsageQuota,
+  ensureDefaultPlans,
+  incrementMonthlyUsage,
+  tenantUsageDashboard,
+} from "./entitlements.server";
 const LINK_CODE_TTL_MS = 15 * 60_000;
 
 export function hashConnectionLinkCode(code: string) {
@@ -251,6 +256,7 @@ export async function dashboard(ctx: AuthContext) {
 
   const tenant = await tenantOverview(ctx);
   const plan = (tenant as { plans?: Record<string, number | string> } | null)?.plans ?? null;
+  const entitlement = await tenantUsageDashboard(ctx.tenantId);
   const { data: jobStatsRows } = await client
     .from("campaign_job_stats")
     .select("total_messages, sent_messages, pending_messages, failed_messages")
@@ -288,18 +294,33 @@ export async function dashboard(ctx: AuthContext) {
       messages: messageStats,
     },
     usage: {
-      messagesUsed: (tenant as { messages_used?: number } | null)?.messages_used ?? 0,
-      messageLimit: Number(plan?.["monthly_message_limit"] ?? 0),
-      groupsUsed: groupsApproved + groupsJoined,
-      groupsLimit: Number(plan?.["max_groups"] ?? 0),
-      connectionsUsed: connections,
-      connectionsLimit: Number(plan?.["max_connections"] ?? 0),
+      messagesUsed: entitlement.counts.promotion_messages,
+      messageLimit: entitlement.limits.monthly_message_limit,
+      dmMessagesUsed: entitlement.counts.dm_messages,
+      dmMessageLimit: entitlement.limits.monthly_dm_message_limit,
+      groupsFoundUsed: entitlement.counts.groups_found,
+      groupsFoundLimit: entitlement.limits.monthly_groups_found_limit,
+      audienceFoundUsed: entitlement.counts.audience_found,
+      audienceFoundLimit: entitlement.limits.monthly_audience_found_limit,
+      writableChecksUsed: entitlement.counts.writable_checks,
+      writableChecksLimit: entitlement.limits.monthly_writable_check_limit,
+      sendableChecksUsed: entitlement.counts.sendable_checks,
+      sendableChecksLimit: entitlement.limits.monthly_sendable_check_limit,
+      categoriesUsed: entitlement.counts.categories,
+      categoriesLimit: entitlement.limits.max_categories,
+      groupsUsed: entitlement.counts.saved_groups,
+      groupsLimit: entitlement.limits.max_saved_groups,
+      connectionsUsed: entitlement.counts.sessions,
+      connectionsLimit: entitlement.limits.max_connections,
+      activeCampaignsUsed: entitlement.counts.active_campaigns,
+      activeCampaignsLimit: entitlement.limits.max_active_campaigns,
     },
     subscription: {
-      planName: String(plan?.["name"] ?? "No plan"),
-      price: Number(plan?.["price_usd"] ?? 0),
+      planName: String(entitlement.plan?.["name"] ?? plan?.["name"] ?? "No plan"),
+      price: Number(entitlement.plan?.["price_usd"] ?? plan?.["price_usd"] ?? 0),
       expiresAt: (tenant as { plan_expires_at?: string } | null)?.plan_expires_at ?? null,
       status: (tenant as { status?: string } | null)?.status ?? "ACTIVE",
+      expired: entitlement.expired,
     },
     unreadNotifications: unread,
     account: { email: ctx.email, name: ctx.name },
@@ -645,6 +666,13 @@ function discoveryTerms(keywords: string[], batch = 0) {
 }
 
 async function discoverGroupsForTenant(tenantId: string, connectionId: string, safeKeywords: string[]) {
+  await assertUsageQuota(
+    tenantId,
+    "groups_found",
+    "monthly_groups_found_limit",
+    Math.max(1, safeKeywords.length),
+    "Monthly group discovery limit reached.",
+  );
   const s = await getSetting<{ provider_url?: string; provider_key?: string }>("discovery");
   let providerRows: {
     title: string;
@@ -723,6 +751,13 @@ async function discoverGroupsForTenant(tenantId: string, connectionId: string, s
   }));
   let added = 0;
   let duplicates = 0;
+  await assertUsageQuota(
+    tenantId,
+    "groups_found",
+    "monthly_groups_found_limit",
+    rows.length,
+    "Monthly group discovery limit reached.",
+  );
   if (rows.length) {
     const client = db();
     for (const row of rows) {
@@ -759,6 +794,7 @@ async function discoverGroupsForTenant(tenantId: string, connectionId: string, s
       }
     }
   }
+  if (added) await incrementMonthlyUsage(tenantId, { groups_found: added });
   return { configured: !!s.provider_url, added, duplicates, results: rows };
 }
 
@@ -1218,16 +1254,12 @@ export async function approveGroup(
     .maybeSingle();
   if (!group) throw new Error("Group not found.");
 
-  const tenant = await tenantOverview(ctx);
-  const limit = Number(
-    (tenant as { plans?: Record<string, number> } | null)?.plans?.["max_groups"] ?? 0,
-  );
   const { count } = await client
     .from("discovered_groups")
     .select("id", { count: "exact", head: true })
     .eq("tenant_id", ctx.tenantId)
     .in("status", ["APPROVED", "JOINED"]);
-  if (limit && (count ?? 0) >= limit) throw new Error(`Your plan allows ${limit} active group(s).`);
+  await assertEntitlement(ctx.tenantId, "max_saved_groups", count ?? 0, 1);
 
   await client
     .from("discovered_groups")
@@ -1684,6 +1716,13 @@ export async function discoverAudience(
     .in("status", ["APPROVED", "JOINED"]);
   const rows = groups ?? [];
   if (!rows.length) throw new Error("Select approved groups before finding users.");
+  await assertUsageQuota(
+    ctx.tenantId,
+    "audience_found",
+    "monthly_audience_found_limit",
+    1,
+    "Monthly audience discovery limit reached.",
+  );
 
   const summary = {
     groupsSelected: ids.length,
@@ -1721,6 +1760,13 @@ export async function discoverAudience(
     };
 
     if (result.status === "FOUND") {
+      await assertUsageQuota(
+        ctx.tenantId,
+        "audience_found",
+        "monthly_audience_found_limit",
+        result.users.length,
+        "Monthly audience discovery limit reached.",
+      );
       for (const user of result.users) {
         const { data: existing } = await db()
           .from("audience_contacts")
@@ -1795,6 +1841,7 @@ export async function discoverAudience(
     summary.groupsProcessed += 1;
     summary.results.push(groupResult);
   }
+  if (summary.usersFound) await incrementMonthlyUsage(ctx.tenantId, { audience_found: summary.usersFound });
   await clientConnectionUsed(ctx.tenantId, connection.id as string);
   return summary;
 }
@@ -2257,6 +2304,13 @@ export async function verifyWritableGroups(
     errors: [] as { group: string; reason: string }[],
   };
   if (!rows.length) return { ...result, summary: await groupWritabilitySummary(ctx) };
+  await assertUsageQuota(
+    ctx.tenantId,
+    "writable_checks",
+    "monthly_writable_check_limit",
+    rows.length,
+    "Monthly writable check limit reached.",
+  );
   const writableChecked = await runAutoGroupChecks(ctx, {
     groupIds: rows.map((row) => String(row.id)),
     mode: "WRITABLE",
@@ -2273,14 +2327,22 @@ export async function verifyWritableGroups(
       );
     })
     .map((group) => String(group.id));
-  const sendableChecked = sendableCandidates.length
-    ? await runAutoGroupChecks(ctx, {
-        groupIds: sendableCandidates,
-        mode: "SENDABLE",
-        limit: input.limit,
-        joinIfRequired: input.joinIfRequired,
-      })
-    : null;
+  let sendableChecked: Awaited<ReturnType<typeof runAutoGroupChecks>> | null = null;
+  if (sendableCandidates.length) {
+    await assertUsageQuota(
+      ctx.tenantId,
+      "sendable_checks",
+      "monthly_sendable_check_limit",
+      sendableCandidates.length,
+      "Monthly sendable check limit reached.",
+    );
+    sendableChecked = await runAutoGroupChecks(ctx, {
+      groupIds: sendableCandidates,
+      mode: "SENDABLE",
+      limit: input.limit,
+      joinIfRequired: input.joinIfRequired,
+    });
+  }
   result.checked = writableChecked.checked + (sendableChecked?.checked ?? 0);
   result.writable += writableChecked.writable;
   result.sendable = sendableChecked?.sendable ?? 0;
@@ -2305,6 +2367,8 @@ export async function verifyWritableGroups(
     "INFO",
     "/mini-app/group-categories",
   );
+  if (writableChecked.checked) await incrementMonthlyUsage(ctx.tenantId, { writable_checks: writableChecked.checked });
+  if (sendableChecked?.checked) await incrementMonthlyUsage(ctx.tenantId, { sendable_checks: sendableChecked.checked });
   return { ...result, summary: await groupWritabilitySummary(ctx) };
 }
 
@@ -2312,7 +2376,15 @@ export async function testWritableGroups(
   ctx: AuthContext,
   input: { groupIds: string[]; joinIfRequired?: boolean },
 ) {
+  await assertUsageQuota(
+    ctx.tenantId,
+    "writable_checks",
+    "monthly_writable_check_limit",
+    input.groupIds.length,
+    "Monthly writable check limit reached.",
+  );
   const result = await runAutoGroupChecks(ctx, { ...input, mode: "WRITABLE" });
+  if (result.checked) await incrementMonthlyUsage(ctx.tenantId, { writable_checks: result.checked });
   if (input.groupIds.length > 1) {
     await notify(
       ctx.tenantId,
@@ -2329,7 +2401,15 @@ export async function testSendableGroups(
   ctx: AuthContext,
   input: { groupIds: string[]; joinIfRequired?: boolean },
 ) {
+  await assertUsageQuota(
+    ctx.tenantId,
+    "sendable_checks",
+    "monthly_sendable_check_limit",
+    input.groupIds.length,
+    "Monthly sendable check limit reached.",
+  );
   const result = await runAutoGroupChecks(ctx, { ...input, mode: "SENDABLE" });
+  if (result.checked) await incrementMonthlyUsage(ctx.tenantId, { sendable_checks: result.checked });
   if (input.groupIds.length > 1) {
     await notify(
       ctx.tenantId,
@@ -2413,6 +2493,13 @@ export async function saveGroupCategory(
   }
 
   let categoryId = input.id ?? null;
+  if (!categoryId) {
+    const { count } = await client
+      .from("group_categories")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", ctx.tenantId);
+    await assertEntitlement(ctx.tenantId, "max_categories", count ?? 0, 1);
+  }
   if (categoryId) {
     const { error } = await client
       .from("group_categories")
@@ -2710,36 +2797,38 @@ export async function createCampaign(
     }
   }
 
-  const tenant = await tenantOverview(ctx);
-
-  const plan =
-    (
-      tenant as {
-        plans?: Record<string, number>;
-      } | null
-    )?.plans ?? {};
-
-  const messagesUsed =
-    (
-      tenant as {
-        messages_used?: number;
-      } | null
-    )?.messages_used ?? 0;
-
-  const limit = Number(
-    plan["monthly_message_limit"] ?? 0,
-  );
-
   const targetCount =
     groupIds.length +
     input.contact_ids.length;
 
-  if (
-    limit &&
-    messagesUsed + targetCount > limit
-  ) {
-    throw new Error(
-      `This campaign exceeds your monthly message limit (${limit}).`,
+  const { count: activeCampaignCount } = await client
+    .from("campaigns")
+    .select("id", { count: "exact", head: true })
+    .eq("tenant_id", ctx.tenantId)
+    .in("status", ["RUNNING", "SCHEDULED", "PENDING_APPROVAL", "PAUSED"]);
+  await assertEntitlement(
+    ctx.tenantId,
+    "max_active_campaigns",
+    activeCampaignCount ?? 0,
+    1,
+    "Upgrade your plan to create more campaigns.",
+  );
+  if (targetCount) {
+    await assertUsageQuota(
+      ctx.tenantId,
+      "promotion_messages",
+      "monthly_message_limit",
+      targetCount,
+      "This campaign exceeds your monthly promotion message limit.",
+    );
+  }
+  if (input.type !== "GROUP" && input.contact_ids.length) {
+    await assertUsageQuota(
+      ctx.tenantId,
+      "dm_messages",
+      "monthly_dm_message_limit",
+      input.contact_ids.length,
+      "This campaign exceeds your monthly DM message limit.",
     );
   }
 
@@ -3295,13 +3384,14 @@ export async function analytics(ctx: AuthContext) {
 
 export async function billing(ctx: AuthContext) {
   const client = db();
-  const [tenant, { data: plans }, { data: subscription }, { data: transactions }, payments] =
+  await ensureDefaultPlans();
+  const [tenant, { data: plans }, { data: subscription }, { data: transactions }, payments, usage] =
     await Promise.all([
       tenantOverview(ctx),
-      client.from("plans").select("*").eq("is_active", true).order("sort_order"),
+      client.from("plans").select("*").eq("is_active", true).eq("is_public", true).order("sort_order"),
       client
         .from("subscriptions")
-        .select("*, plans(name, price_usd)")
+        .select("*, plans(*)")
         .eq("tenant_id", ctx.tenantId)
         .order("created_at", { ascending: false })
         .limit(1)
@@ -3315,12 +3405,14 @@ export async function billing(ctx: AuthContext) {
       getSetting<{ payment_enabled?: boolean; network?: string; wallet_address?: string }>(
         "payments",
       ),
+      tenantUsageDashboard(ctx.tenantId),
     ]);
   return {
     tenant,
     plans: plans ?? [],
     subscription,
     transactions: transactions ?? [],
+    usage,
     payments: {
       enabled: !!payments.payment_enabled && !!payments.wallet_address,
       network: payments.network ?? "TRC20",
@@ -3338,8 +3430,17 @@ export async function requestPayment(ctx: AuthContext, planId: string) {
   if (!payments.payment_enabled || !payments.wallet_address)
     throw new Error("Payments are not configured yet. Contact support to upgrade.");
   const client = db();
-  const { data: plan } = await client.from("plans").select("*").eq("id", planId).maybeSingle();
+  const { data: plan } = await client
+    .from("plans")
+    .select("*")
+    .eq("id", planId)
+    .eq("is_active", true)
+    .eq("is_public", true)
+    .maybeSingle();
   if (!plan) throw new Error("Plan not found.");
+  if (Number(plan.price_usd ?? 0) <= 0) {
+    throw new Error("Free plans are assigned automatically or by an administrator.");
+  }
   const { data, error } = await client
     .from("billing_transactions")
     .insert({

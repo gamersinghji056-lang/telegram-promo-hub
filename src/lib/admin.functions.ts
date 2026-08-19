@@ -48,6 +48,38 @@ export const changeCustomerPlan = createServerFn({ method: "POST" })
     return admin.adminChangePlan(context.userId, data.id, data.planId);
   });
 
+export const grantCustomerPlan = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((i: {
+    customerId: string;
+    planId?: string | null;
+    duration?: string;
+    expiresAt?: string | null;
+    noExpiry?: boolean;
+    reason?: string | null;
+    unlimited?: boolean;
+  }) => i)
+  .handler(async ({ context, data }) => {
+    await admin.assertSuperAdmin(context.userId);
+    return admin.adminGrantPlan(context.userId, data);
+  });
+
+export const forceLogoutCustomer = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((i: { id: string }) => i)
+  .handler(async ({ context, data }) => {
+    await admin.assertSuperAdmin(context.userId);
+    return admin.adminForceLogout(context.userId, data.id);
+  });
+
+export const deleteCustomer = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((i: { id: string; confirmation: string }) => i)
+  .handler(async ({ context, data }) => {
+    await admin.assertSuperAdmin(context.userId);
+    return admin.adminDeleteCustomer(context.userId, data.id, data.confirmation);
+  });
+
 export const resetCustomerPassword = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((i: { id: string; password: string }) => i)
@@ -107,6 +139,52 @@ export const updateTransaction = createServerFn({ method: "POST" })
   .handler(async ({ context, data }) => {
     await admin.assertSuperAdmin(context.userId);
     return admin.adminUpdateTransaction(context.userId, data.id, data.status, data.txHash);
+  });
+
+export const updateSubscription = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((i: { id: string; action: "EXTEND" | "EXPIRE" | "CANCEL" | "GRANT_AGAIN"; days?: number; reason?: string }) => i)
+  .handler(async ({ context, data }) => {
+    await admin.assertSuperAdmin(context.userId);
+    return admin.adminSubscriptionAction(context.userId, data);
+  });
+
+export const getUsage = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    await admin.assertSuperAdmin(context.userId);
+    return admin.adminUsage();
+  });
+
+export const resetUsage = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((i: { tenantId: string; reason?: string }) => i)
+  .handler(async ({ context, data }) => {
+    await admin.assertSuperAdmin(context.userId);
+    return admin.adminResetUsage(context.userId, data.tenantId, data.reason);
+  });
+
+export const saveQuotaOverride = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((i: { tenantId: string; fields: Record<string, unknown>; expiresAt?: string | null; reason?: string | null }) => i)
+  .handler(async ({ context, data }) => {
+    await admin.assertSuperAdmin(context.userId);
+    return admin.adminSaveQuotaOverride(context.userId, data);
+  });
+
+export const getAdminNotifications = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    await admin.assertSuperAdmin(context.userId);
+    return admin.adminNotifications();
+  });
+
+export const sendAdminNotification = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((i: { customerIds?: string[]; all?: boolean; title: string; message: string; type: "INFO" | "SUCCESS" | "WARNING" | "ERROR"; link?: string | null }) => i)
+  .handler(async ({ context, data }) => {
+    await admin.assertSuperAdmin(context.userId);
+    return admin.adminSendNotification(context.userId, data);
   });
 
 export const getSettings = createServerFn({ method: "POST" })

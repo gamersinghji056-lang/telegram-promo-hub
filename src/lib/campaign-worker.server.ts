@@ -1,4 +1,5 @@
 import { db, logSystem } from "./db.server";
+import { assertUsageQuota, incrementMonthlyUsage } from "./entitlements.server";
 import type { MessagePayload } from "./telegram.server";
 import { sendDirectViaUserSession, sendGroupViaUserSession } from "./telegram-user-session.server";
 import { classifyTelegramError as classifyRpcError } from "./telegram-errors.server";
@@ -463,6 +464,22 @@ async function processJob(job: JobRow) {
     const campaign = await campaignMessage(job.campaign_id, job.tenant_id);
     await verifyConnection(job.tenant_id, job.connection_id ?? campaign.connection_id);
     const target = await resolveTarget(job);
+    await assertUsageQuota(
+      job.tenant_id,
+      "promotion_messages",
+      "monthly_message_limit",
+      1,
+      "Monthly promotion message limit reached.",
+    );
+    if (target.kind === "DM") {
+      await assertUsageQuota(
+        job.tenant_id,
+        "dm_messages",
+        "monthly_dm_message_limit",
+        1,
+        "Monthly DM message limit reached.",
+      );
+    }
     console.info("TARGET_RESOLVE_OK", {
       tenantId: job.tenant_id,
       campaignId: job.campaign_id,
@@ -546,6 +563,10 @@ async function processJob(job: JobRow) {
         .eq("tenant_id", job.tenant_id);
     }
     await logCampaign(job, "INFO", "Message sent.", { target: target.label, compact_success: true });
+    await incrementMonthlyUsage(job.tenant_id, {
+      promotion_messages: 1,
+      ...(target.kind === "DM" ? { dm_messages: 1 } : {}),
+    });
     return { sent: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Campaign job failed.";

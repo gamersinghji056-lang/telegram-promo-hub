@@ -4,14 +4,13 @@ import { StringSession } from "telegram/sessions";
 import bigInt from "big-integer";
 import type { AuthContext } from "./customer-auth.server";
 import { db, logSystem } from "./db.server";
+import { assertEntitlement } from "./entitlements.server";
 import { decryptSecret, encryptSecret } from "./security.server";
 import { classifyTelegramError, telegramErrorMessage } from "./telegram-errors.server";
 import { recordSessionHealthEvidence } from "./telegram-session-health.server";
 import type { MessagePayload } from "./telegram.server";
 
 const CONNECTION_RETRIES = 3;
-const MAX_SESSIONS = 20;
-
 type ConnectionRow = {
   id: string;
   tenant_id: string;
@@ -296,8 +295,7 @@ async function ensureLimit(ctx: AuthContext) {
     .select("id", { count: "exact", head: true })
     .eq("tenant_id", ctx.tenantId)
     .neq("status", "DISCONNECTED");
-  if ((count ?? 0) >= MAX_SESSIONS)
-    throw new Error("A customer can connect up to 20 Telegram sessions.");
+  await assertEntitlement(ctx.tenantId, "max_connections", count ?? 0, 1);
 }
 
 async function saveConnectedProfile(

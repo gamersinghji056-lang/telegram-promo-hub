@@ -115,3 +115,119 @@ test("temporary notices are auto-cleared without reload", () => {
   assert(src.includes("window.setTimeout(() => setNotice(\"\"), 5000)"));
   assert(src.includes("window.setTimeout(() => setError(\"\"), 5000)"));
 });
+
+test("plan schema defines requested public plans and quota fields", () => {
+  const migration = read("supabase/migrations/20260819120000_admin_billing_plan_controls.sql");
+  for (const code of ["'TEST'", "'PLUS'", "'PRO'", "'ENTERPRISE'"]) assert(migration.includes(code));
+  for (const field of [
+    "max_connections",
+    "max_active_campaigns",
+    "max_saved_groups",
+    "monthly_groups_found_limit",
+    "monthly_audience_found_limit",
+    "monthly_message_limit",
+    "monthly_dm_message_limit",
+    "max_categories",
+    "monthly_writable_check_limit",
+    "monthly_sendable_check_limit",
+    "analytics_level",
+    "scheduling_enabled",
+    "session_health_level",
+  ]) assert(migration.includes(field));
+  assert(migration.includes("max_connections <= 20"));
+  assert(migration.includes("CREATE TABLE IF NOT EXISTS public.monthly_usage"));
+  assert(migration.includes("CREATE OR REPLACE FUNCTION public.increment_monthly_usage"));
+});
+
+test("TEST and Enterprise session limits are enforced server-side", () => {
+  const helper = read("src/lib/entitlements.server.ts");
+  const session = read("src/lib/telegram-user-session.server.ts");
+  assert(helper.includes("export const HARD_SESSION_LIMIT = 20"));
+  assert(helper.includes('code: "TEST"'));
+  assert(helper.includes("max_connections: 1"));
+  assert(helper.includes('code: "ENTERPRISE"'));
+  assert(helper.includes("max_connections: HARD_SESSION_LIMIT"));
+  assert(session.includes('assertEntitlement(ctx.tenantId, "max_connections"'));
+});
+
+test("campaign and discovery quotas are enforced server-side", () => {
+  const customer = read("src/lib/customer-data.server.ts");
+  const worker = read("src/lib/campaign-worker.server.ts");
+  assert(customer.includes('"max_active_campaigns"'));
+  assert(customer.includes('"monthly_groups_found_limit"'));
+  assert(customer.includes('"monthly_audience_found_limit"'));
+  assert(customer.includes('"monthly_message_limit"'));
+  assert(customer.includes('"monthly_dm_message_limit"'));
+  assert(customer.includes('"max_categories"'));
+  assert(customer.includes('"monthly_writable_check_limit"'));
+  assert(customer.includes('"monthly_sendable_check_limit"'));
+  assert(worker.includes('"monthly_message_limit"'));
+  assert(worker.includes('"monthly_dm_message_limit"'));
+});
+
+test("admin can grant manual and no-expiry plans including custom unlimited", () => {
+  const admin = read("src/lib/admin-data.server.ts");
+  assert(admin.includes("export async function adminGrantPlan"));
+  assert(admin.includes('payment_status: "MANUAL"'));
+  assert(admin.includes('input.duration === "NO_EXPIRY"'));
+  assert(admin.includes('override_type: "UNLIMITED"'));
+  assert(admin.includes('action: input.unlimited ? "CUSTOM_UNLIMITED_GRANTED" : "PLAN_GRANTED"'));
+});
+
+test("paid plans activate only after payment confirmation", () => {
+  const customer = read("src/lib/customer-data.server.ts");
+  const admin = read("src/lib/admin-data.server.ts");
+  const request = customer.slice(customer.indexOf("export async function requestPayment"), customer.length);
+  assert(request.includes('status: "PENDING"'));
+  assert(request.includes("throw new Error(\"Free plans are assigned automatically or by an administrator.\")"));
+  const confirm = admin.slice(admin.indexOf("export async function adminUpdateTransaction"), admin.indexOf("export async function adminSubscriptionAction"));
+  assert(confirm.includes('if (status === "CONFIRMED" && tx.plan_id)'));
+  assert(confirm.includes('payment_status: "PAID"'));
+  assert(confirm.includes('action: status === "CONFIRMED" ? "PAYMENT_CONFIRMED" : "TRANSACTION_UPDATED"'));
+});
+
+test("expired paid plan falls back to TEST without deleting tenant data", () => {
+  const helper = read("src/lib/entitlements.server.ts");
+  const admin = read("src/lib/admin-data.server.ts");
+  assert(helper.includes("expired ? await testPlan()"));
+  const changePlan = admin.slice(admin.indexOf("export async function adminChangePlan"), admin.indexOf("export async function adminGrantPlan"));
+  assert(!changePlan.includes('from("telegram_connections").delete'));
+  assert(!changePlan.includes('from("discovered_groups").delete'));
+  assert(!changePlan.includes('from("group_categories").delete'));
+});
+
+test("delete user performs tenant-level cleanup and admin writes require super admin", () => {
+  const adminData = read("src/lib/admin-data.server.ts");
+  const adminFns = read("src/lib/admin.functions.ts");
+  assert(adminData.includes("export async function adminDeleteCustomer"));
+  assert(adminData.includes('action: "USER_DELETED"'));
+  assert(adminData.includes('.from("tenants").delete().eq("id", customer.tenant_id)'));
+  const writeFunctions = ["grantCustomerPlan", "forceLogoutCustomer", "deleteCustomer", "updateSubscription", "resetUsage", "saveQuotaOverride", "sendAdminNotification"];
+  for (const fn of writeFunctions) {
+    const block = adminFns.slice(adminFns.indexOf(`export const ${fn}`), adminFns.indexOf("export const", adminFns.indexOf(`export const ${fn}`) + 1));
+    assert(block.includes("assertSuperAdmin"));
+  }
+});
+
+test("public billing reads active public DB plans and hides private plans", () => {
+  const customer = read("src/lib/customer-data.server.ts");
+  const ui = read("src/routes/mini-app.$section.tsx");
+  const billing = customer.slice(customer.indexOf("export async function billing"), customer.indexOf("export async function requestPayment"));
+  assert(billing.includes('.eq("is_active", true)'));
+  assert(billing.includes('.eq("is_public", true)'));
+  assert(ui.includes("20 sessions max") || ui.includes("hard max"));
+  assert(ui.includes("CURRENT PLAN"));
+  assert(ui.includes("UPGRADE"));
+  assert(ui.includes("SELECT PLAN"));
+});
+
+test("admin navigation includes Usage and Notifications sections", () => {
+  const shell = read("src/components/admin-shell.tsx");
+  const route = read("src/routes/admin.$section.tsx");
+  assert(shell.includes('"Usage"'));
+  assert(shell.includes('"Notifications"'));
+  assert(route.includes('"usage"'));
+  assert(route.includes('"notifications"'));
+  assert(route.includes("function UsageAdmin"));
+  assert(route.includes("function NotificationsAdmin"));
+});

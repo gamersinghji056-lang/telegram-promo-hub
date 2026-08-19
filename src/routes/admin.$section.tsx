@@ -1,25 +1,39 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, react-hooks/exhaustive-deps */
 import { createFileRoute, redirect } from "@tanstack/react-router";
+import type { FormEvent, ReactNode } from "react";
 import { useEffect, useState } from "react";
-import { Activity, Bot, CheckCircle2, CircleAlert, Clock3, RefreshCw, Send } from "lucide-react";
+import { Activity, Bot, CheckCircle2, CircleAlert, Clock3, RefreshCw, Send, Trash2 } from "lucide-react";
 import { AdminShell } from "@/components/admin-shell";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import {
   adminMe,
+  changeCustomerPlan,
   checkBot,
   checkTelegramWebhook,
+  deleteCustomer,
+  forceLogoutCustomer,
   getAdminCustomers,
+  getAdminCustomer,
   getAdminDashboard,
+  getAdminNotifications,
   getLogs,
   getPlans,
   getSettings,
   getSubscriptions,
   getTransactions,
+  getUsage,
+  grantCustomerPlan,
   registerTelegramWebhook,
+  resetCustomerPassword,
+  resetUsage,
   savePlan,
+  saveQuotaOverride,
   saveSettings,
+  sendAdminNotification,
   setCustomerStatus,
+  updateSubscription,
+  updateTransaction,
 } from "@/lib/admin.functions";
 
 const valid = new Set([
@@ -30,6 +44,8 @@ const valid = new Set([
   "payments",
   "telegram",
   "analytics",
+  "usage",
+  "notifications",
   "logs",
   "settings",
 ]);
@@ -77,6 +93,8 @@ function AdminSection() {
         plans: getPlans,
         subscriptions: getSubscriptions,
         payments: getTransactions,
+        usage: getUsage,
+        notifications: getAdminNotifications,
         telegram: getSettings,
         settings: getSettings,
         logs: () => getLogs({ data: { kind: "system" } }),
@@ -125,6 +143,14 @@ function SectionContent({
     return <CustomersAdmin rows={Array.isArray(data) ? data : []} reload={reload} />;
   if (section === "plans")
     return <PlansAdmin rows={Array.isArray(data) ? data : []} reload={reload} />;
+  if (section === "subscriptions")
+    return <SubscriptionsAdmin rows={Array.isArray(data) ? data : []} reload={reload} />;
+  if (section === "payments")
+    return <PaymentsAdmin rows={Array.isArray(data) ? data : []} reload={reload} />;
+  if (section === "usage")
+    return <UsageAdmin rows={Array.isArray(data) ? data : []} reload={reload} />;
+  if (section === "notifications")
+    return <NotificationsAdmin data={data ?? { customers: [], notifications: [] }} reload={reload} />;
   if (section === "telegram") return <TelegramHealth data={data} reload={reload} />;
   if (section === "settings") return <SettingsPanel data={data} />;
   const rows = Array.isArray(data) ? data : [];
@@ -168,7 +194,10 @@ function SectionContent({
 function CustomersAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promise<void> }) {
   const [working, setWorking] = useState("");
   const [error, setError] = useState("");
+  const [detail, setDetail] = useState<any>(null);
+  const [plans, setPlans] = useState<any[]>([]);
   async function changeStatus(id: string, status: "ACTIVE" | "SUSPENDED") {
+    if (status === "SUSPENDED" && !confirm("Suspend this customer?")) return;
     setWorking(id);
     setError("");
     try {
@@ -180,7 +209,71 @@ function CustomersAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promi
       setWorking("");
     }
   }
+  async function openDetail(id: string) {
+    setWorking(id);
+    setError("");
+    try {
+      const [customerDetail, planRows] = await Promise.all([
+        getAdminCustomer({ data: { id } }),
+        getPlans(),
+      ]);
+      setDetail(customerDetail);
+      setPlans(planRows ?? []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not load customer detail.");
+    } finally {
+      setWorking("");
+    }
+  }
+  async function customerAction(action: string) {
+    const customer = detail?.customer;
+    if (!customer) return;
+    setWorking(action);
+    setError("");
+    try {
+      if (action === "FORCE_LOGOUT") {
+        if (!confirm("Force logout this customer?")) return;
+        await forceLogoutCustomer({ data: { id: customer.id } });
+      }
+      if (action === "DELETE") {
+        const confirmation = prompt(`Type DELETE USER PERMANENTLY or ${customer.email} to delete this user.`);
+        if (!confirmation) return;
+        await deleteCustomer({ data: { id: customer.id, confirmation } });
+        setDetail(null);
+        await reload();
+        return;
+      }
+      if (action === "CHANGE_PLAN") {
+        const code = prompt(`Enter plan code: ${plans.map((p) => p.code).join(", ")}`);
+        const plan = plans.find((p) => String(p.code).toUpperCase() === String(code).toUpperCase());
+        if (!plan) throw new Error("Plan not found.");
+        await changeCustomerPlan({ data: { id: customer.id, planId: plan.id } });
+      }
+      if (action === "GRANT_PLAN") {
+        const code = prompt(`Enter plan code to grant: ${plans.map((p) => p.code).join(", ")}`);
+        const plan = plans.find((p) => String(p.code).toUpperCase() === String(code).toUpperCase());
+        if (!plan) throw new Error("Plan not found.");
+        const duration = prompt("Duration days: 7, 30, 90, 365, NO_EXPIRY, or CUSTOM", "30") ?? "30";
+        const expiresAt = duration === "CUSTOM" ? prompt("Custom expiry date (YYYY-MM-DD)") : null;
+        const reason = prompt("Reason/note") ?? "Manual grant";
+        await grantCustomerPlan({ data: { customerId: customer.id, planId: plan.id, duration, expiresAt, reason } });
+      }
+      if (action === "UNLIMITED") {
+        const duration = prompt("Custom unlimited duration: 7, 30, 90, 365, NO_EXPIRY, or CUSTOM", "NO_EXPIRY") ?? "NO_EXPIRY";
+        const expiresAt = duration === "CUSTOM" ? prompt("Custom expiry date (YYYY-MM-DD)") : null;
+        const reason = prompt("Reason/note", "Custom unlimited grant") ?? "Custom unlimited grant";
+        await grantCustomerPlan({ data: { customerId: customer.id, duration, expiresAt, reason, unlimited: true } });
+      }
+      await reload();
+      await openDetail(customer.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Customer action failed.");
+    } finally {
+      setWorking("");
+    }
+  }
   return (
+    <div className="space-y-4">
     <div className="overflow-hidden border border-border bg-card">
       <div className="flex items-center justify-between border-b border-border p-4">
         <p className="font-medium">{rows.length} customers</p>
@@ -224,6 +317,14 @@ function CustomersAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promi
                     </span>
                   </td>
                   <td className="p-4 text-right">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={working === row["id"]}
+                      onClick={() => void openDetail(row["id"])}
+                    >
+                      View
+                    </Button>{" "}
                     {active ? (
                       <Button
                         variant="secondary"
@@ -251,6 +352,106 @@ function CustomersAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promi
       </div>
       {!rows.length && <p className="p-8 text-center text-muted-foreground">No customers yet.</p>}
     </div>
+    {detail ? (
+      <section className="border border-border bg-card p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-semibold">{detail.customer.name ?? detail.customer.email}</h2>
+            <p className="text-sm text-muted-foreground">
+              {detail.customer.email} {detail.customer.telegram_username ? `@${detail.customer.telegram_username}` : ""}
+            </p>
+          </div>
+          <Button variant="secondary" size="sm" onClick={() => setDetail(null)}>Close</Button>
+        </div>
+        <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          {usageCards(detail.usage).map(([label, used, limit]) => (
+            <UsageCard key={label} label={label} used={used} limit={limit} />
+          ))}
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button size="sm" onClick={() => void customerAction("CHANGE_PLAN")}>Change Plan</Button>
+          <Button size="sm" variant="secondary" onClick={() => void customerAction("GRANT_PLAN")}>Grant Free/Manual</Button>
+          <Button size="sm" variant="secondary" onClick={() => void customerAction("UNLIMITED")}>Grant Unlimited</Button>
+          <Button size="sm" variant="secondary" onClick={() => void customerAction("FORCE_LOGOUT")}>Force Logout</Button>
+          <Button size="sm" variant="secondary" onClick={() => changeStatus(detail.customer.id, "SUSPENDED")}>Suspend</Button>
+          <Button size="sm" onClick={() => changeStatus(detail.customer.id, "ACTIVE")}>Activate</Button>
+          <Button size="sm" variant="secondary" onClick={() => {
+            const password = prompt("New password, at least 8 characters");
+            if (password) {
+              setWorking("reset-password");
+              resetCustomerPassword({ data: { id: detail.customer.id, password } })
+                .then(reload)
+                .finally(() => setWorking(""));
+            }
+          }}>Reset Password</Button>
+          <Button size="sm" variant="destructive" onClick={() => void customerAction("DELETE")}>
+            <Trash2 className="size-4" /> Delete User
+          </Button>
+        </div>
+        <div className="mt-5 grid gap-4 lg:grid-cols-3">
+          <DetailList title="Recent Transactions" rows={detail.transactions} fields={["status", "amount", "created_at"]} />
+          <DetailList title="Recent Campaigns" rows={detail.campaigns} fields={["name", "status", "total_targets"]} />
+          <DetailList title="Admin Notes/Actions" rows={detail.adminLogs} fields={["action", "resource", "created_at"]} />
+        </div>
+      </section>
+    ) : null}
+    </div>
+  );
+}
+
+function usageCards(usage: any): [string, number, number | null][] {
+  const c = usage?.counts ?? {};
+  const l = usage?.limits ?? {};
+  return [
+    ["Sessions", c.sessions ?? 0, l.max_connections ?? null],
+    ["Campaigns", c.active_campaigns ?? 0, l.max_active_campaigns ?? null],
+    ["Groups", c.saved_groups ?? 0, l.max_saved_groups ?? null],
+    ["Groups Found", c.groups_found ?? 0, l.monthly_groups_found_limit ?? null],
+    ["Users Found", c.audience_found ?? 0, l.monthly_audience_found_limit ?? null],
+    ["Messages", c.promotion_messages ?? 0, l.monthly_message_limit ?? null],
+    ["DM", c.dm_messages ?? 0, l.monthly_dm_message_limit ?? null],
+    ["Categories", c.categories ?? 0, l.max_categories ?? null],
+    ["Writable Checks", c.writable_checks ?? 0, l.monthly_writable_check_limit ?? null],
+    ["Sendable Checks", c.sendable_checks ?? 0, l.monthly_sendable_check_limit ?? null],
+  ];
+}
+
+function limitText(limit: number | null | undefined) {
+  return limit == null ? "Unlimited" : Number(limit).toLocaleString();
+}
+
+function UsageCard({ label, used, limit }: { label: string; used: number; limit: number | null }) {
+  const pct = limit == null ? 0 : Math.min(100, Math.round((used / Math.max(limit, 1)) * 100));
+  const tone = pct >= 90 ? "bg-destructive" : pct >= 80 ? "bg-warning" : "bg-primary";
+  return (
+    <div className="border border-border bg-background p-3">
+      <div className="flex items-center justify-between gap-2 text-xs">
+        <span className="font-semibold">{label}</span>
+        <span>{Number(used).toLocaleString()} / {limitText(limit)}</span>
+      </div>
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+        <div className={`h-full ${tone}`} style={{ width: `${limit == null ? 100 : pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function DetailList({ title, rows, fields }: { title: string; rows: AnyData[]; fields: string[] }) {
+  return (
+    <div className="border border-border bg-background">
+      <p className="border-b border-border p-3 text-sm font-semibold">{title}</p>
+      {(rows ?? []).slice(0, 6).map((row, index) => (
+        <div key={row.id ?? index} className="border-b border-border p-3 text-xs last:border-0">
+          {fields.map((field) => (
+            <p key={field} className="truncate">
+              <span className="text-muted-foreground">{field.replace(/_/g, " ")}:</span>{" "}
+              {String(row[field] ?? "")}
+            </p>
+          ))}
+        </div>
+      ))}
+      {!rows?.length ? <p className="p-3 text-xs text-muted-foreground">No records.</p> : null}
+    </div>
   );
 }
 
@@ -258,21 +459,32 @@ function PlansAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promise<v
   const empty = {
     code: "",
     name: "",
+    description: "",
     price_usd: 0,
     duration_days: 30,
     max_connections: 1,
-    max_groups: 10,
-    max_campaigns: 5,
-    max_audience: 500,
-    monthly_message_limit: 500,
+    max_active_campaigns: 1,
+    max_saved_groups: 20,
+    monthly_groups_found_limit: 20,
+    monthly_audience_found_limit: 50,
+    monthly_message_limit: 50,
+    monthly_dm_message_limit: 20,
+    max_categories: 1,
+    monthly_writable_check_limit: 20,
+    monthly_sendable_check_limit: 10,
+    analytics_level: "basic",
+    scheduling_enabled: false,
+    session_health_level: "basic",
     sort_order: rows.length + 1,
     is_active: true,
+    is_public: true,
+    is_custom: false,
   };
   const [draft, setDraft] = useState<AnyData>(empty);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const set = (key: string, value: unknown) => setDraft((d) => ({ ...d, [key]: value }));
-  async function submit(event: React.FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
     setError("");
@@ -290,10 +502,15 @@ function PlansAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promise<v
     "price_usd",
     "duration_days",
     "max_connections",
-    "max_groups",
-    "max_campaigns",
-    "max_audience",
+    "max_active_campaigns",
+    "max_saved_groups",
+    "monthly_groups_found_limit",
+    "monthly_audience_found_limit",
     "monthly_message_limit",
+    "monthly_dm_message_limit",
+    "max_categories",
+    "monthly_writable_check_limit",
+    "monthly_sendable_check_limit",
     "sort_order",
   ];
   return (
@@ -315,10 +532,10 @@ function PlansAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promise<v
                     <p className="text-xs text-muted-foreground">{row["code"]}</p>
                   </td>
                   <td className="p-4 text-muted-foreground">
-                    {row["price_usd"]} USDT / {row["duration_days"]} days
+                    ${row["price_usd"]} / {row["duration_days"]} days
                   </td>
                   <td className="p-4 text-muted-foreground">
-                    {row["monthly_message_limit"]} messages
+                    {row["is_public"] ? "PUBLIC PLAN" : "CUSTOM/PRIVATE PLAN"} · {row["is_active"] ? "Active" : "Inactive"}
                   </td>
                   <td className="p-4 text-right">
                     <Button variant="secondary" size="sm" onClick={() => setDraft(row)}>
@@ -353,18 +570,41 @@ function PlansAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promise<v
               required
             />
           </label>
+          <label className="sm:col-span-2 text-sm">
+            Description
+            <input
+              className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2"
+              value={String(draft["description"] ?? "")}
+              onChange={(e) => set("description", e.target.value)}
+            />
+          </label>
           {numeric.map((key) => (
             <label key={key} className="text-sm capitalize">
-              {key.replace(/_/g, " ")}
+              {key.replace(/_/g, " ")} {key !== "price_usd" && key !== "duration_days" && key !== "max_connections" && key !== "sort_order" ? "(blank = unlimited)" : ""}
               <input
                 className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2"
-                type="number"
+                type={key === "price_usd" || key === "duration_days" || key === "max_connections" || key === "sort_order" ? "number" : "text"}
                 min={0}
-                value={Number(draft[key] ?? 0)}
-                onChange={(e) => set(key, Number(e.target.value))}
+                value={draft[key] == null ? "" : String(draft[key])}
+                onChange={(e) => set(key, e.target.value === "" ? null : Number(e.target.value))}
               />
             </label>
           ))}
+          <label className="text-sm">
+            Analytics level
+            <select className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2" value={String(draft["analytics_level"] ?? "basic")} onChange={(e) => set("analytics_level", e.target.value)}>
+              <option value="basic">basic</option>
+              <option value="full">full</option>
+            </select>
+          </label>
+          <label className="text-sm">
+            Session health
+            <select className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2" value={String(draft["session_health_level"] ?? "basic")} onChange={(e) => set("session_health_level", e.target.value)}>
+              <option value="disabled">disabled</option>
+              <option value="basic">basic</option>
+              <option value="full">full</option>
+            </select>
+          </label>
           <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"
@@ -372,6 +612,30 @@ function PlansAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promise<v
               onChange={(e) => set("is_active", e.target.checked)}
             />{" "}
             Active
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={draft["is_public"] !== false}
+              onChange={(e) => set("is_public", e.target.checked)}
+            />{" "}
+            Public billing plan
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={draft["is_custom"] === true}
+              onChange={(e) => set("is_custom", e.target.checked)}
+            />{" "}
+            Custom/private plan
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={draft["scheduling_enabled"] === true}
+              onChange={(e) => set("scheduling_enabled", e.target.checked)}
+            />{" "}
+            Scheduling enabled
           </label>
         </div>
         <Button type="submit" className="mt-5 w-full" disabled={busy}>
@@ -390,6 +654,17 @@ function Dashboard({ data }: { data: any }) {
     suspended: "Suspended",
     campaigns: "Campaigns",
     running: "Running",
+    testUsers: "TEST users",
+    plusUsers: "PLUS users",
+    proUsers: "PRO users",
+    enterpriseUsers: "ENTERPRISE users",
+    manualUnlimited: "Manual / Unlimited",
+    activeSubscriptions: "Active subscriptions",
+    expiringSoon: "Expiring in 7 days",
+    expiredSubscriptions: "Expired",
+    activeSessions: "Active Telegram sessions",
+    unhealthySessions: "Unhealthy sessions",
+    messagesThisMonth: "Messages this month",
     processed: "Messages processed",
     errors: "System errors",
     revenue: "Revenue (USDT)",
@@ -403,6 +678,187 @@ function Dashboard({ data }: { data: any }) {
           <p className="mt-3 text-3xl font-semibold">{Number(totals[key] ?? 0).toLocaleString()}</p>
         </div>
       ))}
+    </div>
+  );
+}
+
+function SubscriptionsAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promise<void> }) {
+  async function act(id: string, action: "EXTEND" | "EXPIRE" | "CANCEL" | "GRANT_AGAIN") {
+    if ((action === "EXPIRE" || action === "CANCEL") && !confirm(`${action} this subscription?`)) return;
+    const days = action === "EXTEND" || action === "GRANT_AGAIN" ? Number(prompt("Days", "30") ?? 30) : undefined;
+    const reason = prompt("Reason/note") ?? "";
+    await updateSubscription({ data: { id, action, days, reason } });
+    await reload();
+  }
+  return (
+    <AdminTable
+      rows={rows}
+      columns={["Customer", "Plan", "Status", "Payment", "Expiry", "Actions"]}
+      render={(row) => {
+        const tenant = Array.isArray(row.tenants) ? row.tenants[0] : row.tenants;
+        const plan = Array.isArray(row.plans) ? row.plans[0] : row.plans;
+        const customer = Array.isArray(tenant?.customers) ? tenant.customers[0] : tenant?.customers;
+        return [
+          customer?.email ?? tenant?.name ?? row.tenant_id,
+          plan?.name ?? row.plan_id,
+          row.status,
+          row.payment_status,
+          row.no_expiry ? "No expiry" : row.expires_at ? new Date(row.expires_at).toLocaleDateString() : "",
+          <div className="flex flex-wrap justify-end gap-1" key="actions">
+            <Button size="sm" variant="secondary" onClick={() => void act(row.id, "EXTEND")}>Extend</Button>
+            <Button size="sm" variant="secondary" onClick={() => void act(row.id, "EXPIRE")}>Expire</Button>
+            <Button size="sm" variant="secondary" onClick={() => void act(row.id, "CANCEL")}>Cancel</Button>
+            <Button size="sm" onClick={() => void act(row.id, "GRANT_AGAIN")}>Grant Again</Button>
+          </div>,
+        ];
+      }}
+    />
+  );
+}
+
+function PaymentsAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promise<void> }) {
+  async function update(row: AnyData, status: string) {
+    if (status === "CONFIRMED" && !confirm("Confirm this payment and activate the selected plan?")) return;
+    const txHash = status === "CONFIRMED" ? prompt("Transaction hash/reference", row.tx_hash ?? "") ?? "" : row.tx_hash;
+    await updateTransaction({ data: { id: row.id, status, txHash } });
+    await reload();
+  }
+  return (
+    <AdminTable
+      rows={rows}
+      columns={["Tenant", "Plan", "Amount", "Status", "Created", "Actions"]}
+      render={(row) => {
+        const plan = Array.isArray(row.plans) ? row.plans[0] : row.plans;
+        const tenant = Array.isArray(row.tenants) ? row.tenants[0] : row.tenants;
+        return [
+          tenant?.name ?? row.tenant_id,
+          plan?.name ?? row.plan_id,
+          `${row.amount} ${row.currency}`,
+          row.status,
+          new Date(row.created_at).toLocaleString(),
+          <div className="flex flex-wrap justify-end gap-1" key="actions">
+            {["PENDING", "CONFIRMED", "FAILED", "CANCELLED"].map((status) => (
+              <Button key={status} size="sm" variant={status === "CONFIRMED" ? "default" : "secondary"} onClick={() => void update(row, status)}>
+                {status}
+              </Button>
+            ))}
+          </div>,
+        ];
+      }}
+    />
+  );
+}
+
+function UsageAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promise<void> }) {
+  async function reset(tenantId: string) {
+    if (!confirm("Reset this customer's current monthly usage?")) return;
+    await resetUsage({ data: { tenantId, reason: prompt("Reason", "Admin reset") ?? "" } });
+    await reload();
+  }
+  async function override(row: AnyData) {
+    const customer = row.customer ?? {};
+    const raw = prompt("Override max sessions for this customer (blank = unlimited plan quota, hard cap 20). Leave cancel to skip.");
+    if (raw === null) return;
+    const reason = prompt("Reason", "Admin quota override") ?? "";
+    await saveQuotaOverride({
+      data: {
+        tenantId: customer.tenant_id,
+        fields: {
+          max_connections: raw.trim() === "" ? null : Number(raw),
+        },
+        reason,
+      },
+    });
+    await reload();
+  }
+  return (
+    <div className="space-y-3">
+      {rows.map((row) => {
+        const customer = row.customer ?? {};
+        return (
+          <section key={customer.id} className="border border-border bg-card p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="font-semibold">{customer.email}</p>
+                <p className="text-xs text-muted-foreground">{row.usage?.plan?.name ?? "TEST"}</p>
+              </div>
+              <div className="flex flex-wrap justify-end gap-2">
+                <Button size="sm" variant="secondary" onClick={() => void override(row)}>Override Quota</Button>
+                <Button size="sm" variant="secondary" onClick={() => void reset(customer.tenant_id)}>Reset Usage</Button>
+              </div>
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+              {usageCards(row.usage).map(([label, used, limit]) => (
+                <UsageCard key={label} label={label} used={used} limit={limit} />
+              ))}
+            </div>
+          </section>
+        );
+      })}
+      {!rows.length ? <p className="text-sm text-muted-foreground">No usage rows.</p> : null}
+    </div>
+  );
+}
+
+function NotificationsAdmin({ data, reload }: { data: any; reload: () => Promise<void> }) {
+  const [selected, setSelected] = useState<string[]>([]);
+  const [title, setTitle] = useState("");
+  const [message, setMessage] = useState("");
+  const [type, setType] = useState<"INFO" | "SUCCESS" | "WARNING" | "ERROR">("INFO");
+  const [link, setLink] = useState("");
+  async function submit(all = false) {
+    await sendAdminNotification({ data: { customerIds: selected, all, title, message, type, link: link || null } });
+    setTitle("");
+    setMessage("");
+    setSelected([]);
+    await reload();
+  }
+  return (
+    <div className="grid gap-5 xl:grid-cols-[1fr_1.2fr]">
+      <section className="border border-border bg-card p-5">
+        <h2 className="font-semibold">Send in-app notification</h2>
+        <input className="mt-4 w-full rounded-md border border-input bg-background px-3 py-2" placeholder="Title" value={title} onChange={(e) => setTitle(e.target.value)} />
+        <textarea className="mt-3 w-full rounded-md border border-input bg-background px-3 py-2" placeholder="Message" value={message} onChange={(e) => setMessage(e.target.value)} />
+        <select className="mt-3 w-full rounded-md border border-input bg-background px-3 py-2" value={type} onChange={(e) => setType(e.target.value as any)}>
+          {["INFO", "SUCCESS", "WARNING", "ERROR"].map((kind) => <option key={kind}>{kind}</option>)}
+        </select>
+        <input className="mt-3 w-full rounded-md border border-input bg-background px-3 py-2" placeholder="/mini-app/billing" value={link} onChange={(e) => setLink(e.target.value)} />
+        <div className="mt-4 max-h-52 overflow-auto border border-border">
+          {(data.customers ?? []).map((customer: any) => (
+            <label key={customer.id} className="flex items-center gap-2 border-b border-border p-2 text-sm">
+              <input type="checkbox" checked={selected.includes(customer.id)} onChange={(e) => setSelected((ids) => e.target.checked ? [...ids, customer.id] : ids.filter((id) => id !== customer.id))} />
+              {customer.email}
+            </label>
+          ))}
+        </div>
+        <div className="mt-4 flex gap-2">
+          <Button disabled={!title || !message || !selected.length} onClick={() => void submit(false)}>Send Selected</Button>
+          <Button variant="secondary" disabled={!title || !message} onClick={() => void submit(true)}>Announce All</Button>
+        </div>
+      </section>
+      <DetailList title="Recent notifications" rows={data.notifications ?? []} fields={["title", "kind", "created_at"]} />
+    </div>
+  );
+}
+
+function AdminTable({ rows, columns, render }: { rows: AnyData[]; columns: string[]; render: (row: AnyData) => ReactNode[] }) {
+  return (
+    <div className="overflow-hidden border border-border bg-card">
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-sm">
+          <thead className="bg-muted text-xs uppercase text-muted-foreground">
+            <tr>{columns.map((c) => <th key={c} className="p-4">{c}</th>)}</tr>
+          </thead>
+          <tbody>
+            {rows.map((row, index) => (
+              <tr key={row.id ?? index} className="border-t border-border">
+                {render(row).map((cell, i) => <td key={i} className="p-4">{cell}</td>)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {!rows.length ? <p className="p-8 text-center text-muted-foreground">No records yet.</p> : null}
     </div>
   );
 }
@@ -424,7 +880,7 @@ function TelegramHealth({ data, reload }: { data: any; reload: () => Promise<voi
     setResult(response.ok ? "Telegram confirmed the operation." : response.error);
     await reload();
   }
-  async function saveMiniApp(event: React.FormEvent) {
+  async function saveMiniApp(event: FormEvent) {
     event.preventDefault();
     setSavingUrl(true);
     setResult("");
