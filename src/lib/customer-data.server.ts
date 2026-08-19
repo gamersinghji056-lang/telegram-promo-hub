@@ -3422,13 +3422,6 @@ export async function billing(ctx: AuthContext) {
 }
 
 export async function requestPayment(ctx: AuthContext, planId: string) {
-  const payments = await getSetting<{
-    payment_enabled?: boolean;
-    network?: string;
-    wallet_address?: string;
-  }>("payments");
-  if (!payments.payment_enabled || !payments.wallet_address)
-    throw new Error("Payments are not configured yet. Contact support to upgrade.");
   const client = db();
   const { data: plan } = await client
     .from("plans")
@@ -3439,8 +3432,33 @@ export async function requestPayment(ctx: AuthContext, planId: string) {
     .maybeSingle();
   if (!plan) throw new Error("Plan not found.");
   if (Number(plan.price_usd ?? 0) <= 0) {
-    throw new Error("Free plans are assigned automatically or by an administrator.");
+    const expires = Number(plan.duration_days ?? 0) > 0
+      ? new Date(Date.now() + Number(plan.duration_days) * 86400_000).toISOString()
+      : null;
+    await client
+      .from("tenants")
+      .update({ plan_id: plan.id, plan_expires_at: expires, updated_at: new Date().toISOString() })
+      .eq("id", ctx.tenantId);
+    await client.from("subscriptions").insert({
+      tenant_id: ctx.tenantId,
+      plan_id: plan.id,
+      status: "ACTIVE",
+      payment_status: "NONE",
+      expires_at: expires,
+      no_expiry: expires === null,
+      metadata: { self_selected_free_plan: true },
+    });
+    await client.from("tenant_entitlement_overrides").delete().eq("tenant_id", ctx.tenantId);
+    await notify(ctx.tenantId, "Plan updated", `Your ${plan.name} plan is active.`, "SUCCESS", "/mini-app/billing");
+    return { status: "ACTIVE", free: true, plan_id: plan.id };
   }
+  const payments = await getSetting<{
+    payment_enabled?: boolean;
+    network?: string;
+    wallet_address?: string;
+  }>("payments");
+  if (!payments.payment_enabled || !payments.wallet_address)
+    throw new Error("Payments are not configured yet. Contact support to upgrade.");
   const { data, error } = await client
     .from("billing_transactions")
     .insert({

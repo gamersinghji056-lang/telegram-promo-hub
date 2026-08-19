@@ -307,6 +307,10 @@ async function handlePrivateText(msg: TgMessage) {
       await send(chatId, result.error);
       return;
     }
+    if (result.status !== "ACTIVE") {
+      await send(chatId, "Account created and pending admin approval.");
+      return;
+    }
     const sessionToken = await createCustomerSessionForCustomer({
       customerId: result.customerId,
       tenantId: result.tenantId,

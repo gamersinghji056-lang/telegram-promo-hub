@@ -2,7 +2,7 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import type { FormEvent, ReactNode } from "react";
 import { useEffect, useState } from "react";
-import { Activity, Bot, CheckCircle2, CircleAlert, Clock3, RefreshCw, Send, Trash2 } from "lucide-react";
+import { Activity, Bot, CheckCircle2, CircleAlert, Clock3, RefreshCw, Send, Trash2, UserPlus } from "lucide-react";
 import { AdminShell } from "@/components/admin-shell";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
@@ -11,12 +11,14 @@ import {
   changeCustomerPlan,
   checkBot,
   checkTelegramWebhook,
+  createCustomer,
   deleteCustomer,
   forceLogoutCustomer,
   getAdminCustomers,
   getAdminCustomer,
   getAdminDashboard,
   getAdminNotifications,
+  getRegistration,
   getLogs,
   getPlans,
   getSettings,
@@ -29,6 +31,7 @@ import {
   resetUsage,
   savePlan,
   saveQuotaOverride,
+  saveRegistration,
   saveSettings,
   sendAdminNotification,
   setCustomerStatus,
@@ -46,6 +49,7 @@ const valid = new Set([
   "analytics",
   "usage",
   "notifications",
+  "registration",
   "logs",
   "settings",
 ]);
@@ -95,6 +99,7 @@ function AdminSection() {
         payments: getTransactions,
         usage: getUsage,
         notifications: getAdminNotifications,
+        registration: getRegistration,
         telegram: getSettings,
         settings: getSettings,
         logs: () => getLogs({ data: { kind: "system" } }),
@@ -151,6 +156,8 @@ function SectionContent({
     return <UsageAdmin rows={Array.isArray(data) ? data : []} reload={reload} />;
   if (section === "notifications")
     return <NotificationsAdmin data={data ?? { customers: [], notifications: [] }} reload={reload} />;
+  if (section === "registration")
+    return <RegistrationAdmin data={data ?? { settings: {}, plans: [], stats: {} }} reload={reload} />;
   if (section === "telegram") return <TelegramHealth data={data} reload={reload} />;
   if (section === "settings") return <SettingsPanel data={data} />;
   const rows = Array.isArray(data) ? data : [];
@@ -841,6 +848,150 @@ function NotificationsAdmin({ data, reload }: { data: any; reload: () => Promise
   );
 }
 
+function RegistrationAdmin({ data, reload }: { data: any; reload: () => Promise<void> }) {
+  const settings = data?.settings ?? {};
+  const plans = data?.plans ?? [];
+  const stats = data?.stats ?? {};
+  const [draft, setDraft] = useState({
+    registration_enabled: settings.registration_enabled !== false,
+    email_verification_enabled: Boolean(settings.email_verification_enabled),
+    default_plan_code: String(settings.default_plan_code ?? "TEST"),
+    default_duration_days: Number(settings.default_duration_days ?? 30),
+    new_user_status: String(settings.new_user_status ?? "ACTIVE"),
+    welcome_message: String(settings.welcome_message ?? ""),
+  });
+  const [userDraft, setUserDraft] = useState({
+    name: "",
+    email: "",
+    password: "",
+    planId: String(plans[0]?.id ?? ""),
+    durationDays: Number(settings.default_duration_days ?? 30),
+    status: "ACTIVE",
+    unlimited: false,
+    reason: "Admin-created customer",
+  });
+  const [result, setResult] = useState("");
+  const set = (key: string, value: unknown) => setDraft((d) => ({ ...d, [key]: value }));
+  const setUser = (key: string, value: unknown) => setUserDraft((d) => ({ ...d, [key]: value }));
+  async function saveConfig(event: FormEvent) {
+    event.preventDefault();
+    setResult("");
+    try {
+      const next = await saveRegistration({ data: { value: draft } });
+      setDraft(next.settings);
+      setResult("Registration settings saved.");
+      await reload();
+    } catch (e) {
+      setResult(e instanceof Error ? e.message : "Could not save registration settings.");
+    }
+  }
+  async function submitUser(event: FormEvent) {
+    event.preventDefault();
+    setResult("");
+    try {
+      await createCustomer({
+        data: {
+          name: userDraft.name || null,
+          email: userDraft.email,
+          password: userDraft.password,
+          planId: userDraft.planId,
+          durationDays: userDraft.durationDays,
+          status: userDraft.status as "ACTIVE" | "PENDING_APPROVAL" | "SUSPENDED",
+          unlimited: userDraft.unlimited,
+          reason: userDraft.reason,
+        },
+      });
+      setUserDraft((d) => ({ ...d, name: "", email: "", password: "", unlimited: false }));
+      setResult("Customer created.");
+      await reload();
+    } catch (e) {
+      setResult(e instanceof Error ? e.message : "Could not create customer.");
+    }
+  }
+  const statLabels: Record<string, string> = {
+    totalUsers: "Total Users",
+    newToday: "New Today",
+    newThisMonth: "New This Month",
+    active: "Active",
+    suspended: "Suspended",
+    pendingApprovals: "Pending Approvals",
+  };
+  return (
+    <div className="space-y-5">
+      {result ? <p className="border-l-2 border-primary bg-card p-4 text-sm">{result}</p> : null}
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+        {Object.entries(statLabels).map(([key, label]) => (
+          <div key={key} className="border border-border bg-card p-4">
+            <p className="text-xs text-muted-foreground">{label}</p>
+            <p className="mt-2 text-2xl font-semibold">{Number(stats[key] ?? 0).toLocaleString()}</p>
+          </div>
+        ))}
+      </section>
+      <div className="grid gap-5 xl:grid-cols-[1fr_1.1fr]">
+        <form onSubmit={saveConfig} className="border border-border bg-card p-5">
+          <h2 className="font-semibold">Registration Status</h2>
+          <label className="mt-4 flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={draft.registration_enabled} onChange={(e) => set("registration_enabled", e.target.checked)} />
+            Enable new registrations
+          </label>
+          <label className="mt-4 block text-sm">
+            Default Plan
+            <select className="mt-2 w-full rounded-md border border-input bg-background px-3 py-2.5" value={draft.default_plan_code} onChange={(e) => set("default_plan_code", e.target.value)}>
+              {plans.map((plan: any) => <option key={plan.id} value={plan.code}>{plan.name} ({plan.code})</option>)}
+            </select>
+          </label>
+          <label className="mt-4 block text-sm">
+            Default Access Duration
+            <input className="mt-2 w-full rounded-md border border-input bg-background px-3 py-2.5" type="number" min={1} value={draft.default_duration_days} onChange={(e) => set("default_duration_days", Number(e.target.value))} />
+          </label>
+          <label className="mt-4 flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={draft.email_verification_enabled} onChange={(e) => set("email_verification_enabled", e.target.checked)} />
+            Email verification
+          </label>
+          <label className="mt-4 block text-sm">
+            New User Status
+            <select className="mt-2 w-full rounded-md border border-input bg-background px-3 py-2.5" value={draft.new_user_status} onChange={(e) => set("new_user_status", e.target.value)}>
+              <option value="ACTIVE">Active</option>
+              <option value="PENDING_APPROVAL">Pending Approval</option>
+            </select>
+          </label>
+          <label className="mt-4 block text-sm">
+            Welcome Notification
+            <textarea className="mt-2 w-full rounded-md border border-input bg-background px-3 py-2.5" value={draft.welcome_message} onChange={(e) => set("welcome_message", e.target.value)} />
+          </label>
+          <Button type="submit" className="mt-5 w-full">Save Registration</Button>
+        </form>
+        <form onSubmit={submitUser} className="border border-border bg-card p-5">
+          <div className="flex items-center gap-2">
+            <UserPlus className="size-5 text-primary" />
+            <h2 className="font-semibold">Create User</h2>
+          </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <input className="rounded-md border border-input bg-background px-3 py-2.5" placeholder="Name" value={userDraft.name} onChange={(e) => setUser("name", e.target.value)} />
+            <input className="rounded-md border border-input bg-background px-3 py-2.5" placeholder="Email" value={userDraft.email} onChange={(e) => setUser("email", e.target.value)} required />
+            <input className="rounded-md border border-input bg-background px-3 py-2.5" placeholder="Temporary Password" type="password" value={userDraft.password} onChange={(e) => setUser("password", e.target.value)} required />
+            <select className="rounded-md border border-input bg-background px-3 py-2.5" value={userDraft.planId} onChange={(e) => setUser("planId", e.target.value)} required>
+              {plans.map((plan: any) => <option key={plan.id} value={plan.id}>{plan.name} ({plan.code})</option>)}
+            </select>
+            <input className="rounded-md border border-input bg-background px-3 py-2.5" type="number" min={0} value={userDraft.durationDays} onChange={(e) => setUser("durationDays", Number(e.target.value))} />
+            <select className="rounded-md border border-input bg-background px-3 py-2.5" value={userDraft.status} onChange={(e) => setUser("status", e.target.value)}>
+              <option value="ACTIVE">Active</option>
+              <option value="PENDING_APPROVAL">Pending Approval</option>
+              <option value="SUSPENDED">Suspended</option>
+            </select>
+          </div>
+          <label className="mt-4 flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={userDraft.unlimited} onChange={(e) => setUser("unlimited", e.target.checked)} />
+            Grant custom unlimited entitlement
+          </label>
+          <input className="mt-3 w-full rounded-md border border-input bg-background px-3 py-2.5" placeholder="Reason" value={userDraft.reason} onChange={(e) => setUser("reason", e.target.value)} />
+          <Button type="submit" className="mt-5 w-full">+ Create User</Button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function AdminTable({ rows, columns, render }: { rows: AnyData[]; columns: string[]; render: (row: AnyData) => ReactNode[] }) {
   return (
     <div className="overflow-hidden border border-border bg-card">
@@ -984,19 +1135,13 @@ function TelegramHealth({ data, reload }: { data: any; reload: () => Promise<voi
 
 function SettingsPanel({ data }: { data: any }) {
   const payments = data?.payments ?? {};
-  const registration = data?.registration ?? {};
   const [paymentDraft, setPaymentDraft] = useState({
     payment_enabled: Boolean(payments.payment_enabled),
     network: String(payments.network || "TRC20"),
     wallet_address: String(payments.wallet_address || ""),
   });
-  const [registrationDraft, setRegistrationDraft] = useState({
-    registration_enabled: registration.registration_enabled !== false,
-    email_verification_enabled: Boolean(registration.email_verification_enabled),
-    default_plan_code: String(registration.default_plan_code || "FREE"),
-  });
   const [result, setResult] = useState("");
-  async function save(key: "payments" | "registration", value: Record<string, unknown>) {
+  async function save(key: "payments", value: Record<string, unknown>) {
     setResult("");
     try {
       await saveSettings({ data: { key, value } });
@@ -1044,51 +1189,6 @@ function SettingsPanel({ data }: { data: any }) {
         </label>
         <Button type="submit" className="mt-5 w-full">
           Save payments
-        </Button>
-      </form>
-      <form
-        className="border border-border bg-card p-5"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void save("registration", registrationDraft);
-        }}
-      >
-        <h2 className="font-semibold">Registration</h2>
-        <label className="mt-4 flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={registrationDraft.registration_enabled}
-            onChange={(e) =>
-              setRegistrationDraft((d) => ({ ...d, registration_enabled: e.target.checked }))
-            }
-          />{" "}
-          Registration enabled
-        </label>
-        <label className="mt-3 flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={registrationDraft.email_verification_enabled}
-            onChange={(e) =>
-              setRegistrationDraft((d) => ({ ...d, email_verification_enabled: e.target.checked }))
-            }
-          />{" "}
-          Email verification enabled
-        </label>
-        <label className="mt-4 block text-sm">
-          Default plan code
-          <input
-            className="mt-2 w-full rounded-md border border-input bg-background px-3 py-2.5"
-            value={registrationDraft.default_plan_code}
-            onChange={(e) =>
-              setRegistrationDraft((d) => ({
-                ...d,
-                default_plan_code: e.target.value.toUpperCase(),
-              }))
-            }
-          />
-        </label>
-        <Button type="submit" className="mt-5 w-full">
-          Save registration
         </Button>
       </form>
     </div>

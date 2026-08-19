@@ -32,6 +32,9 @@ export async function registrationSettings() {
     registration_enabled?: boolean;
     email_verification_enabled?: boolean;
     default_plan_code?: string;
+    default_duration_days?: number;
+    new_user_status?: "ACTIVE" | "PENDING_APPROVAL";
+    welcome_message?: string;
   }>("registration");
 }
 
@@ -166,6 +169,7 @@ export async function registerCustomer(input: {
       ok: true;
       customerId: string;
       tenantId: string;
+      status: string;
     }
   | {
       ok: false;
@@ -204,6 +208,7 @@ export async function registerCustomerWithPasswordHash(
       ok: true;
       customerId: string;
       tenantId: string;
+      status: string;
     }
   | {
       ok: false;
@@ -258,17 +263,19 @@ export async function registerCustomerWithPasswordHash(
     .select("id, duration_days")
     .eq(
       "code",
-      settings.default_plan_code ?? "FREE",
+      settings.default_plan_code ?? "TEST",
     )
     .maybeSingle();
 
+  const durationDays = Number(settings.default_duration_days ?? plan?.duration_days ?? 30);
   const expires = plan
     ? new Date(
         Date.now() +
-          (plan.duration_days as number) *
+          durationDays *
             86400_000,
       ).toISOString()
     : null;
+  const newStatus = settings.new_user_status === "PENDING_APPROVAL" ? "PENDING_APPROVAL" : "ACTIVE";
   const requestedName = input.name?.trim() || null;
   const { data: generatedName } = requestedName
     ? { data: requestedName }
@@ -281,6 +288,7 @@ export async function registerCustomerWithPasswordHash(
       name: profileName,
       plan_id: plan?.id ?? null,
       plan_expires_at: expires,
+      status: newStatus === "ACTIVE" ? "ACTIVE" : "SUSPENDED",
     })
     .select("id")
     .single();
@@ -306,6 +314,7 @@ export async function registerCustomerWithPasswordHash(
       telegram_user_id: input.telegramUserId ?? null,
       telegram_username: input.telegramUsername ?? null,
       email_verified: !settings.email_verification_enabled,
+      status: newStatus,
     })
     .select("id")
     .single();
@@ -343,6 +352,16 @@ export async function registerCustomerWithPasswordHash(
       });
   }
 
+  if (settings.welcome_message) {
+    await client.from("notifications").insert({
+      tenant_id: tenant.id,
+      title: "Welcome",
+      body: settings.welcome_message,
+      kind: "INFO",
+      link: "/mini-app/dashboard",
+    });
+  }
+
   await logSystem({
     tenant_id: tenant.id,
     customer_id: customer.id,
@@ -354,6 +373,7 @@ export async function registerCustomerWithPasswordHash(
     ok: true,
     customerId: customer.id,
     tenantId: tenant.id,
+    status: newStatus,
   };
 }
 
@@ -533,6 +553,11 @@ export async function registerCustomerFromFlow(
 
   if (!res.ok) {
     throw new Error(res.error);
+  }
+
+  if (res.status !== "ACTIVE") {
+    await clearTelegramFlow(flow.telegramUserId);
+    throw new Error("Your account is pending admin approval.");
   }
 
   const token =

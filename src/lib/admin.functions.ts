@@ -98,10 +98,19 @@ export const saveCustomerNotes = createServerFn({ method: "POST" })
 
 export const createCustomer = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((i: { email: string; password: string; name?: string }) => i)
+  .inputValidator((i: {
+    email: string;
+    password: string;
+    name?: string | null;
+    planId?: string | null;
+    durationDays?: number | null;
+    status?: "ACTIVE" | "PENDING_APPROVAL" | "SUSPENDED";
+    unlimited?: boolean;
+    reason?: string | null;
+  }) => i)
   .handler(async ({ context, data }) => {
     await admin.assertSuperAdmin(context.userId);
-    return admin.adminCreateCustomer(context.userId, data.email, data.password, data.name);
+    return admin.adminCreateCustomer(context.userId, data);
   });
 
 export const getPlans = createServerFn({ method: "POST" })
@@ -192,6 +201,21 @@ export const getSettings = createServerFn({ method: "POST" })
   .handler(async ({ context }) => {
     await admin.assertSuperAdmin(context.userId);
     return admin.adminSettings();
+  });
+
+export const getRegistration = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    await admin.assertSuperAdmin(context.userId);
+    return admin.adminRegistration();
+  });
+
+export const saveRegistration = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((i: { value: Record<string, unknown> }) => i)
+  .handler(async ({ context, data }) => {
+    await admin.assertSuperAdmin(context.userId);
+    return admin.adminSaveRegistration(context.userId, data.value);
   });
 
 export const saveSettings = createServerFn({ method: "POST" })

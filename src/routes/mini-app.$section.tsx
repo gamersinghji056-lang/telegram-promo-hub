@@ -4,14 +4,17 @@ import { useServerFn } from "@tanstack/react-start";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   AlertTriangle,
+  BarChart3,
   Bell,
   Bot,
+  CalendarDays,
   CheckCircle2,
   Circle,
   Clock,
   CreditCard,
   Eye,
   FolderOpen,
+  Gauge,
   LogOut,
   Megaphone,
   Pause,
@@ -22,6 +25,8 @@ import {
   Search,
   Send,
   Settings,
+  ShieldCheck,
+  Sparkles,
   Trash2,
   UserCircle,
   Users,
@@ -3501,9 +3506,9 @@ function AnalyticsSection({
   );
 }
 
-function Billing({ auth, data, actions, setNotice, actionBusy, runAction, reload }: any) {
+function Billing({ auth, data, setNotice, actionBusy, runAction, reload }: any) {
   const usage = data?.usage ?? {};
-  const currentPlan = data?.subscription?.plans ?? data?.tenant?.plans ?? usage.plan ?? {};
+  const currentPlan = usage.plan ?? data?.tenant?.plans ?? data?.subscription?.plans ?? {};
   const currentCode = currentPlan?.code ?? "";
   const usageRows = [
     ["Sessions", usage.counts?.sessions ?? 0, usage.limits?.max_connections ?? null],
@@ -3515,61 +3520,85 @@ function Billing({ auth, data, actions, setNotice, actionBusy, runAction, reload
     ["DM", usage.counts?.dm_messages ?? 0, usage.limits?.monthly_dm_message_limit ?? null],
     ["Categories", usage.counts?.categories ?? 0, usage.limits?.max_categories ?? null],
   ];
-  const requestPlan = async (planId: string) => {
-    await runAction(`billing-${planId}`, async () => {
-      await requestPayment({ data: { auth, planId } });
-      setNotice("Payment order created. Admin will confirm after payment.");
+  const paymentsEnabled = Boolean(data?.payments?.enabled);
+  const requestPlan = async (plan: any) => {
+    const price = Number(plan.price_usd ?? 0);
+    if (price > 0 && !paymentsEnabled) {
+      setNotice("Online payments are not available yet. Contact support to activate this plan.");
+      return;
+    }
+    await runAction(`billing-${plan.id}`, async () => {
+      const response: any = await requestPayment({ data: { auth, planId: plan.id } });
+      setNotice(response?.free ? `${plan.name} is now active.` : "Payment order created. Admin will confirm after payment.");
       await reload();
     });
   };
   return (
-    <div className="space-y-4">
-      <section className={panelClass("space-y-4")}>
-        <CreditCard className="size-5 text-primary" />
-        <div className="flex items-end justify-between gap-3">
+    <div className="space-y-3">
+      <section className="rounded-lg border border-cyan-400/20 bg-slate-950/70 p-4 shadow-sm">
+        <div className="flex items-start justify-between gap-3">
           <div>
-            <p className="text-4xl font-semibold">${Number(currentPlan?.price_usd ?? 0)}</p>
-            <p className="text-lg font-semibold">{currentPlan?.name ?? "TEST"}</p>
+            <p className="text-xs font-medium text-cyan-300">Current Plan</p>
+            <h2 className="mt-1 text-xl font-semibold text-white">{currentPlan?.name ?? "TEST"}</h2>
+            <p className="mt-1 text-sm text-slate-300">
+              <span className="text-lg font-semibold text-white">${Number(currentPlan?.price_usd ?? 0)}</span> / month
+            </p>
           </div>
-          <div className="text-right text-sm">
-            <p className={usage.expired ? "text-warning" : "text-success"}>{usage.expired ? "Expired - TEST limits active" : "Active"}</p>
-            <p className="text-muted-foreground">
-              {data?.tenant?.plan_expires_at ? `Renews ${new Date(data.tenant.plan_expires_at).toLocaleDateString()}` : "No expiry"}
+          <div className="text-right">
+            <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${usage.expired ? "bg-amber-400/15 text-amber-300" : "bg-emerald-400/15 text-emerald-300"}`}>
+              {usage.expired ? "TEST limits" : "Active"}
+            </span>
+            <p className="mt-2 text-xs text-slate-400">
+              Renews: {data?.tenant?.plan_expires_at ? new Date(data.tenant.plan_expires_at).toLocaleDateString() : "No expiry"}
             </p>
           </div>
         </div>
-        <div className="grid gap-2 sm:grid-cols-2">
+        <div className="mt-4 grid gap-2 sm:grid-cols-2">
           {usageRows.map(([label, used, limit]) => (
             <MiniUsageBar key={String(label)} label={String(label)} used={Number(used ?? 0)} limit={limit as number | null} />
           ))}
         </div>
-        <p className="text-xs text-muted-foreground">
-          Payments: {data?.payments?.enabled ? `${data.payments.network} wallet configured` : "not configured"}
-        </p>
       </section>
+      {!paymentsEnabled && (data?.plans ?? []).some((plan: any) => Number(plan.price_usd ?? 0) > 0) ? (
+        <div className="rounded-lg border border-cyan-400/20 bg-cyan-400/10 p-3 text-sm text-cyan-100">
+          Online payments are not available yet. Contact support to activate paid plans.
+        </div>
+      ) : null}
       <section className="grid gap-3 sm:grid-cols-2">
         {(data?.plans ?? []).map((plan: any) => {
           const isCurrent = String(plan.code) === String(currentCode);
+          const accent = planAccent(plan.code);
           return (
-            <article key={plan.id} className={panelClass("space-y-3")}>
-              <div>
-                <p className="text-4xl font-semibold">${Number(plan.price_usd ?? 0)}</p>
-                <p className="text-lg font-semibold">{plan.name}</p>
-                <p className="text-sm text-muted-foreground">{plan.description}</p>
+            <article key={plan.id} className={`rounded-lg border ${accent.border} bg-slate-950/70 p-4 shadow-sm`}>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <p className="text-base font-semibold text-white">{plan.name}</p>
+                    {String(plan.code).toUpperCase() === "PRO" ? <span className="rounded-full bg-violet-400/15 px-2 py-0.5 text-[10px] font-semibold text-violet-200">Popular</span> : null}
+                  </div>
+                  <p className="mt-1 text-xs text-slate-400">{plan.description || planDescription(plan.code)}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-3xl font-semibold text-white">${Number(plan.price_usd ?? 0)}</p>
+                  <p className="text-xs text-slate-400">/ month</p>
+                </div>
               </div>
-              <div className="space-y-1 text-xs">
-                <p>Sessions: {limitLabel(plan.max_connections)}{plan.code === "ENTERPRISE" ? " hard max" : ""}</p>
-                <p>Campaigns: {limitLabel(plan.max_active_campaigns)}</p>
-                <p>Groups: {limitLabel(plan.max_saved_groups)}</p>
-                <p>Messages: {limitLabel(plan.monthly_message_limit)}</p>
-                <p>DM: {limitLabel(plan.monthly_dm_message_limit)}</p>
-                <p>Analytics: {plan.analytics_level}</p>
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                {planFeatures(plan).map(({ label, value, Icon }) => (
+                  <div key={label} className="rounded-md border border-white/10 bg-white/[0.03] p-2">
+                    <div className={`flex items-center gap-1.5 text-[11px] ${accent.text}`}>
+                      <Icon className="size-3.5" />
+                      <span>{label}</span>
+                    </div>
+                    <p className="mt-1 text-sm font-semibold text-white">{value}</p>
+                  </div>
+                ))}
               </div>
               <Button
-                className="w-full"
+                className={`mt-4 w-full ${!isCurrent ? accent.button : ""}`}
                 variant={isCurrent ? "secondary" : "default"}
                 disabled={isCurrent || actionBusy === `billing-${plan.id}`}
-                onClick={() => void requestPlan(plan.id)}
+                onClick={() => void requestPlan(plan)}
               >
                 {isCurrent ? "CURRENT PLAN" : Number(plan.price_usd ?? 0) > 0 ? "UPGRADE" : "SELECT PLAN"}
               </Button>
@@ -3594,19 +3623,55 @@ function limitLabel(value: unknown) {
 }
 
 function MiniUsageBar({ label, used, limit }: { label: string; used: number; limit: number | null }) {
-  const pct = limit == null ? 0 : Math.min(100, Math.round((used / Math.max(limit, 1)) * 100));
-  const tone = pct >= 90 ? "bg-destructive" : pct >= 80 ? "bg-warning" : "bg-primary";
+  const rawPct = limit == null ? 0 : Math.round((used / Math.max(limit, 1)) * 100);
+  const pct = Math.min(100, rawPct);
+  const over = limit != null && used > limit;
+  const tone = over || pct >= 90 ? "bg-red-500" : pct >= 80 ? "bg-amber-400" : "bg-cyan-400";
   return (
     <div>
-      <div className="flex items-center justify-between text-xs">
-        <span>{label}</span>
-        <span>{used.toLocaleString()} / {limitLabel(limit)}</span>
+      <div className="flex items-center justify-between text-[11px]">
+        <span className="text-slate-300">{label}</span>
+        <span className={over ? "font-semibold text-red-300" : "text-slate-400"}>{used.toLocaleString()} / {limitLabel(limit)}</span>
       </div>
-      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted">
+      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-800">
         <div className={`h-full ${tone}`} style={{ width: `${limit == null ? 100 : pct}%` }} />
       </div>
     </div>
   );
+}
+
+function planAccent(code: string) {
+  const key = String(code).toUpperCase();
+  if (key === "PLUS") return { border: "border-cyan-400/30", text: "text-cyan-300", button: "bg-cyan-500 text-slate-950 hover:bg-cyan-400" };
+  if (key === "PRO") return { border: "border-violet-400/35", text: "text-violet-300", button: "bg-violet-500 text-white hover:bg-violet-400" };
+  if (key === "ENTERPRISE") return { border: "border-emerald-300/40 shadow-[0_0_24px_rgba(45,212,191,0.08)]", text: "text-emerald-300", button: "bg-emerald-400 text-slate-950 hover:bg-emerald-300" };
+  return { border: "border-slate-700", text: "text-slate-300", button: "" };
+}
+
+function planDescription(code: string) {
+  const key = String(code).toUpperCase();
+  if (key === "TEST") return "Product testing with tight limits.";
+  if (key === "PLUS") return "Core growth plan for regular use.";
+  if (key === "PRO") return "Higher volume promotion operations.";
+  if (key === "ENTERPRISE") return "Unlimited quotas with a 20-session maximum.";
+  return "Custom platform plan.";
+}
+
+function planFeatures(plan: any) {
+  return [
+    { label: "Sessions", value: `${limitLabel(plan.max_connections)}${String(plan.code).toUpperCase() === "ENTERPRISE" ? " max" : ""}`, Icon: ShieldCheck },
+    { label: "Campaigns", value: limitLabel(plan.max_active_campaigns), Icon: Megaphone },
+    { label: "Saved Groups", value: limitLabel(plan.max_saved_groups), Icon: FolderOpen },
+    { label: "Groups Found", value: limitLabel(plan.monthly_groups_found_limit), Icon: Search },
+    { label: "Users Found", value: limitLabel(plan.monthly_audience_found_limit), Icon: Users },
+    { label: "Messages", value: limitLabel(plan.monthly_message_limit), Icon: Send },
+    { label: "DM", value: limitLabel(plan.monthly_dm_message_limit), Icon: UserCircle },
+    { label: "Categories", value: limitLabel(plan.max_categories), Icon: CreditCard },
+    { label: "Analytics", value: String(plan.analytics_level ?? "basic") === "full" ? "Full" : "Basic", Icon: BarChart3 },
+    { label: "Scheduling", value: plan.scheduling_enabled ? "Enabled" : "Disabled", Icon: CalendarDays },
+    { label: "Session Health", value: String(plan.session_health_level ?? "basic") === "full" ? "Full" : "Basic", Icon: Gauge },
+    { label: "Checks", value: `${limitLabel(plan.monthly_writable_check_limit)} / ${limitLabel(plan.monthly_sendable_check_limit)}`, Icon: Sparkles },
+  ];
 }
 
 function SettingsPanel({ auth, data, actions, setNotice, actionBusy, runAction }: any) {

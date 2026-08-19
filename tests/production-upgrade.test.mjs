@@ -179,7 +179,8 @@ test("paid plans activate only after payment confirmation", () => {
   const admin = read("src/lib/admin-data.server.ts");
   const request = customer.slice(customer.indexOf("export async function requestPayment"), customer.length);
   assert(request.includes('status: "PENDING"'));
-  assert(request.includes("throw new Error(\"Free plans are assigned automatically or by an administrator.\")"));
+  assert(request.includes("self_selected_free_plan"));
+  assert(request.indexOf('if (Number(plan.price_usd ?? 0) <= 0)') < request.indexOf('if (!payments.payment_enabled || !payments.wallet_address)'));
   const confirm = admin.slice(admin.indexOf("export async function adminUpdateTransaction"), admin.indexOf("export async function adminSubscriptionAction"));
   assert(confirm.includes('if (status === "CONFIRMED" && tx.plan_id)'));
   assert(confirm.includes('payment_status: "PAID"'));
@@ -212,10 +213,13 @@ test("delete user performs tenant-level cleanup and admin writes require super a
 test("public billing reads active public DB plans and hides private plans", () => {
   const customer = read("src/lib/customer-data.server.ts");
   const ui = read("src/routes/mini-app.$section.tsx");
+  const migration = read("supabase/migrations/20260819133000_registration_public_plan_cleanup.sql");
   const billing = customer.slice(customer.indexOf("export async function billing"), customer.indexOf("export async function requestPayment"));
   assert(billing.includes('.eq("is_active", true)'));
   assert(billing.includes('.eq("is_public", true)'));
-  assert(ui.includes("20 sessions max") || ui.includes("hard max"));
+  assert(migration.includes("upper(code) IN ('FREE', 'BASIC', 'PREMIUM', 'STARTER', 'GROWTH', 'SCALE')"));
+  assert(migration.includes("SET is_public = false"));
+  assert(ui.includes("20-session maximum") || ui.includes("20 sessions max"));
   assert(ui.includes("CURRENT PLAN"));
   assert(ui.includes("UPGRADE"));
   assert(ui.includes("SELECT PLAN"));
@@ -230,4 +234,90 @@ test("admin navigation includes Usage and Notifications sections", () => {
   assert(route.includes('"notifications"'));
   assert(route.includes("function UsageAdmin"));
   assert(route.includes("function NotificationsAdmin"));
+});
+
+test("billing cards are DB-driven and do not fabricate usage", () => {
+  const customer = read("src/lib/customer-data.server.ts");
+  const ui = read("src/routes/mini-app.$section.tsx");
+  const billing = customer.slice(customer.indexOf("export async function billing"), customer.indexOf("export async function requestPayment"));
+  assert(!billing.includes(".in(\"code\""));
+  assert(ui.includes("usage.counts?.sessions"));
+  assert(ui.includes("usage.limits?.max_connections"));
+  assert(ui.includes("used.toLocaleString()"));
+  assert(ui.includes('return value === null || value === undefined ? "Unlimited"'));
+  assert(!ui.includes("Math.random"));
+  assert(!ui.includes("mock"));
+});
+
+test("public plan defaults display requested plan names and prices", () => {
+  const helper = read("src/lib/entitlements.server.ts");
+  const ui = read("src/routes/mini-app.$section.tsx");
+  for (const code of ['code: "TEST"', 'code: "PLUS"', 'code: "PRO"', 'code: "ENTERPRISE"']) assert(helper.includes(code));
+  for (const price of ["price_usd: 0", "price_usd: 20", "price_usd: 30", "price_usd: 50"]) assert(helper.includes(price));
+  assert(ui.includes("planFeatures(plan)"));
+  assert(ui.includes("20-session maximum"));
+  assert(ui.includes('String(plan.code).toUpperCase() === "PRO"'));
+});
+
+test("registration page controls real settings and stats", () => {
+  const route = read("src/routes/admin.$section.tsx");
+  const admin = read("src/lib/admin-data.server.ts");
+  const funcs = read("src/lib/admin.functions.ts");
+  const shell = read("src/components/admin-shell.tsx");
+  assert(shell.includes('"Registration"'));
+  assert(route.includes('"registration"'));
+  assert(route.includes("function RegistrationAdmin"));
+  assert(route.includes("saveRegistration"));
+  assert(admin.includes("export async function adminRegistration"));
+  assert(admin.includes("registration_enabled"));
+  assert(admin.includes("default_plan_code"));
+  assert(admin.includes("default_duration_days"));
+  assert(admin.includes("new_user_status"));
+  assert(admin.includes("pendingApprovals"));
+  assert(funcs.includes("export const getRegistration"));
+  assert(funcs.includes("export const saveRegistration"));
+});
+
+test("admin-created customer uses server-side auth records and selected entitlement", () => {
+  const admin = read("src/lib/admin-data.server.ts");
+  const funcs = read("src/lib/admin.functions.ts");
+  const create = admin.slice(admin.indexOf("export async function adminCreateCustomer"), admin.length);
+  assert(create.includes("hashPassword(input.password)"));
+  assert(create.includes('.from("tenants")'));
+  assert(create.includes('.from("customers")'));
+  assert(create.includes('.from("tenant_members")'));
+  assert(create.includes('.from("subscriptions")'));
+  assert(create.includes("tenant_entitlement_overrides"));
+  assert(create.includes("An account with this email already exists."));
+  assert(create.includes('await client.from("tenants").delete().eq("id", tenant.id)'));
+  assert(funcs.includes("return admin.adminCreateCustomer(context.userId, data)"));
+});
+
+test("registration defaults use TEST and pending approval does not auto-login", () => {
+  const auth = read("src/lib/customer-auth.server.ts");
+  const webhook = read("src/routes/api/public/telegram/webhook.ts");
+  assert(auth.includes('settings.default_plan_code ?? "TEST"'));
+  assert(auth.includes("settings.default_duration_days"));
+  assert(auth.includes('settings.new_user_status === "PENDING_APPROVAL"'));
+  assert(auth.includes('throw new Error("Your account is pending admin approval.")'));
+  assert(webhook.includes("Account created and pending admin approval."));
+});
+
+test("legacy plan cleanup does not delete subscriptions or payment history", () => {
+  const migration = read("supabase/migrations/20260819133000_registration_public_plan_cleanup.sql");
+  assert(!migration.includes("DELETE FROM public.subscriptions"));
+  assert(!migration.includes("DELETE FROM public.billing_transactions"));
+  assert(!migration.includes("DELETE FROM public.plans"));
+  assert(migration.includes("UPDATE public.plans"));
+  assert(migration.includes("is_public = false"));
+});
+
+test("admin-created public plans can appear in customer billing", () => {
+  const customer = read("src/lib/customer-data.server.ts");
+  const admin = read("src/lib/admin-data.server.ts");
+  const billing = customer.slice(customer.indexOf("export async function billing"), customer.indexOf("export async function requestPayment"));
+  assert(billing.includes('.eq("is_public", true)'));
+  assert(!billing.includes("TEST\", \"PLUS\", \"PRO\", \"ENTERPRISE"));
+  assert(admin.includes("is_public: plan[\"is_public\"] !== false"));
+  assert(admin.includes("is_custom: plan[\"is_custom\"] === true"));
 });

@@ -1,5 +1,6 @@
 import { db, getSetting, setSetting, logAdmin } from "./db.server";
 import { hashPassword } from "./security.server";
+import { normalizeEmail, validEmail } from "./customer-auth.server";
 import {
   checkWebhook,
   registerWebhook,
@@ -696,6 +697,9 @@ export type PlatformSettings = {
     registration_enabled?: boolean;
     email_verification_enabled?: boolean;
     default_plan_code?: string;
+    default_duration_days?: number;
+    new_user_status?: "ACTIVE" | "PENDING_APPROVAL";
+    welcome_message?: string;
   };
   payments: { payment_enabled?: boolean; network?: string; wallet_address?: string };
   telegram: Awaited<ReturnType<typeof telegramSettings>>;
@@ -711,6 +715,82 @@ export async function adminSettings(): Promise<PlatformSettings> {
     getSetting<PlatformSettings["discovery"]>("discovery"),
   ]);
   return { general, registration, payments, telegram, discovery };
+}
+
+export async function adminRegistration() {
+  await ensureDefaultPlans();
+  const client = db();
+  const [settings, { data: plans }, { count: totalUsers }, { count: newToday }, { count: newThisMonth }, { count: active }, { count: suspended }, { count: pending }] =
+    await Promise.all([
+      getSetting<PlatformSettings["registration"]>("registration"),
+      client
+        .from("plans")
+        .select("id, code, name, price_usd, duration_days, is_active, is_public, is_custom")
+        .eq("is_active", true)
+        .order("sort_order"),
+      client.from("customers").select("id", { count: "exact", head: true }),
+      client
+        .from("customers")
+        .select("id", { count: "exact", head: true })
+        .gte("created_at", new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate())).toISOString()),
+      client
+        .from("customers")
+        .select("id", { count: "exact", head: true })
+        .gte("created_at", new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)).toISOString()),
+      client.from("customers").select("id", { count: "exact", head: true }).eq("status", "ACTIVE"),
+      client.from("customers").select("id", { count: "exact", head: true }).eq("status", "SUSPENDED"),
+      client.from("customers").select("id", { count: "exact", head: true }).eq("status", "PENDING_APPROVAL"),
+    ]);
+  return {
+    settings: {
+      registration_enabled: settings.registration_enabled !== false,
+      email_verification_enabled: Boolean(settings.email_verification_enabled),
+      default_plan_code: settings.default_plan_code ?? "TEST",
+      default_duration_days: Number(settings.default_duration_days ?? 30),
+      new_user_status: settings.new_user_status === "PENDING_APPROVAL" ? "PENDING_APPROVAL" : "ACTIVE",
+      welcome_message: settings.welcome_message ?? "Welcome to WPAY. Your account is ready.",
+    },
+    plans: plans ?? [],
+    stats: {
+      totalUsers: totalUsers ?? 0,
+      newToday: newToday ?? 0,
+      newThisMonth: newThisMonth ?? 0,
+      active: active ?? 0,
+      suspended: suspended ?? 0,
+      pendingApprovals: pending ?? 0,
+    },
+  };
+}
+
+export async function adminSaveRegistration(adminId: string, value: Record<string, unknown>) {
+  await ensureDefaultPlans();
+  const planCode = String(value["default_plan_code"] ?? "TEST").trim().toUpperCase();
+  const { data: plan } = await db()
+    .from("plans")
+    .select("code")
+    .eq("code", planCode)
+    .eq("is_active", true)
+    .maybeSingle();
+  if (!plan) throw new Error("Default plan must be an active plan.");
+  const duration = Math.max(1, Math.floor(Number(value["default_duration_days"] ?? 30)));
+  const newUserStatus = value["new_user_status"] === "PENDING_APPROVAL" ? "PENDING_APPROVAL" : "ACTIVE";
+  const current = await getSetting("registration");
+  await setSetting("registration", {
+    ...current,
+    registration_enabled: value["registration_enabled"] !== false,
+    email_verification_enabled: value["email_verification_enabled"] === true,
+    default_plan_code: planCode,
+    default_duration_days: duration,
+    new_user_status: newUserStatus,
+    welcome_message: String(value["welcome_message"] ?? "").trim(),
+  });
+  await logAdmin({
+    admin_user_id: adminId,
+    action: "REGISTRATION_SETTINGS_UPDATED",
+    resource: "registration",
+    details: { default_plan_code: planCode, default_duration_days: duration, new_user_status: newUserStatus },
+  });
+  return adminRegistration();
 }
 
 export async function adminSaveSettings(
@@ -919,13 +999,134 @@ export async function adminSendNotification(
 
 export async function adminCreateCustomer(
   adminId: string,
-  email: string,
-  password: string,
-  name?: string,
+  input: {
+    email: string;
+    password: string;
+    name?: string | null;
+    planId?: string | null;
+    durationDays?: number | null;
+    status?: "ACTIVE" | "PENDING_APPROVAL" | "SUSPENDED";
+    unlimited?: boolean;
+    reason?: string | null;
+  },
 ) {
-  const { registerCustomer } = await import("./customer-auth.server");
-  const res = await registerCustomer({ email, password, name: name ?? null });
-  if (!res.ok) throw new Error(res.error);
-  await logAdmin({ admin_user_id: adminId, action: "CUSTOMER_CREATED", resource: email });
-  return { ok: true };
+  await ensureDefaultPlans();
+  const client = db();
+  const email = normalizeEmail(input.email);
+  if (!validEmail(email)) throw new Error("Enter a valid email address.");
+  if (!input.password || input.password.length < 8) throw new Error("Temporary password must be at least 8 characters.");
+
+  const { data: existing } = await client.from("customers").select("id").eq("email", email).maybeSingle();
+  if (existing) throw new Error("An account with this email already exists.");
+
+  const planQuery = input.planId
+    ? client.from("plans").select("*").eq("id", input.planId).maybeSingle()
+    : client.from("plans").select("*").eq("code", "TEST").maybeSingle();
+  const { data: plan } = await planQuery;
+  if (!plan) throw new Error("Select a valid plan.");
+
+  const durationDays = input.durationDays == null || Number(input.durationDays) <= 0
+    ? Number(plan.duration_days ?? 30)
+    : Math.floor(Number(input.durationDays));
+  const expires = durationDays > 0 ? new Date(Date.now() + durationDays * 86400_000).toISOString() : null;
+  const requestedName = input.name?.trim() || null;
+  const { data: generatedName } = requestedName
+    ? { data: requestedName }
+    : await client.rpc("next_customer_profile_name");
+  const profileName = String(generatedName || requestedName || "User001");
+  const status = input.status === "PENDING_APPROVAL" || input.status === "SUSPENDED" ? input.status : "ACTIVE";
+
+  const { data: tenant, error: tenantError } = await client
+    .from("tenants")
+    .insert({
+      name: profileName,
+      plan_id: plan.id,
+      plan_expires_at: expires,
+      status: status === "ACTIVE" ? "ACTIVE" : "SUSPENDED",
+    })
+    .select("id")
+    .single();
+  if (tenantError || !tenant) throw new Error("Could not create the workspace.");
+
+  try {
+    const { data: customer, error: customerError } = await client
+      .from("customers")
+      .insert({
+        tenant_id: tenant.id,
+        email,
+        password_hash: await hashPassword(input.password),
+        name: profileName,
+        status,
+        email_verified: true,
+      })
+      .select("id")
+      .single();
+    if (customerError || !customer) throw new Error(customerError?.message ?? "Could not create the account.");
+
+    const { error: memberError } = await client.from("tenant_members").insert({
+      tenant_id: tenant.id,
+      customer_id: customer.id,
+      role: "customer",
+    });
+    if (memberError) throw new Error(memberError.message);
+
+    const { error: subscriptionError } = await client.from("subscriptions").insert({
+      tenant_id: tenant.id,
+      plan_id: plan.id,
+      status: input.unlimited ? "MANUAL" : "ACTIVE",
+      payment_status: "MANUAL",
+      expires_at: expires,
+      no_expiry: expires === null,
+      granted_by: adminId,
+      grant_reason: input.reason ?? "Admin-created customer",
+      metadata: { admin_created: true, unlimited: Boolean(input.unlimited) },
+    });
+    if (subscriptionError) throw new Error(subscriptionError.message);
+
+    if (input.unlimited) {
+      const { error: overrideError } = await client.from("tenant_entitlement_overrides").upsert(
+        {
+          tenant_id: tenant.id,
+          override_type: "UNLIMITED",
+          max_connections: 20,
+          max_active_campaigns: null,
+          max_saved_groups: null,
+          monthly_groups_found_limit: null,
+          monthly_audience_found_limit: null,
+          monthly_message_limit: null,
+          monthly_dm_message_limit: null,
+          max_categories: null,
+          monthly_writable_check_limit: null,
+          monthly_sendable_check_limit: null,
+          analytics_level: "full",
+          scheduling_enabled: true,
+          session_health_level: "full",
+          expires_at: expires,
+          granted_by: adminId,
+          grant_reason: input.reason ?? "Admin-created custom unlimited customer",
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "tenant_id" },
+      );
+      if (overrideError) throw new Error(overrideError.message);
+    }
+
+    await client.from("notifications").insert({
+      tenant_id: tenant.id,
+      title: "Account created",
+      body: `Your ${plan.name} plan is ready.`,
+      kind: "SUCCESS",
+      link: "/mini-app/billing",
+    });
+    await logAdmin({
+      admin_user_id: adminId,
+      action: "CUSTOMER_CREATED",
+      resource: email,
+      details: { plan: plan.code, status, durationDays, unlimited: Boolean(input.unlimited) },
+    });
+    return { ok: true, customerId: customer.id, tenantId: tenant.id };
+  } catch (error) {
+    await client.from("tenants").delete().eq("id", tenant.id);
+    throw error;
+  }
 }
