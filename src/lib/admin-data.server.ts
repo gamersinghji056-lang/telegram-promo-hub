@@ -29,11 +29,20 @@ export async function assertSuperAdmin(userId: string) {
     .select("id", { count: "exact", head: true })
     .eq("role", "super_admin");
   if ((count ?? 0) === 0) {
-    await client.from("user_roles").insert({ user_id: userId, role: "super_admin" });
+    const { error } = await client.from("user_roles").insert({ user_id: userId, role: "super_admin" });
+    if (error) throw new Error("FORBIDDEN");
     await logAdmin({ admin_user_id: userId, action: "SUPER_ADMIN_BOOTSTRAPPED" });
     return true;
   }
   throw new Error("FORBIDDEN");
+}
+
+export async function adminRegistrationStatus() {
+  const { count } = await db()
+    .from("user_roles")
+    .select("id", { count: "exact", head: true })
+    .eq("role", "super_admin");
+  return { open: (count ?? 0) === 0 };
 }
 
 function normalizeLimitInput(value: unknown) {

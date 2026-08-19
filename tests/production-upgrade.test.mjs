@@ -236,6 +236,22 @@ test("admin navigation includes Usage and Notifications sections", () => {
   assert(route.includes("function NotificationsAdmin"));
 });
 
+test("admin login supports guarded first-admin registration", () => {
+  const login = read("src/routes/admin.login.tsx");
+  const funcs = read("src/lib/admin.functions.ts");
+  const data = read("src/lib/admin-data.server.ts");
+  const migration = read("supabase/migrations/20260819140000_single_super_admin_bootstrap.sql");
+  assert(login.includes("signUp"));
+  assert(login.includes("Confirm Password"));
+  assert(login.includes("CREATE ADMIN ACCOUNT"));
+  assert(login.includes("Admin registration is closed."));
+  assert(login.includes("await adminMe()"));
+  assert(funcs.includes("getAdminRegistrationStatus"));
+  assert(data.includes('eq("role", "super_admin")'));
+  assert(data.includes('if (error) throw new Error("FORBIDDEN")'));
+  assert(migration.includes("user_roles_single_super_admin_idx"));
+});
+
 test("billing cards are DB-driven and do not fabricate usage", () => {
   const customer = read("src/lib/customer-data.server.ts");
   const ui = read("src/routes/mini-app.$section.tsx");

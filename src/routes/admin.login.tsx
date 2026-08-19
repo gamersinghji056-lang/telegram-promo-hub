@@ -1,8 +1,8 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
-import { LockKeyhole } from "lucide-react";
+import { useEffect, useState } from "react";
+import { LockKeyhole, UserPlus } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
-import { adminMe } from "@/lib/admin.functions";
+import { adminMe, getAdminRegistrationStatus } from "@/lib/admin.functions";
 import { Button } from "@/components/ui/button";
 
 export const Route = createFileRoute("/admin/login")({
@@ -19,73 +19,124 @@ export const Route = createFileRoute("/admin/login")({
   component: AdminLogin,
 });
 
+function authError(message: string) {
+  const normalized = message.toLowerCase();
+  if (normalized.includes("already registered") || normalized.includes("already exists") || normalized.includes("duplicate")) {
+    return "An account with this email already exists. Sign in instead.";
+  }
+  if (normalized.includes("password") && (normalized.includes("weak") || normalized.includes("least") || normalized.includes("short"))) {
+    return "Use a stronger password with at least 8 characters.";
+  }
+  return message;
+}
+
 function AdminLogin() {
   const navigate = useNavigate();
+  const [mode, setMode] = useState<"signin" | "register">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [registrationOpen, setRegistrationOpen] = useState(false);
+  const [checkedRegistration, setCheckedRegistration] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void getAdminRegistrationStatus()
+      .then((result) => {
+        setRegistrationOpen(result.open);
+        setCheckedRegistration(true);
+      })
+      .catch(() => setCheckedRegistration(true));
+  }, []);
+
+  function selectMode(next: "signin" | "register") {
+    setError("");
+    setMode(next);
+    if (next === "register") {
+      setPassword("");
+      setConfirmPassword("");
+    }
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError("");
     try {
-      const result = await supabase.auth.signInWithPassword({ email, password });
-      if (result.error) {
-        setError(result.error.message);
-        setBusy(false);
-        return;
+      if (mode === "register") {
+        const availability = await getAdminRegistrationStatus();
+        setRegistrationOpen(availability.open);
+        if (!availability.open) {
+          setError("Admin registration is closed.");
+          return;
+        }
+        if (password !== confirmPassword) {
+          setError("Passwords do not match.");
+          return;
+        }
+        if (password.length < 8) {
+          setError("Use a stronger password with at least 8 characters.");
+          return;
+        }
+        const result = await supabase.auth.signUp({ email: email.trim(), password });
+        if (result.error) {
+          setError(authError(result.error.message));
+          return;
+        }
+        if (!result.data.session) {
+          setError("Email confirmation is required before the first admin can sign in.");
+          return;
+        }
+      } else {
+        const result = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+        if (result.error) {
+          setError(authError(result.error.message));
+          return;
+        }
       }
       await adminMe();
       await navigate({ to: "/admin/$section", params: { section: "dashboard" } });
     } catch (err) {
       await supabase.auth.signOut().catch(() => {});
-      const message =
-        err instanceof Error && err.message.includes("Missing Supabase")
-          ? `${err.message} Configure SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY.`
-          : "This account does not have super admin access.";
-      setError(message);
+      const message = err instanceof Error ? err.message : "This account does not have super admin access.";
+      setError(message === "FORBIDDEN" ? "Admin registration is closed." : message);
+    } finally {
       setBusy(false);
     }
   }
+
+  const registerDisabled = checkedRegistration && !registrationOpen;
   return (
     <main className="flex min-h-screen items-center justify-center bg-background p-5 text-foreground">
-      <form
-        onSubmit={submit}
-        className="w-full max-w-sm border-t-2 border-primary bg-card p-7 shadow-2xl"
-      >
+      <form onSubmit={submit} className="w-full max-w-sm border-t-2 border-primary bg-card p-7 shadow-2xl">
         <div className="mb-7 flex size-11 items-center justify-center rounded-md bg-primary text-primary-foreground">
-          <LockKeyhole className="size-5" />
+          {mode === "register" ? <UserPlus className="size-5" /> : <LockKeyhole className="size-5" />}
         </div>
         <p className="text-xs font-semibold uppercase text-primary">Platform owner</p>
-        <h1 className="mt-2 text-2xl font-semibold">Admin sign in</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Customer accounts cannot access this console.
-        </p>
+        <h1 className="mt-2 text-2xl font-semibold">{mode === "register" ? "Create first admin" : "Admin sign in"}</h1>
+        <p className="mt-2 text-sm text-muted-foreground">Customer accounts cannot access this console.</p>
         <label className="mt-7 block text-sm font-medium">
           Email
-          <input
-            className="mt-2 w-full rounded-md border border-input bg-background px-3 py-2.5 outline-none focus:ring-2 focus:ring-ring"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
+          <input className="mt-2 w-full rounded-md border border-input bg-background px-3 py-2.5 outline-none focus:ring-2 focus:ring-ring" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
         </label>
         <label className="mt-4 block text-sm font-medium">
           Password
-          <input
-            className="mt-2 w-full rounded-md border border-input bg-background px-3 py-2.5 outline-none focus:ring-2 focus:ring-ring"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
+          <input className="mt-2 w-full rounded-md border border-input bg-background px-3 py-2.5 outline-none focus:ring-2 focus:ring-ring" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
         </label>
+        {mode === "register" && (
+          <label className="mt-4 block text-sm font-medium">
+            Confirm Password
+            <input className="mt-2 w-full rounded-md border border-input bg-background px-3 py-2.5 outline-none focus:ring-2 focus:ring-ring" type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required />
+          </label>
+        )}
         {error && <p className="mt-4 text-sm text-destructive">{error}</p>}
-        <Button type="submit" className="mt-6 w-full" disabled={busy}>
-          {busy ? "Signing in…" : "Sign in"}
+        <Button type="submit" className="mt-6 w-full" disabled={busy || registerDisabled}>
+          {busy ? (mode === "register" ? "Creating account…" : "Signing in…") : mode === "register" ? "CREATE ADMIN ACCOUNT" : "Sign in"}
         </Button>
+        <button type="button" className="mt-5 w-full text-sm text-primary hover:underline" onClick={() => selectMode(mode === "signin" ? "register" : "signin")}>
+          {mode === "signin" ? (registerDisabled ? "Admin registration is closed." : "Create the first admin account") : "Back to admin sign in"}
+        </button>
       </form>
     </main>
   );

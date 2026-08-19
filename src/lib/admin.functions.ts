@@ -2,6 +2,9 @@ import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import * as admin from "./admin-data.server";
 
+export const getAdminRegistrationStatus = createServerFn({ method: "GET" })
+  .handler(async () => admin.adminRegistrationStatus());
+
 export const adminMe = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
