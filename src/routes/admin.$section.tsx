@@ -6,6 +6,7 @@ import { Activity, Bot, CheckCircle2, CircleAlert, Clock3, RefreshCw, Send, Tras
 import { AdminShell } from "@/components/admin-shell";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
+import { supabaseAuthHeaders, withAdminAuthTimeout } from "@/integrations/supabase/auth-attacher";
 import {
   adminMe,
   changeCustomerPlan,
@@ -61,7 +62,7 @@ export const Route = createFileRoute("/admin/$section")({
     const { data } = await supabase.auth.getSession();
     if (!data.session) throw redirect({ to: "/admin/login" });
     try {
-      await adminMe();
+      await withAdminAuthTimeout(adminMe({ headers: await supabaseAuthHeaders() }));
     } catch {
       throw redirect({ to: "/admin/login" });
     }

@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { LockKeyhole, UserPlus } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { supabaseAuthHeaders, withAdminAuthTimeout } from "@/integrations/supabase/auth-attacher";
 import { adminMe, getAdminRegistrationStatus } from "@/lib/admin.functions";
 import { Button } from "@/components/ui/button";
 
@@ -79,7 +80,7 @@ function AdminLogin() {
           setError("Use a stronger password with at least 8 characters.");
           return;
         }
-        const result = await supabase.auth.signUp({ email: email.trim(), password });
+        const result = await withAdminAuthTimeout(supabase.auth.signUp({ email: email.trim(), password }));
         if (result.error) {
           setError(authError(result.error.message));
           return;
@@ -89,13 +90,13 @@ function AdminLogin() {
           return;
         }
       } else {
-        const result = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+        const result = await withAdminAuthTimeout(supabase.auth.signInWithPassword({ email: email.trim(), password }));
         if (result.error) {
           setError(authError(result.error.message));
           return;
         }
       }
-      await adminMe();
+      await withAdminAuthTimeout(adminMe({ headers: await supabaseAuthHeaders() }));
       await navigate({ to: "/admin/$section", params: { section: "dashboard" } });
     } catch (err) {
       await supabase.auth.signOut().catch(() => {});

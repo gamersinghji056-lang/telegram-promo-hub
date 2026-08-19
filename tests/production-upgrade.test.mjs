@@ -245,11 +245,24 @@ test("admin login supports guarded first-admin registration", () => {
   assert(login.includes("Confirm Password"));
   assert(login.includes("CREATE ADMIN ACCOUNT"));
   assert(login.includes("Admin registration is closed."));
-  assert(login.includes("await adminMe()"));
+  assert(login.includes("adminMe({ headers: await supabaseAuthHeaders() })"));
   assert(funcs.includes("getAdminRegistrationStatus"));
   assert(data.includes('eq("role", "super_admin")'));
   assert(data.includes('if (error) throw new Error("FORBIDDEN")'));
   assert(migration.includes("user_roles_single_super_admin_idx"));
+});
+
+test("admin auth forwards Supabase bearer tokens with a timeout guard", () => {
+  const attacher = read("src/integrations/supabase/auth-attacher.ts");
+  const login = read("src/routes/admin.login.tsx");
+  const route = read("src/routes/admin.$section.tsx");
+  assert(attacher.includes("supabaseAuthHeaders"));
+  assert(attacher.includes("Authorization: `Bearer ${token}`"));
+  assert(attacher.includes("AUTH_LOOKUP_TIMEOUT_MS"));
+  assert(attacher.includes("withAdminAuthTimeout"));
+  assert(login.includes("withAdminAuthTimeout(supabase.auth.signInWithPassword"));
+  assert(login.includes("adminMe({ headers: await supabaseAuthHeaders() })"));
+  assert(route.includes("adminMe({ headers: await supabaseAuthHeaders() })"));
 });
 
 test("billing cards are DB-driven and do not fabricate usage", () => {

@@ -2,14 +2,41 @@
 import { createMiddleware } from '@tanstack/react-start'
 import { supabase } from './client'
 
+const AUTH_LOOKUP_TIMEOUT_MS = 10_000
+
+function timeoutError() {
+  return new Error('Supabase authentication timed out. Please try again.')
+}
+
+export async function withAdminAuthTimeout<T>(operation: Promise<T>, message = 'Admin authentication request timed out. Please try again.') {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), AUTH_LOOKUP_TIMEOUT_MS)
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+export async function supabaseAuthHeaders(): Promise<Record<string, string>> {
+  const sessionResult = await withAdminAuthTimeout(
+    supabase.auth.getSession(),
+    timeoutError().message,
+  )
+  if (sessionResult.error) throw new Error(sessionResult.error.message)
+  const token = sessionResult.data.session?.access_token
+  if (!token) throw new Error('Admin session expired. Please sign in again.')
+  return { Authorization: `Bearer ${token}` }
+}
+
 // Must be registered as a global `functionMiddleware` in `src/start.ts`; otherwise
 // the browser never attaches the bearer token to serverFn RPCs.
 export const attachSupabaseAuth = createMiddleware({ type: 'function' }).client(
   async ({ next }) => {
-    const { data } = await supabase.auth.getSession()
-    const token = data.session?.access_token
-    return next({
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    })
+    return next({ headers: await supabaseAuthHeaders().catch(() => ({})) })
   },
 )
