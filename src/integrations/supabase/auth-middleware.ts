@@ -53,6 +53,10 @@ export const requireSupabaseAuth = createMiddleware({ type: 'function' }).server
     }
 
     const authHeader = request.headers.get('authorization');
+    console.info('[admin-auth] middleware received request', {
+      hasAuthorization: Boolean(authHeader),
+      bearerFormat: Boolean(authHeader?.startsWith('Bearer ')),
+    });
 
     if (!authHeader) {
       throw new Error('Unauthorized: No authorization header provided');

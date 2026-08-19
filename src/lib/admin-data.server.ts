@@ -32,8 +32,10 @@ export async function assertSuperAdmin(userId: string) {
     const { error } = await client.from("user_roles").insert({ user_id: userId, role: "super_admin" });
     if (error) throw new Error("FORBIDDEN");
     await logAdmin({ admin_user_id: userId, action: "SUPER_ADMIN_BOOTSTRAPPED" });
+    console.info("[admin-auth] first super_admin role bootstrapped");
     return true;
   }
+  console.info("[admin-auth] super_admin role denied");
   throw new Error("FORBIDDEN");
 }
 

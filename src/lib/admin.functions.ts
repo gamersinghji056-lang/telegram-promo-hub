@@ -8,7 +8,9 @@ export const getAdminRegistrationStatus = createServerFn({ method: "GET" })
 export const adminMe = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
+    console.info("[admin-auth] adminMe received authenticated request", { userIdPresent: Boolean(context.userId) });
     await admin.assertSuperAdmin(context.userId);
+    console.info("[admin-auth] adminMe super_admin verification completed");
     return { ok: true, userId: context.userId };
   });
 

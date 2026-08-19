@@ -64,6 +64,8 @@ function AdminLogin() {
     e.preventDefault();
     setBusy(true);
     setError("");
+    let stage = "Supabase sign-in";
+    const trace = (event: string) => console.info(`[admin-login] ${event}`);
     try {
       if (mode === "register") {
         const availability = await getAdminRegistrationStatus();
@@ -90,18 +92,43 @@ function AdminLogin() {
           return;
         }
       } else {
+        trace("signInWithPassword started");
         const result = await withAdminAuthTimeout(supabase.auth.signInWithPassword({ email: email.trim(), password }));
+        trace(`signInWithPassword completed: ${result.error ? "error" : "success"}`);
         if (result.error) {
           setError(authError(result.error.message));
           return;
         }
       }
-      await withAdminAuthTimeout(adminMe({ headers: await supabaseAuthHeaders() }));
-      await navigate({ to: "/admin/$section", params: { section: "dashboard" } });
+      stage = "Supabase access token";
+      const headers = await supabaseAuthHeaders();
+      trace("access token available");
+      stage = "Admin role verification";
+      trace("adminMe request started");
+      await withAdminAuthTimeout(adminMe({ headers }));
+      trace("adminMe role verification completed");
+      stage = "Admin dashboard navigation";
+      await withAdminAuthTimeout(
+        navigate({ to: "/admin/$section", params: { section: "dashboard" } }),
+        "Admin dashboard navigation timed out. Please try again.",
+      );
+      trace("dashboard navigation completed");
     } catch (err) {
-      await supabase.auth.signOut().catch(() => {});
-      const message = err instanceof Error ? err.message : "This account does not have super admin access.";
-      setError(message === "FORBIDDEN" ? "Admin registration is closed." : message);
+      const message = err instanceof Error ? err.message : "Admin authentication failed.";
+      const timedOut = message.toLowerCase().includes("timed out");
+      const stageMessage = timedOut
+        ? `${stage} timed out. Please try again.`
+        : message === "FORBIDDEN"
+          ? mode === "register" ? "Admin registration is closed." : "This Supabase user does not have super admin access."
+          : stage === "Admin role verification" && message.toLowerCase().includes("unauthorized")
+            ? "Admin session could not be verified. Please sign in again."
+            : message;
+      trace(`failed at ${stage}: ${stageMessage}`);
+      setError(stageMessage);
+      await withAdminAuthTimeout(
+        supabase.auth.signOut(),
+        "Admin sign-out cleanup timed out. Please close the page and try again.",
+      ).catch(() => {});
     } finally {
       setBusy(false);
     }

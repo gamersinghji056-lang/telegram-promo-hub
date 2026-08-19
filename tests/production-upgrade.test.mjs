@@ -245,7 +245,7 @@ test("admin login supports guarded first-admin registration", () => {
   assert(login.includes("Confirm Password"));
   assert(login.includes("CREATE ADMIN ACCOUNT"));
   assert(login.includes("Admin registration is closed."));
-  assert(login.includes("adminMe({ headers: await supabaseAuthHeaders() })"));
+  assert(login.includes("adminMe({ headers })"));
   assert(funcs.includes("getAdminRegistrationStatus"));
   assert(data.includes('eq("role", "super_admin")'));
   assert(data.includes('if (error) throw new Error("FORBIDDEN")'));
@@ -261,8 +261,16 @@ test("admin auth forwards Supabase bearer tokens with a timeout guard", () => {
   assert(attacher.includes("AUTH_LOOKUP_TIMEOUT_MS"));
   assert(attacher.includes("withAdminAuthTimeout"));
   assert(login.includes("withAdminAuthTimeout(supabase.auth.signInWithPassword"));
-  assert(login.includes("adminMe({ headers: await supabaseAuthHeaders() })"));
+  assert(login.includes("adminMe({ headers })"));
   assert(route.includes("adminMe({ headers: await supabaseAuthHeaders() })"));
+  assert(login.includes("supabase.auth.signOut()"));
+  assert(login.includes("Admin sign-out cleanup timed out"));
+  assert(login.includes("finally"));
+  assert(login.includes("adminMe request started"));
+  assert(login.includes("dashboard navigation completed"));
+  assert(login.includes("does not have super admin access"));
+  assert(read("src/integrations/supabase/auth-middleware.ts").includes("hasAuthorization"));
+  assert(read("src/lib/admin.functions.ts").includes("adminMe received authenticated request"));
 });
 
 test("billing cards are DB-driven and do not fabricate usage", () => {
