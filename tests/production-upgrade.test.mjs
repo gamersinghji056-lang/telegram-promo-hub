@@ -245,6 +245,7 @@ test("admin login supports guarded first-admin registration", () => {
   assert(login.includes("Confirm Password"));
   assert(login.includes("CREATE ADMIN ACCOUNT"));
   assert(login.includes("Admin registration is closed."));
+  assert(login.includes('disabled={busy || (mode === "register" && registerDisabled)}'));
   assert(login.includes("adminMe({ headers })"));
   assert(funcs.includes("getAdminRegistrationStatus"));
   assert(data.includes('eq("role", "super_admin")'));

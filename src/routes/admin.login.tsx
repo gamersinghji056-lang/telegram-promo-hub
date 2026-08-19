@@ -159,7 +159,7 @@ function AdminLogin() {
           </label>
         )}
         {error && <p className="mt-4 text-sm text-destructive">{error}</p>}
-        <Button type="submit" className="mt-6 w-full" disabled={busy || registerDisabled}>
+        <Button type="submit" className="mt-6 w-full" disabled={busy || (mode === "register" && registerDisabled)}>
           {busy ? (mode === "register" ? "Creating account…" : "Signing in…") : mode === "register" ? "CREATE ADMIN ACCOUNT" : "Sign in"}
         </Button>
         <button type="button" className="mt-5 w-full text-sm text-primary hover:underline" onClick={() => selectMode(mode === "signin" ? "register" : "signin")}>
