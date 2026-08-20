@@ -12,6 +12,13 @@ import {
   ensureDefaultPlans,
   tenantUsageDashboard,
 } from "./entitlements.server";
+import {
+  OFFICIAL_PLAN_CODES,
+  activatePaidInvoice,
+  grantPremiumEmoji,
+  premiumEmojiEntitlement,
+} from "./billing.server";
+import { tronMonitorHealth } from "./tron-monitor.server";
 
 export async function assertSuperAdmin(userId: string) {
   const client = db();
@@ -237,7 +244,7 @@ export async function adminCustomerDetail(customerId: string) {
     .maybeSingle();
   if (!customer) throw new Error("Customer not found.");
   const tenantId = customer.tenant_id as string;
-  const [connections, groups, campaigns, transactions, logs, subscription, usage, adminLogs] = await Promise.all([
+  const [connections, groups, campaigns, transactions, invoices, logs, subscription, premiumEmoji, usage, adminLogs] = await Promise.all([
     client.from("telegram_connections").select("*").eq("tenant_id", tenantId),
     client
       .from("discovered_groups")
@@ -257,6 +264,12 @@ export async function adminCustomerDetail(customerId: string) {
       .order("created_at", { ascending: false })
       .limit(50),
     client
+      .from("billing_invoices")
+      .select("*")
+      .eq("tenant_id", tenantId)
+      .order("created_at", { ascending: false })
+      .limit(25),
+    client
       .from("system_logs")
       .select("*")
       .eq("tenant_id", tenantId)
@@ -269,6 +282,7 @@ export async function adminCustomerDetail(customerId: string) {
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle(),
+    premiumEmojiEntitlement(tenantId),
     tenantUsageDashboard(tenantId),
     client
       .from("admin_logs")
@@ -283,8 +297,10 @@ export async function adminCustomerDetail(customerId: string) {
     groups: groups.data ?? [],
     campaigns: campaigns.data ?? [],
     transactions: transactions.data ?? [],
+    invoices: invoices.data ?? [],
     logs: logs.data ?? [],
     subscription: subscription.data,
+    premiumEmoji,
     usage,
     adminLogs: adminLogs.data ?? [],
   };
@@ -505,7 +521,7 @@ export async function adminSaveNotes(adminId: string, customerId: string, notes:
 
 export async function adminPlans() {
   await ensureDefaultPlans();
-  const { data } = await db().from("plans").select("*").order("sort_order");
+  const { data } = await db().from("plans").select("*").in("code", OFFICIAL_PLAN_CODES).order("sort_order");
   return data ?? [];
 }
 
@@ -581,12 +597,21 @@ export async function adminSubscriptions() {
 }
 
 export async function adminTransactions() {
-  const { data } = await db()
-    .from("billing_transactions")
-    .select("*, plans(name), tenants(name)")
-    .order("created_at", { ascending: false })
-    .limit(300);
-  return data ?? [];
+  const [invoices, transactions, monitor] = await Promise.all([
+    db()
+      .from("billing_invoices")
+      .select("*, plans(name), tenants(name, customers(email))")
+      .order("created_at", { ascending: false })
+      .limit(300),
+    db()
+      .from("billing_transactions")
+      .select("*, plans(name), tenants(name)")
+      .is("invoice_id", null)
+      .order("created_at", { ascending: false })
+      .limit(100),
+    tronMonitorHealth(),
+  ]);
+  return { invoices: invoices.data ?? [], legacyTransactions: transactions.data ?? [], monitor };
 }
 
 export async function adminUpdateTransaction(
@@ -596,6 +621,43 @@ export async function adminUpdateTransaction(
   txHash?: string,
 ) {
   const client = db();
+  const { data: invoice } = await client.from("billing_invoices").select("*").eq("id", id).maybeSingle();
+  if (invoice) {
+    if (status === "CONFIRMED" || status === "PAID") {
+      if (!txHash && !invoice.tx_hash) throw new Error("Transaction hash/reference is required.");
+      if (txHash) {
+        const { data: usedInvoice } = await client
+          .from("billing_invoices")
+          .select("id")
+          .eq("tx_hash", txHash)
+          .neq("id", id)
+          .maybeSingle();
+        if (usedInvoice) throw new Error("This transaction has already been used.");
+        await client
+          .from("billing_invoices")
+          .update({
+            status: "REVIEW_REQUIRED",
+            tx_hash: txHash,
+            review_reason: "Manual admin confirmation pending activation.",
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", id);
+      }
+      return activatePaidInvoice(id, "ADMIN", adminId, "Manual admin confirmation");
+    }
+    const nextStatus = status === "FAILED" ? "REVIEW_REQUIRED" : status;
+    await client
+      .from("billing_invoices")
+      .update({
+        status: nextStatus,
+        review_reason: status === "FAILED" ? "Rejected by admin." : null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", id);
+    await client.from("billing_transactions").update({ status: nextStatus, updated_at: new Date().toISOString() }).eq("invoice_id", id);
+    await logAdmin({ admin_user_id: adminId, action: "INVOICE_UPDATED", resource: id, details: { status: nextStatus } });
+    return { ok: true };
+  }
   const { data: tx } = await client
     .from("billing_transactions")
     .select("*")
@@ -648,6 +710,13 @@ export async function adminUpdateTransaction(
     details: { status },
   });
   return { ok: true };
+}
+
+export async function adminGrantPremiumEmoji(
+  adminId: string,
+  input: { tenantId: string; expiresAt?: string | null; noExpiry?: boolean; reason?: string | null; revoke?: boolean },
+) {
+  return grantPremiumEmoji(adminId, input.tenantId, input);
 }
 
 export async function adminSubscriptionAction(

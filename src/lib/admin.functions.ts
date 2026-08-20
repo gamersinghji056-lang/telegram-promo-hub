@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import * as admin from "./admin-data.server";
+import { adminPreferences, saveAdminPreferences } from "./preferences.server";
 
 export const getAdminRegistrationStatus = createServerFn({ method: "GET" })
   .handler(async () => admin.adminRegistrationStatus());
@@ -12,6 +13,21 @@ export const adminMe = createServerFn({ method: "POST" })
     await admin.assertSuperAdmin(context.userId);
     console.info("[admin-auth] adminMe super_admin verification completed");
     return { ok: true, userId: context.userId };
+  });
+
+export const getAdminPreferences = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    await admin.assertSuperAdmin(context.userId);
+    return adminPreferences(context.userId);
+  });
+
+export const saveAdminPreferenceSettings = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((i: { language?: string; theme?: string }) => i)
+  .handler(async ({ context, data }) => {
+    await admin.assertSuperAdmin(context.userId);
+    return saveAdminPreferences(context.userId, data);
   });
 
 export const getAdminDashboard = createServerFn({ method: "POST" })
@@ -67,6 +83,20 @@ export const grantCustomerPlan = createServerFn({ method: "POST" })
   .handler(async ({ context, data }) => {
     await admin.assertSuperAdmin(context.userId);
     return admin.adminGrantPlan(context.userId, data);
+  });
+
+export const grantPremiumEmoji = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((i: {
+    tenantId: string;
+    expiresAt?: string | null;
+    noExpiry?: boolean;
+    reason?: string | null;
+    revoke?: boolean;
+  }) => i)
+  .handler(async ({ context, data }) => {
+    await admin.assertSuperAdmin(context.userId);
+    return admin.adminGrantPremiumEmoji(context.userId, data);
   });
 
 export const forceLogoutCustomer = createServerFn({ method: "POST" })

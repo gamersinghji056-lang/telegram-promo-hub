@@ -29,6 +29,16 @@ import {
   incrementMonthlyUsage,
   tenantUsageDashboard,
 } from "./entitlements.server";
+import {
+  PLAN_RANK,
+  PREMIUM_EMOJI_CODE,
+  activeInvoice,
+  createInvoice,
+  invoiceByIdForTenant,
+  officialPlans,
+  premiumEmojiEntitlement,
+  premiumEmojiSettings,
+} from "./billing.server";
 const LINK_CODE_TTL_MS = 15 * 60_000;
 
 export function hashConnectionLinkCode(code: string) {
@@ -2679,6 +2689,15 @@ export async function createCampaign(
     template_id?: string | null;
     message: {
       text?: string;
+      entities?: {
+        type: "custom_emoji" | "bold" | "italic" | "underline" | "strikethrough" | "spoiler" | "text_link";
+        offset: number;
+        length: number;
+        document_id?: string;
+        fallback?: string;
+        url?: string;
+        premium_required?: boolean;
+      }[];
       media_type?: string | null;
       media_url?: string | null;
       buttons?: { text: string; url: string }[];
@@ -2851,6 +2870,7 @@ export async function createCampaign(
         template_id:
           input.template_id ?? null,
         message: input.message,
+        message_entities: input.message.entities ?? [],
         group_category_id:
           input.group_category_id ?? null,
         min_delay_seconds: minDelay,
@@ -3080,6 +3100,15 @@ export async function updateCampaign(
     group_category_id?: string | null;
     message: {
       text?: string;
+      entities?: {
+        type: "custom_emoji" | "bold" | "italic" | "underline" | "strikethrough" | "spoiler" | "text_link";
+        offset: number;
+        length: number;
+        document_id?: string;
+        fallback?: string;
+        url?: string;
+        premium_required?: boolean;
+      }[];
       media_type?: string | null;
       media_url?: string | null;
       buttons?: { text: string; url: string }[];
@@ -3102,6 +3131,7 @@ export async function updateCampaign(
       connection_id: input.connection_id ?? null,
       group_category_id: input.group_category_id ?? null,
       message: input.message,
+      message_entities: input.message.entities ?? [],
       min_delay_seconds: minDelay,
       max_delay_seconds: maxDelay,
       cycle_delay_minutes: Math.max(1, Number(input.cycle_delay_minutes ?? 20)),
@@ -3385,10 +3415,10 @@ export async function analytics(ctx: AuthContext) {
 export async function billing(ctx: AuthContext) {
   const client = db();
   await ensureDefaultPlans();
-  const [tenant, { data: plans }, { data: subscription }, { data: transactions }, payments, usage] =
+  const [tenant, plans, { data: subscription }, { data: transactions }, { data: invoices }, payments, usage, active, premiumEmoji, premiumEmojiProduct] =
     await Promise.all([
       tenantOverview(ctx),
-      client.from("plans").select("*").eq("is_active", true).eq("is_public", true).order("sort_order"),
+      officialPlans(),
       client
         .from("subscriptions")
         .select("*, plans(*)")
@@ -3402,17 +3432,44 @@ export async function billing(ctx: AuthContext) {
         .eq("tenant_id", ctx.tenantId)
         .order("created_at", { ascending: false })
         .limit(50),
+      client
+        .from("billing_invoices")
+        .select("*")
+        .eq("tenant_id", ctx.tenantId)
+        .order("created_at", { ascending: false })
+        .limit(50),
       getSetting<{ payment_enabled?: boolean; network?: string; wallet_address?: string }>(
         "payments",
       ),
       tenantUsageDashboard(ctx.tenantId),
+      activeInvoice(ctx.tenantId),
+      premiumEmojiEntitlement(ctx.tenantId),
+      premiumEmojiSettings(),
     ]);
+  const currentCode = String(usage.plan?.code ?? tenant?.plans?.code ?? "TEST").toUpperCase();
+  const currentRank = usage.expired ? (PLAN_RANK.TEST ?? 0) : (PLAN_RANK[currentCode] ?? PLAN_RANK.TEST ?? 0);
+  const upgradePlans = (plans ?? []).filter((plan: Record<string, unknown>) => {
+    const code = String(plan["code"] ?? "").toUpperCase();
+    return (PLAN_RANK[code] ?? -1) > currentRank;
+  });
   return {
     tenant,
-    plans: plans ?? [],
+    plans: upgradePlans,
+    officialPlans: plans ?? [],
     subscription,
     transactions: transactions ?? [],
+    invoices: invoices ?? [],
+    activeInvoice: active,
     usage,
+    addons: {
+      premiumEmoji: {
+        ...premiumEmojiProduct,
+        code: PREMIUM_EMOJI_CODE,
+        name: "Premium Emoji",
+        active: premiumEmoji.active,
+        entitlement: premiumEmoji.entitlement,
+      },
+    },
     payments: {
       enabled: !!payments.payment_enabled && !!payments.wallet_address,
       network: payments.network ?? "TRC20",
@@ -3421,8 +3478,9 @@ export async function billing(ctx: AuthContext) {
   };
 }
 
-export async function requestPayment(ctx: AuthContext, planId: string) {
+export async function requestPayment(ctx: AuthContext, input: string | { planId: string; replace?: boolean }) {
   const client = db();
+  const planId = typeof input === "string" ? input : input.planId;
   const { data: plan } = await client
     .from("plans")
     .select("*")
@@ -3431,6 +3489,13 @@ export async function requestPayment(ctx: AuthContext, planId: string) {
     .eq("is_public", true)
     .maybeSingle();
   if (!plan) throw new Error("Plan not found.");
+  const current = await tenantUsageDashboard(ctx.tenantId);
+  const currentCode = String(current.plan?.code ?? "TEST").toUpperCase();
+  const currentRank = current.expired ? (PLAN_RANK.TEST ?? 0) : (PLAN_RANK[currentCode] ?? PLAN_RANK.TEST ?? 0);
+  const targetCode = String(plan.code ?? "").toUpperCase();
+  if ((PLAN_RANK[targetCode] ?? -1) <= currentRank) {
+    throw new Error("This plan is not available as an upgrade from your current plan.");
+  }
   if (Number(plan.price_usd ?? 0) <= 0) {
     const expires = Number(plan.duration_days ?? 0) > 0
       ? new Date(Date.now() + Number(plan.duration_days) * 86400_000).toISOString()
@@ -3452,28 +3517,32 @@ export async function requestPayment(ctx: AuthContext, planId: string) {
     await notify(ctx.tenantId, "Plan updated", `Your ${plan.name} plan is active.`, "SUCCESS", "/mini-app/billing");
     return { status: "ACTIVE", free: true, plan_id: plan.id };
   }
-  const payments = await getSetting<{
-    payment_enabled?: boolean;
-    network?: string;
-    wallet_address?: string;
-  }>("payments");
-  if (!payments.payment_enabled || !payments.wallet_address)
-    throw new Error("Payments are not configured yet. Contact support to upgrade.");
-  const { data, error } = await client
-    .from("billing_transactions")
-    .insert({
-      tenant_id: ctx.tenantId,
-      plan_id: planId,
-      amount: plan.price_usd,
-      currency: "USDT",
-      network: payments.network ?? "TRC20",
-      wallet_address: payments.wallet_address,
-      status: "PENDING",
-    })
-    .select("*")
-    .single();
-  if (error) throw new Error(error.message);
-  return data;
+  return createInvoice({
+    tenantId: ctx.tenantId,
+    productType: "PLAN",
+    productCode: targetCode,
+    planId,
+    basePrice: Number(plan.price_usd),
+    replace: typeof input === "object" ? input.replace : false,
+  });
+}
+
+export async function requestPremiumEmojiPayment(ctx: AuthContext, input: { replace?: boolean } = {}) {
+  const entitlement = await premiumEmojiEntitlement(ctx.tenantId);
+  if (entitlement.active) throw new Error("Premium Emoji is already active.");
+  const settings = await premiumEmojiSettings();
+  if (!settings.enabled) throw new Error("Premium Emoji add-on is not available.");
+  return createInvoice({
+    tenantId: ctx.tenantId,
+    productType: "ADDON",
+    productCode: PREMIUM_EMOJI_CODE,
+    basePrice: settings.price_usd,
+    replace: input.replace,
+  });
+}
+
+export async function getInvoiceStatus(ctx: AuthContext, invoiceId: string) {
+  return invoiceByIdForTenant(ctx.tenantId, invoiceId);
 }
 
 export async function listNotifications(ctx: AuthContext) {

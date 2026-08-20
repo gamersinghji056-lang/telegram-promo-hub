@@ -103,6 +103,11 @@ function RootShell({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(()=>{try{const t=localStorage.getItem("wpay-theme")||"system";const l=localStorage.getItem("wpay-language")||"en";const dark=t==="dark"||(t==="system"&&matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.classList.toggle("dark",dark);document.documentElement.dir=l==="fa"?"rtl":"ltr";document.documentElement.lang=l;}catch{}})();`,
+          }}
+        />
         <HeadContent />
       </head>
       <body>

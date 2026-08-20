@@ -4,6 +4,8 @@ import {
   processBulkJoinJobs,
   processGroupDiscoveryJobs,
 } from "./customer-data.server";
+import { expireInvoices } from "./billing.server";
+import { processTronUsdtPayments } from "./tron-monitor.server";
 
 declare global {
   var __wpayBackgroundWorkersStarted: boolean | undefined;
@@ -26,6 +28,12 @@ export function startBackgroundWorkers() {
     running = true;
     try {
       await processCampaignJobs(Number(process.env["CAMPAIGN_WORKER_BATCH_LIMIT"] ?? 10));
+      try {
+        await expireInvoices();
+        await processTronUsdtPayments();
+      } catch (paymentError) {
+        console.error("Payment worker failed", paymentError instanceof Error ? paymentError.message : paymentError);
+      }
       await processGroupDiscoveryJobs(Number(process.env["GROUP_DISCOVERY_BATCH_LIMIT"] ?? 5));
       await processAudienceDiscoveryJobs(Number(process.env["AUDIENCE_DISCOVERY_BATCH_LIMIT"] ?? 2));
       await processBulkJoinJobs(Number(process.env["BULK_JOIN_BATCH_LIMIT"] ?? 2));

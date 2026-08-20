@@ -7,7 +7,7 @@ export function db(): SupabaseClient {
   });
 }
 
-export type SettingsKey = "general" | "registration" | "payments" | "telegram" | "discovery";
+export type SettingsKey = "general" | "registration" | "payments" | "telegram" | "discovery" | "addons";
 
 export async function getSetting<T = Record<string, unknown>>(key: SettingsKey): Promise<T> {
   const { data } = await db().from("system_settings").select("value").eq("key", key).maybeSingle();

@@ -89,6 +89,61 @@ function errorMessage(error: unknown) {
   return telegramErrorMessage(error);
 }
 
+type StoredMessageEntity = NonNullable<MessagePayload["entities"]>[number] & { premium_required?: boolean };
+
+function utf16Length(value: string) {
+  return [...value].reduce((sum, char) => sum + (char.codePointAt(0)! > 0xffff ? 2 : 1), 0);
+}
+
+function sendText(message: MessagePayload) {
+  return [message.text ?? ""]
+    .concat((message.buttons ?? []).map((button) => `${button.text}: ${button.url}`))
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function buildFormattingEntities(message: MessagePayload) {
+  return (message.entities ?? []).map((entity: StoredMessageEntity) => {
+    const base = { offset: entity.offset, length: entity.length };
+    if (entity.type === "custom_emoji") {
+      if (!entity.document_id) throw new Error("This custom emoji is no longer available.");
+      return new Api.MessageEntityCustomEmoji({ ...base, documentId: bigInt(String(entity.document_id)) });
+    }
+    if (entity.type === "bold") return new Api.MessageEntityBold(base);
+    if (entity.type === "italic") return new Api.MessageEntityItalic(base);
+    if (entity.type === "underline") return new Api.MessageEntityUnderline(base);
+    if (entity.type === "strikethrough") return new Api.MessageEntityStrike(base);
+    if (entity.type === "spoiler") return new Api.MessageEntitySpoiler(base);
+    if (entity.type === "text_link" && entity.url) return new Api.MessageEntityTextUrl({ ...base, url: entity.url });
+    return null;
+  }).filter(Boolean) as Api.TypeMessageEntity[];
+}
+
+async function validateCustomEmojiEntities(client: TelegramClient, message: MessagePayload) {
+  const custom = (message.entities ?? []).filter((entity): entity is StoredMessageEntity =>
+    entity.type === "custom_emoji" && Boolean(entity.document_id),
+  );
+  if (!custom.length) return;
+  const textLength = utf16Length(message.text ?? "");
+  for (const entity of custom) {
+    if (entity.offset < 0 || entity.length <= 0 || entity.offset + entity.length > textLength) {
+      throw new Error("Custom emoji entity offset is invalid.");
+    }
+  }
+  const ids = [...new Set(custom.map((entity) => String(entity.document_id)))];
+  const docs = await client.invoke(new Api.messages.GetCustomEmojiDocuments({
+    documentId: ids.map((id) => bigInt(id)),
+  }));
+  const found = new Set((docs ?? []).map((doc) => String((doc as Api.Document).id)));
+  for (const id of ids) {
+    if (!found.has(id)) throw new Error("This custom emoji is no longer available.");
+  }
+  const user = (await client.getMe()) as Api.User & { premium?: boolean };
+  if (custom.some((entity) => entity.premium_required === true) && !user.premium) {
+    throw new Error("This linked Telegram account requires Telegram Premium to send this custom emoji.");
+  }
+}
+
 function accessHash(value: unknown) {
   if (!value || typeof value !== "object" || !("accessHash" in value)) return null;
   const hash = (value as { accessHash?: { toString?: () => string } | string | number }).accessHash;
@@ -1361,13 +1416,12 @@ export async function sendViaUserSession(
 ) {
   return withAuthorizedUserClient(tenantId, connectionId, async (client) => {
     try {
-      const text = [message.text ?? ""]
-        .concat((message.buttons ?? []).map((button) => `${button.text}: ${button.url}`))
-        .filter(Boolean)
-        .join("\n\n");
+      await validateCustomEmojiEntities(client, message);
+      const text = sendText(message);
       await client.sendMessage(target, {
         ...(text ? { message: text } : {}),
         ...(message.media_url ? { file: message.media_url } : {}),
+        ...(message.entities?.length ? { formattingEntities: buildFormattingEntities(message) } : {}),
         linkPreview: true,
       });
       await recordSessionHealthEvidence({ tenantId, connectionId, evidence: "SEND_OK", reason: "Message sent successfully" });
@@ -1421,13 +1475,12 @@ export async function sendGroupViaUserSession(
       if (entity instanceof Api.Channel && !channelWritable(entity)) {
         throw new Error("CHAT_WRITE_FORBIDDEN: selected Telegram session cannot post to this group/channel.");
       }
-      const text = [message.text ?? ""]
-        .concat((message.buttons ?? []).map((button) => `${button.text}: ${button.url}`))
-        .filter(Boolean)
-        .join("\n\n");
+      await validateCustomEmojiEntities(client, message);
+      const text = sendText(message);
       await client.sendMessage(entity, {
         ...(text ? { message: text } : {}),
         ...(message.media_url ? { file: message.media_url } : {}),
+        ...(message.entities?.length ? { formattingEntities: buildFormattingEntities(message) } : {}),
         linkPreview: true,
       });
       await recordSessionHealthEvidence({ tenantId, connectionId, evidence: "SEND_OK", reason: "Group message sent successfully" });
@@ -1473,13 +1526,12 @@ export async function sendDirectViaUserSession(
         accessHash: target.accessHash ?? null,
         entityType: "USER",
       });
-      const text = [message.text ?? ""]
-        .concat((message.buttons ?? []).map((button) => `${button.text}: ${button.url}`))
-        .filter(Boolean)
-        .join("\n\n");
+      await validateCustomEmojiEntities(client, message);
+      const text = sendText(message);
       await client.sendMessage(entity, {
         ...(text ? { message: text } : {}),
         ...(message.media_url ? { file: message.media_url } : {}),
+        ...(message.entities?.length ? { formattingEntities: buildFormattingEntities(message) } : {}),
         linkPreview: true,
       });
       await recordSessionHealthEvidence({ tenantId, connectionId, evidence: "SEND_OK", reason: "Direct message sent successfully" });

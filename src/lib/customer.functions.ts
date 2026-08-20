@@ -8,6 +8,7 @@ import {
   resolveAuth,
 } from "./customer-auth.server";
 import * as data from "./customer-data.server";
+import { customerPreferences, saveCustomerPreferences } from "./preferences.server";
 
 type Auth = { auth: string };
 
@@ -262,6 +263,20 @@ export const verifyWritableGroups = createServerFn({ method: "POST" })
     }),
   );
 
+export const getCustomerPreferences = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth) => i)
+  .handler(async ({ data: i }) => customerPreferences(await resolveAuth(i.auth)));
+
+export const saveCustomerPreferenceSettings = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { language?: string; theme?: string; notifications?: Record<string, string | number | boolean | null> }) => i)
+  .handler(async ({ data: i }) =>
+    saveCustomerPreferences(await resolveAuth(i.auth), {
+      language: i.language,
+      theme: i.theme,
+      notifications: i.notifications,
+    }),
+  );
+
 export const testWritableGroups = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { groupIds: string[]; joinIfRequired?: boolean }) => i)
   .handler(async ({ data: i }) =>
@@ -418,6 +433,15 @@ export const createCampaign = createServerFn({ method: "POST" })
         template_id?: string | null;
         message: {
           text?: string;
+          entities?: {
+            type: "custom_emoji" | "bold" | "italic" | "underline" | "strikethrough" | "spoiler" | "text_link";
+            offset: number;
+            length: number;
+            document_id?: string;
+            fallback?: string;
+            url?: string;
+            premium_required?: boolean;
+          }[];
           media_type?: string | null;
           media_url?: string | null;
           buttons?: { text: string; url: string }[];
@@ -459,6 +483,15 @@ export const updateCampaign = createServerFn({ method: "POST" })
         group_category_id?: string | null;
         message: {
           text?: string;
+          entities?: {
+            type: "custom_emoji" | "bold" | "italic" | "underline" | "strikethrough" | "spoiler" | "text_link";
+            offset: number;
+            length: number;
+            document_id?: string;
+            fallback?: string;
+            url?: string;
+            premium_required?: boolean;
+          }[];
           media_type?: string | null;
           media_url?: string | null;
           buttons?: { text: string; url: string }[];
@@ -494,8 +527,16 @@ export const getBilling = createServerFn({ method: "POST" })
   .handler(async ({ data: i }) => data.billing(await resolveAuth(i.auth)));
 
 export const requestPayment = createServerFn({ method: "POST" })
-  .inputValidator((i: Auth & { planId: string }) => i)
-  .handler(async ({ data: i }) => data.requestPayment(await resolveAuth(i.auth), i.planId));
+  .inputValidator((i: Auth & { planId: string; replace?: boolean }) => i)
+  .handler(async ({ data: i }) => data.requestPayment(await resolveAuth(i.auth), { planId: i.planId, replace: i.replace }));
+
+export const requestPremiumEmojiPayment = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { replace?: boolean }) => i)
+  .handler(async ({ data: i }) => data.requestPremiumEmojiPayment(await resolveAuth(i.auth), { replace: i.replace }));
+
+export const getInvoiceStatus = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { invoiceId: string }) => i)
+  .handler(async ({ data: i }) => data.getInvoiceStatus(await resolveAuth(i.auth), i.invoiceId));
 
 export const getNotifications = createServerFn({ method: "POST" })
   .inputValidator((i: Auth) => i)

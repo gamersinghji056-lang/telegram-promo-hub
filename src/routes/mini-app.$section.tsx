@@ -63,6 +63,7 @@ import {
   getGroupWritabilitySummary,
   getGroups,
   getKeywords,
+  getCustomerPreferences,
   getNotifications,
   getOwnActivity,
   rejectGroup,
@@ -70,7 +71,9 @@ import {
   removeKeyword,
   removeConnection,
   removeGroup,
+  getInvoiceStatus,
   requestPayment,
+  requestPremiumEmojiPayment,
   runGroupDiscovery,
   pauseGroupDiscovery,
   searchGroupDiscoveryNow,
@@ -81,6 +84,7 @@ import {
   pauseAudienceDiscovery,
   pauseBulkJoin,
   saveGroupCategory,
+  saveCustomerPreferenceSettings,
   testSendableGroups,
   testSessionHealth,
   resumeBulkJoin,
@@ -191,10 +195,12 @@ function panelClass(extra = "") {
 }
 
 function statusTone(status?: string) {
-  if (["CONNECTED", "JOINED", "SENT", "COMPLETED", "APPROVED", "OPTED_IN"].includes(status ?? ""))
+  if (["CONNECTED", "JOINED", "SENT", "COMPLETED", "APPROVED", "OPTED_IN", "PAID", "CONFIRMED"].includes(status ?? ""))
     return "text-success";
-  if (["ERROR", "FAILED", "RESTRICTED", "REJECTED", "CANCELLED"].includes(status ?? ""))
+  if (["ERROR", "FAILED", "RESTRICTED", "REJECTED", "CANCELLED", "EXPIRED", "UNDERPAID", "LATE_PAYMENT"].includes(status ?? ""))
     return "text-destructive";
+  if (["PAYMENT_DETECTED", "CONFIRMING", "OVERPAID", "REVIEW_REQUIRED"].includes(status ?? ""))
+    return "text-warning";
   return "text-primary";
 }
 
@@ -271,6 +277,8 @@ function MiniAppSection() {
     controlCampaign: useServerFn(controlCampaign),
     updateAccountName: useServerFn(updateAccountName),
     changeAccountPassword: useServerFn(changeAccountPassword),
+    getCustomerPreferences: useServerFn(getCustomerPreferences),
+    saveCustomerPreferenceSettings: useServerFn(saveCustomerPreferenceSettings),
     logout: useServerFn(logoutCustomer),
   };
 
@@ -343,6 +351,7 @@ function MiniAppSection() {
       settings: async (a) => ({
         logs: await logsFn({ data: { auth: a } }),
         profile: await profileFn({ data: { auth: a } }),
+        preferences: await actions.getCustomerPreferences({ data: { auth: a } }),
       }),
     }),
     [],
@@ -2533,6 +2542,7 @@ function DMCampaign({ auth, data, actions, reload, setNotice, actionBusy, runAct
   const [selected, setSelected] = useState<string[]>([]);
   const [connectionId, setConnectionId] = useState("");
   const [message, setMessage] = useState("");
+  const [messageEntities, setMessageEntities] = useState<any[]>([]);
   const [mediaUrl, setMediaUrl] = useState("");
   const [mediaType, setMediaType] = useState("");
   const [buttonText, setButtonText] = useState("");
@@ -2553,6 +2563,7 @@ function DMCampaign({ auth, data, actions, reload, setNotice, actionBusy, runAct
           connection_id: connectionId,
           message: {
             text: message,
+            entities: messageEntities,
             media_type: mediaType || null,
             media_url: mediaUrl || null,
             buttons,
@@ -2620,6 +2631,9 @@ function DMCampaign({ auth, data, actions, reload, setNotice, actionBusy, runAct
         setName={setName}
         message={message}
         setMessage={setMessage}
+        entities={messageEntities}
+        setEntities={setMessageEntities}
+        premiumEmojiActive={data?.billing?.addons?.premiumEmoji?.active ?? data?.addons?.premiumEmoji?.active}
         mediaType={mediaType}
         setMediaType={setMediaType}
         mediaUrl={mediaUrl}
@@ -2661,6 +2675,7 @@ function GroupCampaign({ auth, data, actions, reload, setNotice, actionBusy, run
   const [categoryId, setCategoryId] = useState("");
   const [connectionId, setConnectionId] = useState("");
   const [message, setMessage] = useState("");
+  const [messageEntities, setMessageEntities] = useState<any[]>([]);
   const [mediaUrl, setMediaUrl] = useState("");
   const [mediaType, setMediaType] = useState("");
   const [buttonText, setButtonText] = useState("");
@@ -2681,6 +2696,7 @@ function GroupCampaign({ auth, data, actions, reload, setNotice, actionBusy, run
           connection_id: connectionId,
           message: {
             text: message,
+            entities: messageEntities,
             media_type: mediaType || null,
             media_url: mediaUrl || null,
             buttons,
@@ -2753,6 +2769,9 @@ function GroupCampaign({ auth, data, actions, reload, setNotice, actionBusy, run
         setName={setName}
         message={message}
         setMessage={setMessage}
+        entities={messageEntities}
+        setEntities={setMessageEntities}
+        premiumEmojiActive={data?.billing?.addons?.premiumEmoji?.active ?? data?.addons?.premiumEmoji?.active}
         mediaType={mediaType}
         setMediaType={setMediaType}
         mediaUrl={mediaUrl}
@@ -3233,6 +3252,29 @@ function AudienceSummary({ result, selectable, selected, setSelected, auth, acti
 }
 
 function MessageForm(props: any) {
+  function utf16Length(value: string) {
+    return [...value].reduce((sum, char) => sum + (char.codePointAt(0)! > 0xffff ? 2 : 1), 0);
+  }
+  function addCustomEmoji() {
+    if (!props.premiumEmojiActive) {
+      alert("Premium Emoji add-on is required.");
+      return;
+    }
+    const fallback = prompt("Fallback emoji", "⭐") || "⭐";
+    const documentId = prompt("Telegram custom emoji document ID");
+    if (!documentId) return;
+    const premium = confirm("Does this emoji require Telegram Premium for the sending account?");
+    const nextText = `${props.message ?? ""}${fallback}`;
+    props.setMessage(nextText);
+    props.setEntities([...(props.entities ?? []), {
+      type: "custom_emoji",
+      offset: utf16Length(props.message ?? ""),
+      length: utf16Length(fallback),
+      document_id: documentId.trim(),
+      fallback,
+      premium_required: premium,
+    }]);
+  }
   return (
     <section className={panelClass("space-y-3")}>
       <input
@@ -3244,9 +3286,21 @@ function MessageForm(props: any) {
       <textarea
         className={inputClass("min-h-28")}
         value={props.message}
-        onChange={(e) => props.setMessage(e.target.value)}
+        onChange={(e) => {
+          props.setMessage(e.target.value);
+          if ((props.entities ?? []).length) props.setEntities([]);
+        }}
         placeholder="Message text"
       />
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" size="sm" variant="secondary" onClick={addCustomEmoji}>
+          <Sparkles className="size-4" />
+          {props.premiumEmojiActive ? "CUSTOM EMOJI" : "Premium Emoji - $20 add-on"}
+        </Button>
+        {(props.entities ?? []).length ? (
+          <span className="self-center text-xs text-muted-foreground">{props.entities.length} custom entity saved</span>
+        ) : null}
+      </div>
       <select
         className={inputClass()}
         value={props.mediaType}
@@ -3510,6 +3564,28 @@ function Billing({ auth, data, setNotice, actionBusy, runAction, reload }: any) 
   const usage = data?.usage ?? {};
   const currentPlan = usage.plan ?? data?.tenant?.plans ?? data?.subscription?.plans ?? {};
   const currentCode = currentPlan?.code ?? "";
+  const [invoice, setInvoice] = useState<any>(data?.activeInvoice ?? null);
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => setInvoice(data?.activeInvoice ?? null), [data?.activeInvoice?.id, data?.activeInvoice?.status]);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  useEffect(() => {
+    if (!invoice?.id || ["PAID", "EXPIRED", "CANCELLED", "UNDERPAID", "OVERPAID", "LATE_PAYMENT", "REVIEW_REQUIRED"].includes(String(invoice.status))) return;
+    const timer = window.setInterval(() => {
+      void getInvoiceStatus({ data: { auth, invoiceId: invoice.id } })
+        .then((next: any) => {
+          setInvoice(next);
+          if (next?.status === "PAID") {
+            setNotice("Payment confirmed. Your product is active.");
+            void reload();
+          }
+        })
+        .catch(() => {});
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [invoice?.id, invoice?.status, auth]);
   const usageRows = [
     ["Sessions", usage.counts?.sessions ?? 0, usage.limits?.max_connections ?? null],
     ["Campaigns", usage.counts?.active_campaigns ?? 0, usage.limits?.max_active_campaigns ?? null],
@@ -3521,6 +3597,26 @@ function Billing({ auth, data, setNotice, actionBusy, runAction, reload }: any) 
     ["Categories", usage.counts?.categories ?? 0, usage.limits?.max_categories ?? null],
   ];
   const paymentsEnabled = Boolean(data?.payments?.enabled);
+  const invoiceCountdown = invoice?.expires_at ? Math.max(0, Math.floor((new Date(invoice.expires_at).getTime() - now) / 1000)) : 0;
+  const countdownText = `${String(Math.floor(invoiceCountdown / 60)).padStart(2, "0")}:${String(invoiceCountdown % 60).padStart(2, "0")}`;
+  async function createOrReplaceInvoice(productLabel: string, create: (replace?: boolean) => Promise<any>) {
+    try {
+      const next = await create(false);
+      setInvoice(next);
+      setNotice("Payment invoice created.");
+      await reload();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not create invoice.";
+      if (message.includes("You already have an active") && confirm(`${message}\n\nCancel keeps the current invoice. OK replaces it.`)) {
+        const next = await create(true);
+        setInvoice(next);
+        setNotice(`${productLabel} invoice created.`);
+        await reload();
+        return;
+      }
+      throw error;
+    }
+  }
   const requestPlan = async (plan: any) => {
     const price = Number(plan.price_usd ?? 0);
     if (price > 0 && !paymentsEnabled) {
@@ -3528,11 +3624,19 @@ function Billing({ auth, data, setNotice, actionBusy, runAction, reload }: any) 
       return;
     }
     await runAction(`billing-${plan.id}`, async () => {
-      const response: any = await requestPayment({ data: { auth, planId: plan.id } });
-      setNotice(response?.free ? `${plan.name} is now active.` : "Payment order created. Admin will confirm after payment.");
-      await reload();
+      await createOrReplaceInvoice(plan.name, (replace) => requestPayment({ data: { auth, planId: plan.id, replace } }));
     });
   };
+  const requestPremiumEmoji = async () => {
+    if (!paymentsEnabled) {
+      setNotice("Online payments are not available yet. Contact support to activate this add-on.");
+      return;
+    }
+    await runAction("billing-premium-emoji", async () => {
+      await createOrReplaceInvoice("Premium Emoji", (replace) => requestPremiumEmojiPayment({ data: { auth, replace } }));
+    });
+  };
+  const history = [...(data?.invoices ?? []), ...(data?.transactions ?? []).filter((t: any) => !t.invoice_id)];
   return (
     <div className="space-y-3">
       <section className="rounded-lg border border-cyan-400/20 bg-slate-950/70 p-4 shadow-sm">
@@ -3564,6 +3668,64 @@ function Billing({ auth, data, setNotice, actionBusy, runAction, reload }: any) 
           Online payments are not available yet. Contact support to activate paid plans.
         </div>
       ) : null}
+      {invoice ? (
+        <section className="rounded-lg border border-emerald-400/30 bg-slate-950/80 p-4 shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase text-emerald-300">Active Invoice</p>
+              <h2 className="mt-1 text-lg font-semibold text-white">{invoice.product_code === "PREMIUM_EMOJI" ? "Premium Emoji" : invoice.product_code}</h2>
+              <p className="mt-1 text-xs text-slate-400">Invoice ID: {invoice.invoice_number ?? invoice.id}</p>
+            </div>
+            <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${statusTone(invoice.status)}`}>{invoice.status}</span>
+          </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-[128px_1fr]">
+            <img
+              className="size-32 rounded-md bg-white p-2"
+              src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(invoice.qr_payload ?? invoice.receiving_address ?? "")}`}
+              alt="USDT TRC20 payment QR"
+            />
+            <div className="space-y-2 text-sm">
+              <p className="font-semibold text-white">USDT TRC20</p>
+              <p className="text-slate-300">Exact Payable Amount</p>
+              <p className="break-all text-2xl font-semibold text-emerald-300">{Number(invoice.payable_amount).toFixed(6)} USDT</p>
+              <p className="text-slate-300">Receiving Address</p>
+              <p className="break-all rounded-md border border-white/10 bg-white/[0.03] p-2 font-mono text-xs text-white">{invoice.receiving_address}</p>
+              <p className="text-slate-300">Countdown: <span className="font-semibold text-white">{invoice.status === "EXPIRED" ? "Expired" : countdownText}</span></p>
+              <p className="text-slate-300">Status: {invoice.status === "PENDING" ? "Waiting for payment..." : invoice.status}</p>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" type="button" onClick={() => void navigator.clipboard?.writeText(invoice.receiving_address)}>COPY ADDRESS</Button>
+                <Button size="sm" type="button" variant="secondary" onClick={() => void navigator.clipboard?.writeText(Number(invoice.payable_amount).toFixed(6))}>COPY AMOUNT</Button>
+                <Button size="sm" type="button" variant="secondary" onClick={() => window.open(invoice.tronlink_url, "_blank", "noopener,noreferrer")}>OPEN TRONLINK</Button>
+              </div>
+              {invoice.status === "EXPIRED" ? (
+                <Button size="sm" type="button" onClick={() => setInvoice(null)}>CREATE NEW INVOICE</Button>
+              ) : null}
+            </div>
+          </div>
+        </section>
+      ) : null}
+      <section className={panelClass("space-y-3")}>
+        <div>
+          <p className="text-xs font-semibold uppercase text-primary">Add-ons</p>
+          <h2 className="mt-1 text-lg font-semibold">Premium Emoji</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Unlock WPAY custom emoji composer capability. This does not buy Telegram Premium for your linked account.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="font-semibold">$20 / 30 days</p>
+            <p className={data?.addons?.premiumEmoji?.active ? "text-sm text-success" : "text-sm text-muted-foreground"}>
+              {data?.addons?.premiumEmoji?.active
+                ? `Active until ${data.addons.premiumEmoji.entitlement?.expires_at ? new Date(data.addons.premiumEmoji.entitlement.expires_at).toLocaleDateString() : "No expiry"}`
+                : "Inactive"}
+            </p>
+          </div>
+          <Button disabled={data?.addons?.premiumEmoji?.active || actionBusy === "billing-premium-emoji"} onClick={() => void requestPremiumEmoji()}>
+            {data?.addons?.premiumEmoji?.active ? "ACTIVE" : "BUY ADD-ON"}
+          </Button>
+        </div>
+      </section>
       <section className="grid gap-3 sm:grid-cols-2">
         {(data?.plans ?? []).map((plan: any) => {
           const isCurrent = String(plan.code) === String(currentCode);
@@ -3606,14 +3768,20 @@ function Billing({ auth, data, setNotice, actionBusy, runAction, reload }: any) 
           );
         })}
       </section>
-      {(data?.transactions ?? []).map((t: any) => (
+      <section className={panelClass("space-y-2")}>
+        <p className="font-semibold">Payment History</p>
+      {history.map((t: any) => (
         <article key={t.id} className={panelClass()}>
           <p className="font-medium">
-            {t.amount} {t.currency}
+            {t.product_code ?? t.plans?.name ?? t.plan_id ?? "Payment"} - {Number(t.payable_amount ?? t.invoice_payable_amount ?? t.amount).toFixed(6)} {t.currency ?? "USDT"}
           </p>
           <p className={`mt-1 text-xs font-semibold ${statusTone(t.status)}`}>{t.status}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{t.created_at ? new Date(t.created_at).toLocaleString() : ""}</p>
+          {t.tx_hash ? <a className="text-xs text-primary hover:underline" href={`https://tronscan.org/#/transaction/${encodeURIComponent(t.tx_hash)}`} target="_blank" rel="noreferrer">TronScan</a> : null}
         </article>
       ))}
+      {!history.length ? <p className="text-sm text-muted-foreground">No payments yet.</p> : null}
+      </section>
     </div>
   );
 }
@@ -3679,6 +3847,9 @@ function SettingsPanel({ auth, data, actions, setNotice, actionBusy, runAction }
   const [name, setName] = useState(profile.name ?? "");
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
+  const prefs = data?.preferences ?? { language: "en", theme: "system" };
+  const [language, setLanguage] = useState(prefs.language ?? "en");
+  const [theme, setTheme] = useState(prefs.theme ?? "system");
   return (
     <div className="space-y-3">
       <section className={panelClass("space-y-3")}>
@@ -3689,6 +3860,38 @@ function SettingsPanel({ auth, data, actions, setNotice, actionBusy, runAction }
           <p>{profile.email}</p>
           <p>{profile.status ?? "ACTIVE"}</p>
         </div>
+      </section>
+      <section className={panelClass("space-y-3")}>
+        <p className="font-semibold">Appearance</p>
+        <select className={inputClass()} value={theme} onChange={(e) => setTheme(e.target.value)}>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+          <option value="system">System</option>
+        </select>
+      </section>
+      <section className={panelClass("space-y-3")}>
+        <p className="font-semibold">Language</p>
+        <select className={inputClass()} value={language} onChange={(e) => setLanguage(e.target.value)}>
+          <option value="en">English</option>
+          <option value="zh-CN">简体中文</option>
+          <option value="ru">Русский</option>
+          <option value="fa">فارسی</option>
+        </select>
+        <Button
+          type="button"
+          disabled={actionBusy === "save-preferences"}
+          onClick={() =>
+            runAction("save-preferences", async () => {
+              await actions.saveCustomerPreferenceSettings({ data: { auth, language, theme } });
+              document.documentElement.dir = language === "fa" ? "rtl" : "ltr";
+              localStorage.setItem("wpay-theme", theme);
+              localStorage.setItem("wpay-language", language);
+              setNotice("Settings saved.");
+            })
+          }
+        >
+          {actionBusy === "save-preferences" ? "Saving..." : "SAVE PREFERENCES"}
+        </Button>
       </section>
       <section className={panelClass("space-y-3")}>
         <p className="font-semibold">Edit Name</p>
@@ -3738,8 +3941,16 @@ function SettingsPanel({ auth, data, actions, setNotice, actionBusy, runAction }
         </Button>
       </section>
       <section className={panelClass("space-y-3")}>
-        <p className="font-semibold">Refer & Earn</p>
-        <p className="text-sm text-muted-foreground">Coming Soon</p>
+        <p className="font-semibold">Notifications</p>
+        <p className="text-sm text-muted-foreground">In-app notifications stay enabled for billing, campaign and account events.</p>
+      </section>
+      <section className={panelClass("space-y-3")}>
+        <p className="font-semibold">Billing</p>
+        <p className="text-sm text-muted-foreground">Manage plan, invoices and Premium Emoji from Billing.</p>
+      </section>
+      <section className={panelClass("space-y-3")}>
+        <p className="font-semibold">Support</p>
+        <p className="text-sm text-muted-foreground">Contact platform support from Telegram if you need account or payment review.</p>
       </section>
       <section className={panelClass("space-y-3")}>
         <Button

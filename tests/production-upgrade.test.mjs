@@ -177,12 +177,13 @@ test("admin can grant manual and no-expiry plans including custom unlimited", ()
 test("paid plans activate only after payment confirmation", () => {
   const customer = read("src/lib/customer-data.server.ts");
   const admin = read("src/lib/admin-data.server.ts");
+  const billingEngine = read("src/lib/billing.server.ts");
   const request = customer.slice(customer.indexOf("export async function requestPayment"), customer.length);
-  assert(request.includes('status: "PENDING"'));
+  assert(billingEngine.includes('status: "PENDING"'));
   assert(request.includes("self_selected_free_plan"));
-  assert(request.indexOf('if (Number(plan.price_usd ?? 0) <= 0)') < request.indexOf('if (!payments.payment_enabled || !payments.wallet_address)'));
+  assert(request.indexOf('if (Number(plan.price_usd ?? 0) <= 0)') < request.indexOf("return createInvoice"));
   const confirm = admin.slice(admin.indexOf("export async function adminUpdateTransaction"), admin.indexOf("export async function adminSubscriptionAction"));
-  assert(confirm.includes('if (status === "CONFIRMED" && tx.plan_id)'));
+  assert(confirm.includes("activatePaidInvoice"));
   assert(confirm.includes('payment_status: "PAID"'));
   assert(confirm.includes('action: status === "CONFIRMED" ? "PAYMENT_CONFIRMED" : "TRANSACTION_UPDATED"'));
 });
@@ -210,13 +211,15 @@ test("delete user performs tenant-level cleanup and admin writes require super a
   }
 });
 
-test("public billing reads active public DB plans and hides private plans", () => {
+test("public billing reads only official active plans and hides legacy private plans", () => {
   const customer = read("src/lib/customer-data.server.ts");
+  const billingEngine = read("src/lib/billing.server.ts");
   const ui = read("src/routes/mini-app.$section.tsx");
   const migration = read("supabase/migrations/20260819133000_registration_public_plan_cleanup.sql");
   const billing = customer.slice(customer.indexOf("export async function billing"), customer.indexOf("export async function requestPayment"));
-  assert(billing.includes('.eq("is_active", true)'));
-  assert(billing.includes('.eq("is_public", true)'));
+  assert(billing.includes("officialPlans()"));
+  assert(billingEngine.includes("OFFICIAL_PLAN_CODES"));
+  assert(billingEngine.includes('.eq("is_active", true)'));
   assert(migration.includes("upper(code) IN ('FREE', 'BASIC', 'PREMIUM', 'STARTER', 'GROWTH', 'SCALE')"));
   assert(migration.includes("SET is_public = false"));
   assert(ui.includes("20-session maximum") || ui.includes("20 sessions max"));
@@ -350,12 +353,125 @@ test("legacy plan cleanup does not delete subscriptions or payment history", () 
   assert(migration.includes("is_public = false"));
 });
 
-test("admin-created public plans can appear in customer billing", () => {
+test("admin-created custom plans do not appear in official customer upgrade billing", () => {
   const customer = read("src/lib/customer-data.server.ts");
   const admin = read("src/lib/admin-data.server.ts");
+  const billingEngine = read("src/lib/billing.server.ts");
   const billing = customer.slice(customer.indexOf("export async function billing"), customer.indexOf("export async function requestPayment"));
-  assert(billing.includes('.eq("is_public", true)'));
-  assert(!billing.includes("TEST\", \"PLUS\", \"PRO\", \"ENTERPRISE"));
+  assert(billing.includes("officialPlans()"));
+  assert(billingEngine.includes('["TEST", "PLUS", "PRO", "ENTERPRISE"]'));
   assert(admin.includes("is_public: plan[\"is_public\"] !== false"));
   assert(admin.includes("is_custom: plan[\"is_custom\"] === true"));
+});
+
+test("real USDT invoice schema enforces active intent, unique amounts, tx hash uniqueness and expiry", () => {
+  const migration = read("supabase/migrations/20260821120000_real_usdt_invoices_premium_emoji_i18n.sql");
+  assert(migration.includes("CREATE TYPE public.billing_invoice_status"));
+  for (const status of ["PENDING", "PAYMENT_DETECTED", "CONFIRMING", "PAID", "EXPIRED", "CANCELLED", "UNDERPAID", "OVERPAID", "LATE_PAYMENT", "REVIEW_REQUIRED"]) {
+    assert(migration.includes(`'${status}'`));
+  }
+  assert(migration.includes("billing_invoices_active_intent_idx"));
+  assert(migration.includes("billing_invoices_active_amount_idx"));
+  assert(migration.includes("billing_invoices_tx_hash_unique_idx"));
+  assert(migration.includes("billing_transactions_tx_hash_unique_idx"));
+  assert(migration.includes("now() + interval '10 minutes'"));
+  assert(migration.includes("create_usdt_billing_invoice"));
+  assert(migration.includes("pg_advisory_xact_lock"));
+  assert(migration.includes("Customer replaced invoice"));
+});
+
+test("invoice engine uses exact payable amounts and does not activate from browser callbacks", () => {
+  const billing = read("src/lib/billing.server.ts");
+  assert(billing.includes("TRON_MAINNET_USDT_CONTRACT"));
+  assert(billing.includes("payable_amount"));
+  assert(billing.includes("ACTIVE_INVOICE_EXISTS"));
+  assert(billing.includes("tronLinkUrl"));
+  assert(billing.includes("classifyAndRecordPayment"));
+  assert(billing.includes("Payment was sent after invoice expiry."));
+  assert(billing.includes("This transaction has already been used.") || read("src/lib/admin-data.server.ts").includes("This transaction has already been used."));
+  assert(!billing.includes("Math.random"));
+});
+
+test("TRON monitor is server-only, checkpointed, idempotent and scans confirmed USDT transfers", () => {
+  const monitor = read("src/lib/tron-monitor.server.ts");
+  const workers = read("src/lib/background-workers.server.ts");
+  assert(monitor.includes("TRONGRID_API_KEY"));
+  assert(monitor.includes("transactions/trc20"));
+  assert(monitor.includes("only_confirmed"));
+  assert(monitor.includes("contract_address"));
+  assert(monitor.includes("blockchain_scan_checkpoints"));
+  assert(monitor.includes("classifyAndRecordPayment"));
+  assert(workers.includes("processTronUsdtPayments"));
+  assert(workers.includes("Payment worker failed"));
+});
+
+test("customer billing exposes upgrade-only plans, active invoice, Premium Emoji add-on and invoice polling", () => {
+  const customer = read("src/lib/customer-data.server.ts");
+  const funcs = read("src/lib/customer.functions.ts");
+  const ui = read("src/routes/mini-app.$section.tsx");
+  assert(customer.includes("officialPlans()"));
+  assert(customer.includes("PLAN_RANK"));
+  assert(customer.includes("requestPremiumEmojiPayment"));
+  assert(customer.includes("activeInvoice"));
+  assert(funcs.includes("getInvoiceStatus"));
+  assert(ui.includes("Exact Payable Amount"));
+  assert(ui.includes("COPY ADDRESS"));
+  assert(ui.includes("OPEN TRONLINK"));
+  assert(ui.includes("Payment History"));
+  assert(ui.includes("Premium Emoji"));
+});
+
+test("paid invoice activation is idempotent and separates base plans from Premium Emoji", () => {
+  const billing = read("src/lib/billing.server.ts");
+  assert(billing.includes("activatePaidInvoice"));
+  assert(billing.includes('.neq("status", "PAID")'));
+  assert(billing.includes('paid.product_type === "PLAN"'));
+  assert(billing.includes('paid.product_code === PREMIUM_EMOJI_CODE.toUpperCase()'));
+  assert(billing.includes("tenant_addon_entitlements"));
+  assert(billing.includes("does not buy Telegram Premium") || read("src/routes/mini-app.$section.tsx").includes("does not buy Telegram Premium"));
+});
+
+test("custom emoji entities are stored, validated and sent with GramJS formattingEntities", () => {
+  const migration = read("supabase/migrations/20260821120000_real_usdt_invoices_premium_emoji_i18n.sql");
+  const customer = read("src/lib/customer-data.server.ts");
+  const telegram = read("src/lib/telegram-user-session.server.ts");
+  const ui = read("src/routes/mini-app.$section.tsx");
+  assert(migration.includes("message_entities jsonb"));
+  assert(customer.includes("message_entities: input.message.entities ?? []"));
+  assert(telegram.includes("MessageEntityCustomEmoji"));
+  assert(telegram.includes("GetCustomEmojiDocuments"));
+  assert(telegram.includes("formattingEntities"));
+  assert(telegram.includes("requires Telegram Premium"));
+  assert(ui.includes("document_id"));
+  assert(ui.includes("utf16Length"));
+});
+
+test("i18n and theme preferences support English, Chinese, Russian and Persian RTL", () => {
+  const i18n = read("src/lib/i18n.ts");
+  const prefs = read("src/lib/preferences.server.ts");
+  const root = read("src/routes/__root.tsx");
+  const bot = read("src/routes/api/public/telegram/webhook.ts");
+  for (const lang of ["en", "zh-CN", "ru", "fa"]) assert(i18n.includes(lang));
+  assert(i18n.includes("directionForLanguage"));
+  assert(i18n.includes('language === "fa" ? "rtl"'));
+  assert(prefs.includes("customer_preferences"));
+  assert(prefs.includes("admin_preferences"));
+  assert(root.includes("wpay-theme"));
+  assert(root.includes("wpay-language"));
+  assert(bot.includes("lang:zh-CN"));
+  assert(bot.includes("persistBotLanguage"));
+});
+
+test("admin payments and customer detail expose invoice monitor and Premium Emoji controls", () => {
+  const adminData = read("src/lib/admin-data.server.ts");
+  const adminFns = read("src/lib/admin.functions.ts");
+  const route = read("src/routes/admin.$section.tsx");
+  assert(adminData.includes("tronMonitorHealth"));
+  assert(adminData.includes("billing_invoices"));
+  assert(adminData.includes("adminGrantPremiumEmoji"));
+  assert(adminFns.includes("grantPremiumEmoji"));
+  assert(route.includes("Blockchain Monitor"));
+  assert(route.includes("Grant Premium Emoji"));
+  assert(route.includes("Revoke Premium Emoji"));
+  assert(route.includes("Recent Invoices"));
 });

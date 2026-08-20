@@ -27,6 +27,7 @@ import {
   getTransactions,
   getUsage,
   grantCustomerPlan,
+  grantPremiumEmoji,
   registerTelegramWebhook,
   resetCustomerPassword,
   resetUsage,
@@ -54,6 +55,13 @@ const valid = new Set([
   "logs",
   "settings",
 ]);
+
+function statusTone(status?: string) {
+  if (["PAID", "CONFIRMED", "ACTIVE", "SUCCESS", "HEALTHY"].includes(status ?? "")) return "text-success";
+  if (["FAILED", "ERROR", "CANCELLED", "EXPIRED", "UNDERPAID", "LATE_PAYMENT"].includes(status ?? "")) return "text-destructive";
+  if (["PAYMENT_DETECTED", "CONFIRMING", "OVERPAID", "REVIEW_REQUIRED", "PENDING"].includes(status ?? "")) return "text-warning";
+  return "text-muted-foreground";
+}
 
 export const Route = createFileRoute("/admin/$section")({
   beforeLoad: async ({ params }) => {
@@ -152,7 +160,7 @@ function SectionContent({
   if (section === "subscriptions")
     return <SubscriptionsAdmin rows={Array.isArray(data) ? data : []} reload={reload} />;
   if (section === "payments")
-    return <PaymentsAdmin rows={Array.isArray(data) ? data : []} reload={reload} />;
+    return <PaymentsAdmin data={data ?? { invoices: [], legacyTransactions: [], monitor: {} }} reload={reload} />;
   if (section === "usage")
     return <UsageAdmin rows={Array.isArray(data) ? data : []} reload={reload} />;
   if (section === "notifications")
@@ -272,6 +280,16 @@ function CustomersAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promi
         const reason = prompt("Reason/note", "Custom unlimited grant") ?? "Custom unlimited grant";
         await grantCustomerPlan({ data: { customerId: customer.id, duration, expiresAt, reason, unlimited: true } });
       }
+      if (action === "PREMIUM_EMOJI") {
+        const expiresAt = prompt("Premium Emoji expiry date (YYYY-MM-DD) or blank for 30 days", "") || null;
+        const reason = prompt("Reason/note", "Admin granted Premium Emoji") ?? "Admin granted Premium Emoji";
+        await grantPremiumEmoji({ data: { tenantId: customer.tenant_id, expiresAt, reason } });
+      }
+      if (action === "REVOKE_PREMIUM_EMOJI") {
+        if (!confirm("Revoke Premium Emoji for this customer?")) return;
+        const reason = prompt("Reason/note", "Admin revoked Premium Emoji") ?? "Admin revoked Premium Emoji";
+        await grantPremiumEmoji({ data: { tenantId: customer.tenant_id, revoke: true, reason } });
+      }
       await reload();
       await openDetail(customer.id);
     } catch (e) {
@@ -376,10 +394,31 @@ function CustomersAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promi
             <UsageCard key={label} label={label} used={used} limit={limit} />
           ))}
         </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <div className="border border-border bg-background p-3 text-sm">
+            <p className="text-xs uppercase text-muted-foreground">Current Plan</p>
+            <p className="mt-1 font-semibold">{detail.usage?.plan?.name ?? "TEST"}</p>
+            <p className="text-xs text-muted-foreground">
+              {detail.usage?.expired ? "TEST fallback" : detail.subscription?.payment_status ?? "ACTIVE"}
+              {detail.subscription?.expires_at ? ` until ${new Date(detail.subscription.expires_at).toLocaleDateString()}` : " · No expiry"}
+            </p>
+          </div>
+          <div className="border border-border bg-background p-3 text-sm">
+            <p className="text-xs uppercase text-muted-foreground">Premium Emoji</p>
+            <p className={detail.premiumEmoji?.active ? "mt-1 font-semibold text-success" : "mt-1 font-semibold text-muted-foreground"}>
+              {detail.premiumEmoji?.active ? "Active" : "Inactive"}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {detail.premiumEmoji?.entitlement?.expires_at ? `Until ${new Date(detail.premiumEmoji.entitlement.expires_at).toLocaleDateString()}` : "No active expiry"}
+            </p>
+          </div>
+        </div>
         <div className="mt-4 flex flex-wrap gap-2">
           <Button size="sm" onClick={() => void customerAction("CHANGE_PLAN")}>Change Plan</Button>
           <Button size="sm" variant="secondary" onClick={() => void customerAction("GRANT_PLAN")}>Grant Free/Manual</Button>
           <Button size="sm" variant="secondary" onClick={() => void customerAction("UNLIMITED")}>Grant Unlimited</Button>
+          <Button size="sm" variant="secondary" onClick={() => void customerAction("PREMIUM_EMOJI")}>Grant Premium Emoji</Button>
+          <Button size="sm" variant="secondary" onClick={() => void customerAction("REVOKE_PREMIUM_EMOJI")}>Revoke Premium Emoji</Button>
           <Button size="sm" variant="secondary" onClick={() => void customerAction("FORCE_LOGOUT")}>Force Logout</Button>
           <Button size="sm" variant="secondary" onClick={() => changeStatus(detail.customer.id, "SUSPENDED")}>Suspend</Button>
           <Button size="sm" onClick={() => changeStatus(detail.customer.id, "ACTIVE")}>Activate</Button>
@@ -398,6 +437,7 @@ function CustomersAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promi
         </div>
         <div className="mt-5 grid gap-4 lg:grid-cols-3">
           <DetailList title="Recent Transactions" rows={detail.transactions} fields={["status", "amount", "created_at"]} />
+          <DetailList title="Recent Invoices" rows={detail.invoices} fields={["product_code", "status", "payable_amount", "tx_hash"]} />
           <DetailList title="Recent Campaigns" rows={detail.campaigns} fields={["name", "status", "total_targets"]} />
           <DetailList title="Admin Notes/Actions" rows={detail.adminLogs} fields={["action", "resource", "created_at"]} />
         </div>
@@ -724,36 +764,80 @@ function SubscriptionsAdmin({ rows, reload }: { rows: AnyData[]; reload: () => P
   );
 }
 
-function PaymentsAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promise<void> }) {
+function PaymentsAdmin({ data, reload }: { data: AnyData; reload: () => Promise<void> }) {
+  const rows = Array.isArray(data?.invoices) ? data.invoices : [];
+  const legacy = Array.isArray(data?.legacyTransactions) ? data.legacyTransactions : [];
+  const monitor = data?.monitor ?? {};
   async function update(row: AnyData, status: string) {
-    if (status === "CONFIRMED" && !confirm("Confirm this payment and activate the selected plan?")) return;
-    const txHash = status === "CONFIRMED" ? prompt("Transaction hash/reference", row.tx_hash ?? "") ?? "" : row.tx_hash;
+    if ((status === "CONFIRMED" || status === "PAID") && !confirm("Confirm this payment and activate the selected product?")) return;
+    const txHash = status === "CONFIRMED" || status === "PAID" ? prompt("Transaction hash/reference", row.tx_hash ?? "") ?? "" : row.tx_hash;
     await updateTransaction({ data: { id: row.id, status, txHash } });
     await reload();
   }
   return (
+    <div className="space-y-4">
+      <section className="grid gap-3 md:grid-cols-4">
+        {[
+          ["Blockchain Monitor", monitor.status ?? "UNKNOWN"],
+          ["Last Scan", monitor.lastSuccessAt ? new Date(monitor.lastSuccessAt).toLocaleString() : "Never"],
+          ["Pending Invoices", monitor.pendingInvoices ?? 0],
+          ["Provider Key", monitor.apiKeyConfigured ? "Configured" : "Public/limited"],
+        ].map(([label, value]) => (
+          <div key={String(label)} className="border border-border bg-card p-4">
+            <p className="text-xs uppercase text-muted-foreground">{label}</p>
+            <p className="mt-2 break-words font-semibold">{String(value)}</p>
+          </div>
+        ))}
+      </section>
     <AdminTable
       rows={rows}
-      columns={["Tenant", "Plan", "Amount", "Status", "Created", "Actions"]}
+      columns={["Invoice", "Customer", "Product", "Amount", "Status", "Blockchain", "Actions"]}
       render={(row) => {
         const plan = Array.isArray(row.plans) ? row.plans[0] : row.plans;
         const tenant = Array.isArray(row.tenants) ? row.tenants[0] : row.tenants;
+        const customer = Array.isArray(tenant?.customers) ? tenant.customers[0] : tenant?.customers;
         return [
-          tenant?.name ?? row.tenant_id,
-          plan?.name ?? row.plan_id,
-          `${row.amount} ${row.currency}`,
-          row.status,
-          new Date(row.created_at).toLocaleString(),
+          <div key="invoice">
+            <p className="font-mono text-xs">{row.invoice_number ?? row.id}</p>
+            <p className="text-xs text-muted-foreground">{new Date(row.created_at).toLocaleString()}</p>
+          </div>,
+          customer?.email ?? tenant?.name ?? row.tenant_id,
+          row.product_type === "ADDON" ? row.product_code : plan?.name ?? row.product_code,
+          <div key="amount">
+            <p>{Number(row.base_price ?? 0).toFixed(2)} base</p>
+            <p className="font-semibold">{Number(row.payable_amount ?? 0).toFixed(6)} USDT</p>
+          </div>,
+          <span key="status" className={statusTone(row.status)}>{row.status}</span>,
+          <div key="chain" className="max-w-xs text-xs">
+            <p>{row.blockchain_status ?? "Waiting"}</p>
+            <p className="break-all">{row.from_address ?? ""}</p>
+            {row.tx_hash ? <a className="text-primary hover:underline" href={`https://tronscan.org/#/transaction/${encodeURIComponent(row.tx_hash)}`} target="_blank" rel="noreferrer">TronScan</a> : null}
+          </div>,
           <div className="flex flex-wrap justify-end gap-1" key="actions">
-            {["PENDING", "CONFIRMED", "FAILED", "CANCELLED"].map((status) => (
-              <Button key={status} size="sm" variant={status === "CONFIRMED" ? "default" : "secondary"} onClick={() => void update(row, status)}>
-                {status}
+            {["REVIEW_REQUIRED", "PAID", "CANCELLED"].map((status) => (
+              <Button key={status} size="sm" variant={status === "PAID" ? "default" : "secondary"} onClick={() => void update(row, status)}>
+                {status === "PAID" ? "Confirm manually" : status}
               </Button>
             ))}
           </div>,
         ];
       }}
     />
+    {legacy.length ? (
+      <section>
+        <h2 className="mb-2 font-semibold">Legacy Transactions</h2>
+        <AdminTable
+          rows={legacy}
+          columns={["Tenant", "Plan", "Amount", "Status", "Created"]}
+          render={(row) => {
+            const plan = Array.isArray(row.plans) ? row.plans[0] : row.plans;
+            const tenant = Array.isArray(row.tenants) ? row.tenants[0] : row.tenants;
+            return [tenant?.name ?? row.tenant_id, plan?.name ?? row.plan_id, `${row.amount} ${row.currency}`, row.status, new Date(row.created_at).toLocaleString()];
+          }}
+        />
+      </section>
+    ) : null}
+    </div>
   );
 }
 

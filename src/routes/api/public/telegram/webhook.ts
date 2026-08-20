@@ -10,8 +10,10 @@ import {
   registerCustomerWithPasswordHash,
   validEmail,
 } from "@/lib/customer-auth.server";
+import { normalizeLanguage, t } from "@/lib/i18n";
+import { saveCustomerPreferences } from "@/lib/preferences.server";
 
-type TgUser = { id: number; username?: string; first_name?: string };
+type TgUser = { id: number; username?: string; first_name?: string; language_code?: string };
 type TgChat = { id: number; type: string; title?: string; username?: string };
 type TgMessage = { message_id: number; from?: TgUser; chat: TgChat; text?: string };
 type Update = {
@@ -160,31 +162,67 @@ async function sendOpenMiniApp(chatId: number, text: string, sessionToken?: stri
   );
 }
 
-async function mainMenu(chatId: number, userId: number) {
+async function botLanguage(user: TgUser) {
+  const { data: customer } = await db()
+    .from("customers")
+    .select("id, tenant_id, customer_preferences(language)")
+    .eq("telegram_user_id", user.id)
+    .maybeSingle();
+  const pref = Array.isArray(customer?.customer_preferences) ? customer?.customer_preferences[0] : customer?.customer_preferences;
+  return normalizeLanguage(pref?.language ?? user.language_code);
+}
+
+async function persistBotLanguage(userId: number, language: string) {
+  const { data: customer } = await db()
+    .from("customers")
+    .select("id, tenant_id, email, name, telegram_user_id")
+    .eq("telegram_user_id", userId)
+    .maybeSingle();
+  if (!customer) return;
+  await saveCustomerPreferences(
+    {
+      customerId: customer.id as string,
+      tenantId: customer.tenant_id as string,
+      email: customer.email as string,
+      name: (customer.name as string | null) ?? null,
+      telegramUserId: (customer.telegram_user_id as number | null) ?? null,
+    },
+    { language },
+  );
+}
+
+async function mainMenu(chatId: number, user: TgUser) {
+  const language = await botLanguage(user);
   const url = await miniAppUrl();
   const { data: customer } = await db()
     .from("customers")
     .select("id")
-    .eq("telegram_user_id", userId)
+    .eq("telegram_user_id", user.id)
     .eq("status", "ACTIVE")
     .maybeSingle();
   const rows: Record<string, unknown>[][] = [
     [
-      { text: "REGISTER", callback_data: "register" },
-      { text: "LOGIN", callback_data: "login" },
+      { text: t(language, "register").toUpperCase(), callback_data: "register" },
+      { text: t(language, "login").toUpperCase(), callback_data: "login" },
     ],
     [
       (url
-        ? [{ text: "OPEN MINI APP", web_app: { url } }][0]
-        : { text: "OPEN MINI APP (NOT CONFIGURED)", callback_data: "miniapp_missing" }) as Record<string, unknown>,
-      { text: "HELP", callback_data: "help" },
+        ? [{ text: t(language, "openMiniApp").toUpperCase(), web_app: { url } }][0]
+        : { text: `${t(language, "openMiniApp").toUpperCase()} (NOT CONFIGURED)`, callback_data: "miniapp_missing" }) as Record<string, unknown>,
+      { text: t(language, "help").toUpperCase(), callback_data: "help" },
+    ],
+    [
+      { text: "English", callback_data: "lang:en" },
+      { text: "中文", callback_data: "lang:zh-CN" },
+      { text: "Русский", callback_data: "lang:ru" },
+      { text: "فارسی", callback_data: "lang:fa" },
     ],
   ];
   await send(
     chatId,
     customer
-      ? "<b>Welcome back to the Telegram Promotion Platform.</b>\n\nOpen the Mini App to manage your dashboard."
-      : "<b>Welcome to the Telegram Promotion Platform.</b>\n\nRegister or log in, then use the Mini App to manage your dashboard.",
+      ? `<b>${t(language, "start")}</b>\n\n${t(language, "openMiniApp")} to manage your dashboard.`
+      : `<b>${t(language, "start")}</b>\n\n${t(language, "register")} / ${t(language, "login")} -> ${t(language, "openMiniApp")}.`,
     { inline_keyboard: rows },
   );
 }
@@ -221,7 +259,7 @@ async function handlePrivateText(msg: TgMessage) {
   if (text === "/start" || text === "/menu") {
     diagnostic("handler", { handler: "main_menu", chat_id: chatId });
     await clearTelegramFlow(userId);
-    await mainMenu(chatId, userId);
+    await mainMenu(chatId, msg.from!);
     return;
   }
   if (text === "/register") {
@@ -355,7 +393,7 @@ async function handlePrivateText(msg: TgMessage) {
   }
 
   diagnostic("handler", { handler: "fallback_menu", chat_id: chatId });
-  await mainMenu(chatId, userId);
+  await mainMenu(chatId, msg.from!);
 }
 
 async function processUpdate(update: Update) {
@@ -365,17 +403,22 @@ async function processUpdate(update: Update) {
       const chatId = cq.message?.chat.id ?? cq.from.id;
       diagnostic("handler", { handler: `callback_${cq.data ?? "unknown"}`, chat_id: chatId });
       await callBot("answerCallbackQuery", { callback_query_id: cq.id });
-      if (cq.data === "register") {
+      if (cq.data?.startsWith("lang:")) {
+        const language = normalizeLanguage(cq.data.slice(5));
+        await persistBotLanguage(cq.from.id, language);
+        await send(chatId, t(language, "settingsSaved"));
+        await mainMenu(chatId, { ...cq.from, language_code: language });
+      } else if (cq.data === "register") {
         await setState(cq.from.id, "REGISTRATION", "EMAIL");
-        await send(chatId, "Send the email address you want to register with.");
+        await send(chatId, t(await botLanguage(cq.from), "emailPrompt"));
       } else if (cq.data === "login") {
         await setState(cq.from.id, "LOGIN", "EMAIL", {
           telegram_username: cq.from?.username ?? null,
           first_name: cq.from?.first_name ?? null,
         });
-        await send(chatId, "Send your account email address.");
+        await send(chatId, t(await botLanguage(cq.from), "emailPrompt"));
       } else if (cq.data === "help") {
-        await send(chatId, "Register, log in, then open the Mini App to manage everything.");
+        await send(chatId, `${t(await botLanguage(cq.from), "register")} / ${t(await botLanguage(cq.from), "login")} -> ${t(await botLanguage(cq.from), "openMiniApp")}.`);
       } else if (cq.data === "miniapp_missing") {
         await send(chatId, "The Mini App URL has not been configured by the platform admin yet.");
       }
