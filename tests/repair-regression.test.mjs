@@ -382,9 +382,46 @@ test("custom emoji picker groups packs and lazily hydrates more real previews", 
   assert(route.includes("emojiVisibleCount"));
   assert(route.includes("loadMoreEmoji"));
   assert(route.includes("onGridScroll"));
-  assert(route.includes("pack.items.map(renderEmojiButton)"));
+  assert(route.includes("allPacks.map"));
+  assert(route.includes("items.map(renderEmojiButton)"));
   assert(route.includes("document_id: String(item.document_id)"));
   assert(!route.includes('>{item.free ? "Free" : "Premium"}</span>'));
+});
+
+test("custom emoji picker batches preview loading and does not show unicode fallback while loading", () => {
+  const telegram = read("src/lib/telegram-user-session.server.ts");
+  const customer = read("src/lib/customer-data.server.ts");
+  const funcs = read("src/lib/customer.functions.ts");
+  const route = read("src/routes/mini-app.$section.tsx");
+  assert(telegram.includes("customEmojiPreviewsViaUserSession"));
+  assert(telegram.includes("PREVIEW_BATCH_CONCURRENCY = 6"));
+  assert(telegram.includes("previewCache"));
+  assert(telegram.includes("CUSTOM_EMOJI_CACHE_HIT"));
+  assert(telegram.includes("CUSTOM_EMOJI_FIRST_PAGE_MS"));
+  assert(telegram.includes("options: { query?: string | null; tab?: string | null }"));
+  assert(telegram.includes('const tab = query ? "search" : (options.tab ?? "recent")'));
+  assert(customer.includes("customEmojiPreviewsViaUserSession"));
+  assert(customer.includes("tab: input.tab ?? null"));
+  assert(funcs.includes("getCustomEmojiPreviews"));
+  assert(funcs.includes("tab?: string | null"));
+  assert(route.includes("getCustomEmojiPreviews"));
+  assert(route.includes("tab: nextTab"));
+  assert(route.includes("emojiRequestRef"));
+  assert(route.includes("selectedEmojiPackRef"));
+  assert(route.includes("animate-pulse"));
+  assert(route.includes("preview_unavailable ?"));
+});
+
+test("custom emoji pack switching uses compact icon strip and ignores stale responses", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  assert(route.includes("selectEmojiPack"));
+  assert(route.includes("CUSTOM_EMOJI_PACK_SWITCH_MS"));
+  assert(route.includes("if (requestId !== emojiRequestRef.current"));
+  assert(route.includes("String(activePack?.id) === String(pack.id)"));
+  assert(route.includes("size-10 shrink-0"));
+  assert(route.includes("Sparkles"));
+  assert(route.includes("Loading more..."));
+  assert(route.includes("window.setTimeout"));
 });
 
 test("telegram session operations are serialized and invalid auth stays out of candidates", () => {

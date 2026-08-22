@@ -12,6 +12,9 @@ import type { MessagePayload } from "./telegram.server";
 
 const CONNECTION_RETRIES = 3;
 const sessionLocks = new Map<string, Promise<void>>();
+const PREVIEW_CACHE_TTL_MS = 10 * 60_000;
+const PREVIEW_BATCH_CONCURRENCY = 6;
+const previewCache = new Map<string, { expiresAt: number; value: CustomEmojiPreview }>();
 type ConnectionRow = {
   id: string;
   tenant_id: string;
@@ -130,6 +133,14 @@ export type CustomEmojiCatalog = {
   featuredPacks: CustomEmojiPack[];
   searchPacks: CustomEmojiPack[];
   categories: { title: string; icon_document_id?: string | null; emoticons: string[] }[];
+};
+
+export type CustomEmojiPreview = {
+  document_id: string;
+  mime_type: string;
+  format: "image" | "tgs" | "webm" | "unknown";
+  data_url: string;
+  fallback: string;
 };
 
 async function withSessionLock<T>(tenantId: string, connectionId: string, fn: () => Promise<T>) {
@@ -294,6 +305,69 @@ function flattenPacks(packs: CustomEmojiPack[], itemLimit = 360) {
   return uniqueEmoji(packs.flatMap((pack) => pack.items)).slice(0, itemLimit);
 }
 
+function cachedPreview(documentId: string) {
+  const cached = previewCache.get(documentId);
+  if (!cached) return null;
+  if (cached.expiresAt <= Date.now()) {
+    previewCache.delete(documentId);
+    return null;
+  }
+  console.info("CUSTOM_EMOJI_CACHE_HIT", { document_id: documentId });
+  return cached.value;
+}
+
+function storePreview(preview: CustomEmojiPreview) {
+  previewCache.set(preview.document_id, {
+    expiresAt: Date.now() + PREVIEW_CACHE_TTL_MS,
+    value: preview,
+  });
+  return preview;
+}
+
+async function downloadCustomEmojiPreview(client: TelegramClient, connectionId: string, documentId: string): Promise<CustomEmojiPreview> {
+  const started = Date.now();
+  console.info("CUSTOM_EMOJI_PREVIEW_REQUEST", { connection_id: connectionId, document_id: String(documentId) });
+  const docs = await client.invoke(new Api.messages.GetCustomEmojiDocuments({
+    documentId: [bigInt(String(documentId))],
+  }));
+  const doc = (docs ?? []).find((item) => item instanceof Api.Document && String(item.id) === String(documentId)) as Api.Document | undefined;
+  if (!doc) throw new Error("This custom emoji is no longer available.");
+  const attr = customEmojiAttribute(doc);
+  const downloaded = await client.downloadMedia(doc as never, {});
+  if (!Buffer.isBuffer(downloaded)) throw new Error("Telegram custom emoji preview could not be downloaded.");
+  const mime = doc.mimeType || "application/octet-stream";
+  const format = emojiPreviewFormat(mime);
+  console.info("CUSTOM_EMOJI_PREVIEW_RESULT", {
+    connection_id: connectionId,
+    document_id: String(doc.id),
+    mime_type: mime,
+    preview_format: format,
+    bytes: downloaded.length,
+  });
+  console.info("CUSTOM_EMOJI_PREVIEW_MS", { connection_id: connectionId, document_id: String(doc.id), ms: Date.now() - started });
+  return storePreview({
+    document_id: String(doc.id),
+    mime_type: mime,
+    format,
+    data_url: `data:${mime};base64,${downloaded.toString("base64")}`,
+    fallback: attr?.alt || "*",
+  });
+}
+
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await fn(items[index]!);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 async function validateCustomEmojiEntities(client: TelegramClient, message: MessagePayload) {
   const custom = (message.entities ?? []).filter((entity): entity is StoredMessageEntity =>
     entity.type === "custom_emoji" && Boolean(entity.document_id),
@@ -322,10 +396,13 @@ async function validateCustomEmojiEntities(client: TelegramClient, message: Mess
 export async function listCustomEmojiCatalogViaUserSession(
   tenantId: string,
   connectionId: string,
-  options: { query?: string | null } = {},
+  options: { query?: string | null; tab?: string | null } = {},
 ): Promise<CustomEmojiCatalog> {
+  const started = Date.now();
   return withAuthorizedUserClient(tenantId, connectionId, async (client) => {
     const me = (await client.getMe()) as Api.User & { premium?: boolean };
+    const query = options.query?.trim() ?? "";
+    const tab = query ? "search" : (options.tab ?? "recent");
     const catalog: CustomEmojiCatalog = {
       sessionPremium: me.premium === true,
       previewConnectionId: connectionId,
@@ -338,37 +415,43 @@ export async function listCustomEmojiCatalogViaUserSession(
       searchPacks: [],
       categories: [],
     };
-    try {
-      const recent = await client.invoke(new Api.messages.GetRecentStickers({ attached: true, hash: bigInt(0) }));
-      if (recent instanceof Api.messages.RecentStickers) {
-        catalog.recent = uniqueEmoji(recent.stickers.map((doc) => emojiItem(doc, "recent")).filter(Boolean) as CustomEmojiItem[]).slice(0, 36);
+    if (tab === "recent") {
+      try {
+        const recent = await client.invoke(new Api.messages.GetRecentStickers({ attached: true, hash: bigInt(0) }));
+        if (recent instanceof Api.messages.RecentStickers) {
+          catalog.recent = uniqueEmoji(recent.stickers.map((doc) => emojiItem(doc, "recent")).filter(Boolean) as CustomEmojiItem[]).slice(0, 36);
+        }
+      } catch (error) {
+        console.warn("CUSTOM_EMOJI_RECENT_FAILED", { error: errorMessage(error) });
       }
-    } catch (error) {
-      console.warn("CUSTOM_EMOJI_RECENT_FAILED", { error: errorMessage(error) });
     }
-    try {
-      const installed = await client.invoke(new Api.messages.GetEmojiStickers({ hash: bigInt(0) }));
-      if (installed instanceof Api.messages.AllStickers) {
-        catalog.installedPacks = await emojiPacksFromSets(client, installed.sets, "installed", 24, 48);
-        catalog.installed = flattenPacks(catalog.installedPacks);
+    if (tab === "installed") {
+      try {
+        const installed = await client.invoke(new Api.messages.GetEmojiStickers({ hash: bigInt(0) }));
+        if (installed instanceof Api.messages.AllStickers) {
+          catalog.installedPacks = await emojiPacksFromSets(client, installed.sets, "installed", 24, 48);
+          catalog.installed = flattenPacks(catalog.installedPacks);
+        }
+      } catch (error) {
+        console.warn("CUSTOM_EMOJI_INSTALLED_FAILED", { error: errorMessage(error) });
       }
-    } catch (error) {
-      console.warn("CUSTOM_EMOJI_INSTALLED_FAILED", { error: errorMessage(error) });
     }
-    try {
-      const featured = await client.invoke(new Api.messages.GetFeaturedEmojiStickers({ hash: bigInt(0) }));
-      if (featured instanceof Api.messages.FeaturedStickers) {
-        const sets = featured.sets.map((entry) => (entry as { set?: unknown }).set).filter(Boolean);
-        catalog.featuredPacks = await emojiPacksFromSets(client, sets, "featured", 24, 48);
-        catalog.featured = flattenPacks(catalog.featuredPacks);
+    if (tab === "featured") {
+      try {
+        const featured = await client.invoke(new Api.messages.GetFeaturedEmojiStickers({ hash: bigInt(0) }));
+        if (featured instanceof Api.messages.FeaturedStickers) {
+          const sets = featured.sets.map((entry) => (entry as { set?: unknown }).set).filter(Boolean);
+          catalog.featuredPacks = await emojiPacksFromSets(client, sets, "featured", 24, 48);
+          catalog.featured = flattenPacks(catalog.featuredPacks);
+        }
+      } catch (error) {
+        console.warn("CUSTOM_EMOJI_FEATURED_FAILED", { error: errorMessage(error) });
       }
-    } catch (error) {
-      console.warn("CUSTOM_EMOJI_FEATURED_FAILED", { error: errorMessage(error) });
     }
-    if (options.query?.trim()) {
+    if (tab === "search" && query) {
       try {
         const found = await client.invoke(new Api.messages.SearchEmojiStickerSets({
-          q: options.query.trim(),
+          q: query,
           excludeFeatured: false,
           hash: bigInt(0),
         }));
@@ -381,18 +464,30 @@ export async function listCustomEmojiCatalogViaUserSession(
         console.warn("CUSTOM_EMOJI_SEARCH_FAILED", { error: errorMessage(error) });
       }
     }
-    try {
-      const groups = await client.invoke(new Api.messages.GetEmojiGroups({ hash: 0 }));
-      if (groups instanceof Api.messages.EmojiGroups) {
-        catalog.categories = groups.groups.map((group) => ({
-          title: (group as { title?: string }).title ?? "Emoji",
-          icon_document_id: (group as { iconEmojiId?: unknown }).iconEmojiId == null ? null : String((group as { iconEmojiId?: unknown }).iconEmojiId),
-          emoticons: Array.isArray((group as { emoticons?: string[] }).emoticons) ? ((group as { emoticons?: string[] }).emoticons ?? []) : [],
-        }));
+    if (tab === "categories") {
+      try {
+        const groups = await client.invoke(new Api.messages.GetEmojiGroups({ hash: 0 }));
+        if (groups instanceof Api.messages.EmojiGroups) {
+          catalog.categories = groups.groups.map((group) => ({
+            title: (group as { title?: string }).title ?? "Emoji",
+            icon_document_id: (group as { iconEmojiId?: unknown }).iconEmojiId == null ? null : String((group as { iconEmojiId?: unknown }).iconEmojiId),
+            emoticons: Array.isArray((group as { emoticons?: string[] }).emoticons) ? ((group as { emoticons?: string[] }).emoticons ?? []) : [],
+          }));
+        }
+      } catch (error) {
+        console.warn("CUSTOM_EMOJI_GROUPS_FAILED", { error: errorMessage(error) });
       }
-    } catch (error) {
-      console.warn("CUSTOM_EMOJI_GROUPS_FAILED", { error: errorMessage(error) });
     }
+    console.info("CUSTOM_EMOJI_CATALOG_MS", {
+      connection_id: connectionId,
+      tab,
+      query: Boolean(query),
+      recent: catalog.recent.length,
+      installed_packs: catalog.installedPacks.length,
+      featured_packs: catalog.featuredPacks.length,
+      search_packs: catalog.searchPacks.length,
+      ms: Date.now() - started,
+    });
     return catalog;
   });
 }
@@ -401,7 +496,9 @@ export async function customEmojiPreviewViaUserSession(
   tenantId: string,
   connectionId: string,
   documentId: string,
-): Promise<{ document_id: string; mime_type: string; format: "image" | "tgs" | "webm" | "unknown"; data_url: string; fallback: string }> {
+): Promise<CustomEmojiPreview> {
+  const cached = cachedPreview(String(documentId));
+  if (cached) return cached;
   try {
     return await withAuthorizedUserClient(tenantId, connectionId, async (client) => {
       console.info("CUSTOM_EMOJI_PREVIEW_REQUEST", { connection_id: connectionId, document_id: String(documentId) });
@@ -438,6 +535,51 @@ export async function customEmojiPreviewViaUserSession(
     });
     throw error;
   }
+}
+
+export async function customEmojiPreviewsViaUserSession(
+  tenantId: string,
+  connectionId: string,
+  documentIds: string[],
+): Promise<{ previews: CustomEmojiPreview[]; failed: { document_id: string; error: string }[] }> {
+  const started = Date.now();
+  const uniqueIds = [...new Set(documentIds.map(String).filter(Boolean))].slice(0, 72);
+  const previews: CustomEmojiPreview[] = [];
+  const failed: { document_id: string; error: string }[] = [];
+  const missing: string[] = [];
+  for (const id of uniqueIds) {
+    const cached = cachedPreview(id);
+    if (cached) previews.push(cached);
+    else missing.push(id);
+  }
+  if (missing.length) {
+    await withAuthorizedUserClient(tenantId, connectionId, async (client) => {
+      const batch = await mapWithConcurrency(missing, PREVIEW_BATCH_CONCURRENCY, async (documentId) => {
+        try {
+          return { preview: await downloadCustomEmojiPreview(client, connectionId, documentId), error: null };
+        } catch (error) {
+          console.warn("CUSTOM_EMOJI_PREVIEW_ERROR", {
+            connection_id: connectionId,
+            document_id: String(documentId),
+            error: errorMessage(error),
+          });
+          return { preview: null, error: { document_id: String(documentId), error: errorMessage(error) } };
+        }
+      });
+      for (const result of batch) {
+        if (result.preview) previews.push(result.preview);
+        if (result.error) failed.push(result.error);
+      }
+    });
+  }
+  console.info("CUSTOM_EMOJI_FIRST_PAGE_MS", {
+    connection_id: connectionId,
+    requested: uniqueIds.length,
+    fetched: missing.length,
+    failed: failed.length,
+    ms: Date.now() - started,
+  });
+  return { previews, failed };
 }
 
 function emojiPreviewFormat(mime?: string | null): "image" | "tgs" | "webm" | "unknown" {

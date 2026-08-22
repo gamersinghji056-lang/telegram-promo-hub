@@ -559,11 +559,12 @@ export const checkInvoicePaymentStatus = createServerFn({ method: "POST" })
   .handler(async ({ data: i }) => data.checkInvoicePaymentStatus(await resolveAuth(i.auth), i.invoiceId));
 
 export const getCustomEmojiCatalog = createServerFn({ method: "POST" })
-  .inputValidator((i: Auth & { connectionId?: string | null; query?: string | null }) => i)
+  .inputValidator((i: Auth & { connectionId?: string | null; query?: string | null; tab?: string | null }) => i)
   .handler(async ({ data: i }) =>
     data.customEmojiCatalog(await resolveAuth(i.auth), {
       connectionId: i.connectionId,
       query: i.query ?? null,
+      tab: i.tab ?? null,
     }),
   );
 
@@ -573,6 +574,15 @@ export const getCustomEmojiPreview = createServerFn({ method: "POST" })
     data.customEmojiPreview(await resolveAuth(i.auth), {
       connectionId: i.connectionId,
       documentId: i.documentId,
+    }),
+  );
+
+export const getCustomEmojiPreviews = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { connectionId?: string | null; documentIds: string[] }) => i)
+  .handler(async ({ data: i }) =>
+    data.customEmojiPreviews(await resolveAuth(i.auth), {
+      connectionId: i.connectionId,
+      documentIds: i.documentIds,
     }),
   );
 

@@ -11,6 +11,7 @@ import {
   discoverAudienceViaUserSession,
   importGroupsFromFolderViaUserSession,
   customEmojiPreviewViaUserSession,
+  customEmojiPreviewsViaUserSession,
   joinGroupViaUserSession,
   listCustomEmojiCatalogViaUserSession,
   resolvePublicGroupViaUserSession,
@@ -3693,7 +3694,7 @@ async function premiumEmojiPreviewCandidates(ctx: AuthContext, requestedConnecti
   return ordered;
 }
 
-export async function customEmojiCatalog(ctx: AuthContext, input: { connectionId?: string | null; query?: string | null }) {
+export async function customEmojiCatalog(ctx: AuthContext, input: { connectionId?: string | null; query?: string | null; tab?: string | null }) {
   const entitlement = await premiumEmojiEntitlement(ctx.tenantId);
   if (!entitlement.active) throw new Error("Premium Emoji add-on is required.");
   const candidates = await premiumEmojiPreviewCandidates(ctx, input.connectionId ?? null);
@@ -3702,6 +3703,7 @@ export async function customEmojiCatalog(ctx: AuthContext, input: { connectionId
     try {
       return await listCustomEmojiCatalogViaUserSession(ctx.tenantId, connectionId, {
         query: input.query ?? null,
+        tab: input.tab ?? null,
       });
     } catch (error) {
       lastError = error;
@@ -3730,6 +3732,25 @@ export async function customEmojiPreview(ctx: AuthContext, input: { connectionId
     }
   }
   throw lastError instanceof Error ? lastError : new Error("Telegram custom emoji preview could not be downloaded.");
+}
+
+export async function customEmojiPreviews(ctx: AuthContext, input: { connectionId?: string | null; documentIds: string[] }) {
+  const entitlement = await premiumEmojiEntitlement(ctx.tenantId);
+  if (!entitlement.active) throw new Error("Premium Emoji add-on is required.");
+  const candidates = await premiumEmojiPreviewCandidates(ctx, input.connectionId ?? null);
+  let lastError: unknown = null;
+  for (const connectionId of candidates) {
+    try {
+      const result = await customEmojiPreviewsViaUserSession(ctx.tenantId, connectionId, input.documentIds);
+      return { ...result, preview_connection_id: connectionId };
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn("CUSTOM_EMOJI_PREVIEW_SESSION_FAILED", { tenant_id: ctx.tenantId, connection_id: connectionId, error: message });
+      if (!sessionLevelPreviewFailure(error)) break;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Telegram custom emoji previews could not be downloaded.");
 }
 
 export async function listNotifications(ctx: AuthContext) {

@@ -69,6 +69,7 @@ import {
   getSupportSettings,
   getCustomEmojiCatalog,
   getCustomEmojiPreview,
+  getCustomEmojiPreviews,
   getNotifications,
   getOwnActivity,
   rejectGroup,
@@ -342,6 +343,7 @@ function MiniAppSection() {
     getSupportSettings: useServerFn(getSupportSettings),
     getCustomEmojiCatalog: useServerFn(getCustomEmojiCatalog),
     getCustomEmojiPreview: useServerFn(getCustomEmojiPreview),
+    getCustomEmojiPreviews: useServerFn(getCustomEmojiPreviews),
     setPreferredPremiumEmojiSession: useServerFn(setPreferredPremiumEmojiSession),
     saveCustomerPreferenceSettings: useServerFn(saveCustomerPreferenceSettings),
     logout: useServerFn(logoutCustomer),
@@ -3424,23 +3426,55 @@ function MessageForm(props: any) {
   const [emojiLoading, setEmojiLoading] = useState(false);
   const [emojiError, setEmojiError] = useState("");
   const [emojiVisibleCount, setEmojiVisibleCount] = useState(emojiPageSize);
+  const [selectedEmojiPack, setSelectedEmojiPack] = useState<string | null>(null);
+  const [emojiPreviewLoading, setEmojiPreviewLoading] = useState<Record<string, boolean>>({});
+  const [emojiPackErrors, setEmojiPackErrors] = useState<Record<string, string>>({});
+  const emojiRequestRef = useRef(0);
+  const pickerTabRef = useRef(pickerTab);
+  const selectedEmojiPackRef = useRef<string | null>(selectedEmojiPack);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  useEffect(() => {
+    pickerTabRef.current = pickerTab;
+  }, [pickerTab]);
+  useEffect(() => {
+    selectedEmojiPackRef.current = selectedEmojiPack;
+  }, [selectedEmojiPack]);
   function utf16Length(value: string) {
     return [...value].reduce((sum, char) => sum + (char.codePointAt(0)! > 0xffff ? 2 : 1), 0);
   }
+  function packKeyFor(tab: string) {
+    return `${tab}Packs`;
+  }
+  function tabItems(catalog: any, tab: string, packId?: string | null) {
+    if (tab === "categories") return [];
+    const packs = catalog?.[packKeyFor(tab)] ?? [];
+    if (packId && packs.length) {
+      const pack = packs.find((entry: any) => String(entry.id) === String(packId));
+      return pack?.items ?? [];
+    }
+    return catalog?.[tab] ?? [];
+  }
   async function loadEmojiCatalog(nextTab = pickerTab) {
+    const requestId = ++emojiRequestRef.current;
     setEmojiLoading(true);
     setEmojiError("");
     setEmojiVisibleCount(emojiPageSize);
+    setSelectedEmojiPack(null);
     try {
       const result = await props.actions.getCustomEmojiCatalog({
-        data: { auth: props.auth, connectionId: props.connectionId || null, query: nextTab === "search" ? emojiSearch : "" },
+        data: { auth: props.auth, connectionId: props.connectionId || null, query: nextTab === "search" ? emojiSearch : "", tab: nextTab },
       });
-      const hydrated = await hydrateEmojiPreviews(result, nextTab, emojiPageSize);
-      setEmojiCatalog(hydrated);
+      if (requestId !== emojiRequestRef.current) return;
+      const packs = result?.[packKeyFor(nextTab)] ?? [];
+      const packId = packs[0]?.id ?? null;
+      selectedEmojiPackRef.current = packId;
+      setSelectedEmojiPack(packId);
+      setEmojiCatalog(result);
+      setEmojiLoading(false);
+      void hydrateEmojiPreviews(result, nextTab, emojiPageSize, requestId, packId, true);
     } catch (error) {
+      if (requestId !== emojiRequestRef.current) return;
       setEmojiError(error instanceof Error ? error.message : "Custom emoji could not be loaded.");
-    } finally {
       setEmojiLoading(false);
     }
   }
@@ -3461,44 +3495,66 @@ function MessageForm(props: any) {
       })),
     };
   }
-  async function hydrateEmojiPreviews(result: any, nextTab: string, limit = emojiPageSize) {
+  async function hydrateEmojiPreviews(result: any, nextTab: string, limit = emojiPageSize, requestId = emojiRequestRef.current, packId = selectedEmojiPack, prefetch = false) {
     if (!result || nextTab === "categories") return result;
-    const items = (result[nextTab] ?? []).slice(0, limit).filter((item: any) => !item.preview_url && !item.preview_unavailable);
-    const previews = await Promise.all(items.map(async (item: any) => {
-      try {
-        const preview = await props.actions.getCustomEmojiPreview({
-          data: { auth: props.auth, connectionId: props.connectionId || null, documentId: String(item.document_id) },
-        });
-        console.info("CUSTOM_EMOJI_PREVIEW_RESULT", {
-          document_id: String(item.document_id),
-          mime_type: preview?.mime_type,
-          preview_format: preview?.format,
-          has_data_url: Boolean(preview?.data_url),
-        });
-        return preview;
-      } catch {
-        console.warn("CUSTOM_EMOJI_PREVIEW_ERROR", { document_id: String(item.document_id), stage: "client_hydrate" });
-        return null;
+    const sourceItems = tabItems(result, nextTab, packId);
+    const items = sourceItems.slice(0, limit).filter((item: any) => !item.preview_url && !item.preview_unavailable);
+    if (!items.length) return result;
+    const ids = items.map((item: any) => String(item.document_id));
+    setEmojiPreviewLoading((current) => ({ ...current, ...Object.fromEntries(ids.map((id: string) => [id, true])) }));
+    try {
+      const response = await props.actions.getCustomEmojiPreviews({
+        data: { auth: props.auth, connectionId: props.connectionId || null, documentIds: ids },
+      });
+      if (requestId !== emojiRequestRef.current || nextTab !== pickerTabRef.current || packId !== selectedEmojiPackRef.current) return result;
+      const byId = new Map((response?.previews ?? []).map((preview: any) => [String(preview.document_id), preview]));
+      const nextCatalog = ids.reduce((catalog: any, id: string) => mergePreview(catalog, nextTab, id, byId.get(id) ?? null), result);
+      setEmojiCatalog(nextCatalog);
+      if (prefetch) {
+        window.setTimeout(() => {
+          if (requestId === emojiRequestRef.current) void hydrateEmojiPreviews(nextCatalog, nextTab, Math.min(sourceItems.length, limit + emojiPageSize), requestId, packId, false);
+        }, 150);
       }
-    }));
-    return items.reduce((catalog: any, item: any, index: number) => {
-      const preview = previews[index];
-      return mergePreview(catalog, nextTab, String(item.document_id), preview);
-    }, result);
+      return nextCatalog;
+    } finally {
+      setEmojiPreviewLoading((current) => {
+        const next = { ...current };
+        ids.forEach((id: string) => delete next[id]);
+        return next;
+      });
+    }
   }
   async function loadMoreEmoji() {
     if (emojiLoading || pickerTab === "categories" || !emojiCatalog) return;
-    const total = (emojiCatalog[pickerTab] ?? []).length;
+    const total = tabItems(emojiCatalog, pickerTab, selectedEmojiPack).length;
     if (emojiVisibleCount >= total) return;
     const nextCount = Math.min(total, emojiVisibleCount + emojiPageSize);
     setEmojiVisibleCount(nextCount);
     setEmojiLoading(true);
     try {
-      setEmojiCatalog(await hydrateEmojiPreviews(emojiCatalog, pickerTab, nextCount));
+      await hydrateEmojiPreviews(emojiCatalog, pickerTab, nextCount);
     } finally {
       setEmojiLoading(false);
     }
   }
+  function selectEmojiPack(packId: string | null) {
+    const started = performance.now();
+    emojiRequestRef.current += 1;
+    selectedEmojiPackRef.current = packId;
+    setSelectedEmojiPack(packId);
+    setEmojiVisibleCount(emojiPageSize);
+    setEmojiError("");
+    requestAnimationFrame(() => {
+      const requestId = emojiRequestRef.current;
+      console.info("CUSTOM_EMOJI_PACK_SWITCH_MS", { tab: pickerTab, pack_id: packId, ms: Math.round(performance.now() - started) });
+      void hydrateEmojiPreviews(emojiCatalog, pickerTab, emojiPageSize, requestId, packId, true);
+    });
+  }
+  useEffect(() => {
+    if (!pickerOpen || pickerTab !== "search") return;
+    const timer = window.setTimeout(() => void loadEmojiCatalog("search"), 350);
+    return () => window.clearTimeout(timer);
+  }, [emojiSearch, pickerOpen, pickerTab]);
   function insertCustomEmoji(item: any) {
     const fallback = item.fallback || "⭐";
     const node = textareaRef.current;
@@ -3603,7 +3659,11 @@ function MessageForm(props: any) {
           setQuery={setEmojiSearch}
           tab={pickerTab}
           visibleCount={emojiVisibleCount}
+          selectedPack={selectedEmojiPack}
+          previewLoading={emojiPreviewLoading}
+          packErrors={emojiPackErrors}
           setTab={setPickerTab}
+          selectPack={selectEmojiPack}
           load={loadEmojiCatalog}
           loadMore={loadMoreEmoji}
           insert={insertCustomEmoji}
@@ -3651,23 +3711,21 @@ function CustomEmojiPicker({
   setQuery,
   tab,
   visibleCount,
+  selectedPack,
+  previewLoading,
+  packErrors,
   setTab,
+  selectPack,
   load,
   loadMore,
   insert,
   close,
 }: any) {
-  const allItems = tab === "categories" ? [] : (catalog?.[tab] ?? []);
-  const items = allItems.slice(0, visibleCount ?? 48);
   const packKey = `${tab}Packs`;
-  const packs = (catalog?.[packKey] ?? [])
-    .map((pack: any) => ({
-      ...pack,
-      items: (pack.items ?? []).filter((item: any) =>
-        items.some((visible: any) => String(visible.document_id) === String(item.document_id)),
-      ),
-    }))
-    .filter((pack: any) => pack.items.length);
+  const allPacks = catalog?.[packKey] ?? [];
+  const activePack = selectedPack ? allPacks.find((pack: any) => String(pack.id) === String(selectedPack)) : allPacks[0];
+  const allItems = tab === "categories" ? [] : activePack ? (activePack.items ?? []) : (catalog?.[tab] ?? []);
+  const items = allItems.slice(0, visibleCount ?? 48);
   const tabs = ["recent", "installed", "featured", "search", "categories"];
   const onGridScroll = (event: any) => {
     const node = event.currentTarget;
@@ -3677,7 +3735,7 @@ function CustomEmojiPicker({
     <button
       key={`${item.source}-${item.document_id}`}
       type="button"
-      className="flex aspect-square min-h-0 items-center justify-center border border-transparent bg-transparent p-1 hover:border-primary hover:bg-primary/10"
+      className="relative flex aspect-square min-h-0 items-center justify-center border border-transparent bg-transparent p-1 hover:border-primary hover:bg-primary/10"
       onClick={() => insert(item)}
       title={item.set_title || item.fallback || "Custom emoji"}
       aria-label={item.set_title || item.fallback || "Custom emoji"}
@@ -3705,9 +3763,12 @@ function CustomEmojiPicker({
             onError={() => console.warn("CUSTOM_EMOJI_PREVIEW_ERROR", { stage: "image_render", document_id: String(item.document_id) })}
           />
         )
-      ) : (
+      ) : item.preview_unavailable ? (
         <span className="text-2xl leading-none">{item.fallback || "*"}</span>
+      ) : (
+        <span className={`size-8 rounded-full bg-muted ${previewLoading?.[String(item.document_id)] ? "animate-pulse" : ""}`} />
       )}
+      {item.premium_required ? <span className="pointer-events-none absolute right-0 top-0 size-1.5 rounded-full bg-primary" /> : null}
     </button>
   );
   return (
@@ -3760,63 +3821,50 @@ function CustomEmojiPicker({
           </div>
         ) : (
           <div className="mt-3 max-h-80 overflow-y-auto pr-1" onScroll={onGridScroll}>
-            {packs.length ? (
-              <div className="space-y-3">
-                {packs.map((pack: any) => (
-                  <section key={`${pack.source}-${pack.id}`}>
-                    <div className="mb-1 flex items-center justify-between gap-2 text-xs">
-                      <p className="truncate font-semibold">{pack.title}</p>
-                      {pack.short_name ? <p className="truncate text-muted-foreground">@{pack.short_name}</p> : null}
-                    </div>
-                    <div className="grid grid-cols-8 gap-1 sm:grid-cols-10">
-                      {pack.items.map(renderEmojiButton)}
-                    </div>
-                  </section>
-                ))}
+            {allPacks.length ? (
+              <div className="sticky top-0 z-10 mb-2 border-b border-border bg-card pb-2">
+                <div className="flex gap-1 overflow-x-auto">
+                  {allPacks.map((pack: any) => {
+                    const icon = (pack.items ?? []).find((item: any) => item.preview_url) ?? (pack.items ?? [])[0];
+                    const active = String(activePack?.id) === String(pack.id);
+                    return (
+                      <button
+                        key={`${pack.source}-${pack.id}`}
+                        type="button"
+                        className={`flex size-10 shrink-0 items-center justify-center border ${active ? "border-primary bg-primary/10" : "border-border bg-background"}`}
+                        title={pack.title}
+                        aria-label={pack.title}
+                        onClick={() => selectPack(String(pack.id))}
+                      >
+                        {icon?.preview_url ? (
+                          icon.preview_format === "tgs" ? (
+                            <TgsPlayer className="size-7" src={icon.preview_url} fallback={icon.fallback || "*"} />
+                          ) : icon.preview_format === "webm" || icon.mime_type === "video/webm" ? (
+                            <video className="size-7 object-contain" src={icon.preview_url} muted playsInline autoPlay loop />
+                          ) : (
+                            <img className="size-7 object-contain" src={icon.preview_url} alt={pack.title} />
+                          )
+                        ) : (
+                          <Sparkles className="size-4 text-muted-foreground" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+                {activePack ? <p className="mt-1 truncate text-xs text-muted-foreground">{activePack.title}</p> : null}
               </div>
-            ) : (
-              <div className="grid grid-cols-8 gap-1 sm:grid-cols-10">
-            {items.map((item: any) => {
-              return (
-                <button
-                  key={`${item.source}-${item.document_id}`}
-                  type="button"
-                  className="flex aspect-square min-h-0 items-center justify-center border border-transparent bg-transparent p-1 text-center hover:border-primary hover:bg-primary/10"
-                  onClick={() => insert(item)}
-                >
-                  {item.preview_url ? (
-                    item.preview_format === "tgs" ? (
-                      <TgsPlayer className="mx-auto size-9" src={item.preview_url} fallback={item.fallback || "⭐"} />
-                    ) : item.preview_format === "webm" || item.mime_type === "video/webm" ? (
-                      <video
-                        className="size-9 object-contain"
-                        src={item.preview_url}
-                        muted
-                        playsInline
-                        autoPlay
-                        loop
-                        onLoadedData={() => console.info("CUSTOM_EMOJI_RENDER_FORMAT", { format: "webm", document_id: String(item.document_id) })}
-                        onError={() => console.warn("CUSTOM_EMOJI_PREVIEW_ERROR", { stage: "webm_render", document_id: String(item.document_id) })}
-                      />
-                    ) : (
-                      <img
-                        className="size-9 object-contain"
-                        src={item.preview_url}
-                        alt={item.fallback || "custom emoji"}
-                        onLoad={() => console.info("CUSTOM_EMOJI_RENDER_FORMAT", { format: "image", document_id: String(item.document_id) })}
-                        onError={() => console.warn("CUSTOM_EMOJI_PREVIEW_ERROR", { stage: "image_render", document_id: String(item.document_id) })}
-                      />
-                    )
-                  ) : (
-                    <span className="block text-2xl">{item.fallback || "⭐"}</span>
-                  )}
-                </button>
-              );
-            })}
+            ) : null}
+            {packErrors?.[selectedPack ?? tab] ? (
+              <div className="mb-2 flex items-center justify-between gap-2 border border-warning/40 bg-warning/10 p-2 text-xs">
+                <span>{packErrors[selectedPack ?? tab]}</span>
+                <Button type="button" size="sm" variant="secondary" onClick={() => load(tab)}>Retry</Button>
               </div>
-            )}
+            ) : null}
+            <div className="grid grid-cols-8 gap-1 sm:grid-cols-10">
+              {items.map(renderEmojiButton)}
+            </div>
             {!loading && !items.length ? <div className="col-span-full"><Empty message="No custom emoji returned for this tab." /></div> : null}
-            {items.length < allItems.length ? <p className="py-2 text-center text-xs text-muted-foreground">Scroll to load more</p> : null}
+            {items.length < allItems.length ? <p className="py-2 text-center text-xs text-muted-foreground">Loading more...</p> : null}
           </div>
         )}
       </div>
