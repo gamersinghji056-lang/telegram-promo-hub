@@ -3546,6 +3546,22 @@ export async function getInvoiceStatus(ctx: AuthContext, invoiceId: string) {
   return invoiceByIdForTenant(ctx.tenantId, invoiceId);
 }
 
+export function normalizeSupportTelegram(value?: string | null) {
+  const raw = String(value ?? "").trim().replace(/^https?:\/\/t\.me\//i, "").replace(/^@/, "");
+  if (!raw) return "";
+  return /^[A-Za-z0-9_]{5,32}$/.test(raw) ? raw : "";
+}
+
+export async function supportSettings() {
+  const general = await getSetting<{ support_telegram?: string; support_email?: string }>("general");
+  const telegramUsername = normalizeSupportTelegram(general.support_telegram);
+  return {
+    telegramUsername,
+    telegramUrl: telegramUsername ? `https://t.me/${telegramUsername}` : "",
+    email: String(general.support_email ?? "").trim(),
+  };
+}
+
 export async function customEmojiCatalog(ctx: AuthContext, input: { connectionId: string; query?: string | null }) {
   await requireConnection(ctx, input.connectionId);
   const entitlement = await premiumEmojiEntitlement(ctx.tenantId);

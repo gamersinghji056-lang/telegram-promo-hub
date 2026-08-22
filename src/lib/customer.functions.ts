@@ -267,6 +267,13 @@ export const getCustomerPreferences = createServerFn({ method: "POST" })
   .inputValidator((i: Auth) => i)
   .handler(async ({ data: i }) => customerPreferences(await resolveAuth(i.auth)));
 
+export const getSupportSettings = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth) => i)
+  .handler(async ({ data: i }) => {
+    await resolveAuth(i.auth);
+    return data.supportSettings();
+  });
+
 export const saveCustomerPreferenceSettings = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { language?: string; theme?: string; notifications?: Record<string, string | number | boolean | null> }) => i)
   .handler(async ({ data: i }) =>

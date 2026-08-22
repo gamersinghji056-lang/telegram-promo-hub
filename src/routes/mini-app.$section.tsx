@@ -64,6 +64,7 @@ import {
   getGroups,
   getKeywords,
   getCustomerPreferences,
+  getSupportSettings,
   getCustomEmojiCatalog,
   getNotifications,
   getOwnActivity,
@@ -102,6 +103,7 @@ import {
   testWritableGroups,
   verifyWritableGroups,
 } from "@/lib/customer.functions";
+import { applyThemePreference } from "@/lib/theme";
 
 const valid = new Set([
   "dashboard",
@@ -279,6 +281,7 @@ function MiniAppSection() {
     updateAccountName: useServerFn(updateAccountName),
     changeAccountPassword: useServerFn(changeAccountPassword),
     getCustomerPreferences: useServerFn(getCustomerPreferences),
+    getSupportSettings: useServerFn(getSupportSettings),
     getCustomEmojiCatalog: useServerFn(getCustomEmojiCatalog),
     saveCustomerPreferenceSettings: useServerFn(saveCustomerPreferenceSettings),
     logout: useServerFn(logoutCustomer),
@@ -356,6 +359,7 @@ function MiniAppSection() {
         logs: await logsFn({ data: { auth: a } }),
         profile: await profileFn({ data: { auth: a } }),
         preferences: await actions.getCustomerPreferences({ data: { auth: a } }),
+        support: await actions.getSupportSettings({ data: { auth: a } }),
       }),
     }),
     [],
@@ -4028,6 +4032,7 @@ function planFeatures(plan: any) {
 
 function SettingsPanel({ auth, data, actions, setNotice, actionBusy, runAction }: any) {
   const profile = data?.profile ?? {};
+  const support = data?.support ?? {};
   const [name, setName] = useState(profile.name ?? "");
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -4068,7 +4073,7 @@ function SettingsPanel({ auth, data, actions, setNotice, actionBusy, runAction }
             runAction("save-preferences", async () => {
               await actions.saveCustomerPreferenceSettings({ data: { auth, language, theme } });
               document.documentElement.dir = language === "fa" ? "rtl" : "ltr";
-              localStorage.setItem("wpay-theme", theme);
+              applyThemePreference(theme);
               localStorage.setItem("wpay-language", language);
               setNotice("Settings saved.");
             })
@@ -4135,6 +4140,22 @@ function SettingsPanel({ auth, data, actions, setNotice, actionBusy, runAction }
       <section className={panelClass("space-y-3")}>
         <p className="font-semibold">Support</p>
         <p className="text-sm text-muted-foreground">Contact platform support from Telegram if you need account or payment review.</p>
+        {support.telegramUrl ? (
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => {
+              const telegram = (window as unknown as { Telegram?: { WebApp?: { openTelegramLink?: (url: string) => void } } }).Telegram?.WebApp;
+              if (telegram?.openTelegramLink) telegram.openTelegramLink(support.telegramUrl);
+              else window.open(support.telegramUrl, "_blank", "noopener,noreferrer");
+            }}
+          >
+            <Send className="mr-2 size-4" />
+            OPEN @{support.telegramUsername}
+          </Button>
+        ) : (
+          <p className="text-sm text-warning">Telegram support is not configured.</p>
+        )}
       </section>
       <section className={panelClass("space-y-3")}>
         <Button

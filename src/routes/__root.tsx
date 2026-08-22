@@ -105,7 +105,7 @@ function RootShell({ children }: { children: ReactNode }) {
       <head>
         <script
           dangerouslySetInnerHTML={{
-            __html: `(()=>{try{const t=localStorage.getItem("wpay-theme")||"system";const l=localStorage.getItem("wpay-language")||"en";const dark=t==="dark"||(t==="system"&&matchMedia("(prefers-color-scheme: dark)").matches);document.documentElement.classList.toggle("dark",dark);document.documentElement.dir=l==="fa"?"rtl":"ltr";document.documentElement.lang=l;}catch{}})();`,
+            __html: `(()=>{try{const t=localStorage.getItem("wpay-theme")||"system";const l=localStorage.getItem("wpay-language")||"en";const tg=window.Telegram&&window.Telegram.WebApp&&window.Telegram.WebApp.colorScheme;const r=t==="dark"?"dark":t==="light"?"light":tg==="dark"||tg==="light"?tg:matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.classList.toggle("dark",r==="dark");document.documentElement.classList.toggle("light",r==="light");document.documentElement.dataset.themePreference=t;document.documentElement.dataset.theme=r;document.documentElement.dir=l==="fa"?"rtl":"ltr";document.documentElement.lang=l;}catch{}})();`,
           }}
         />
         <HeadContent />

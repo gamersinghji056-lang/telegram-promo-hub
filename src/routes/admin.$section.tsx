@@ -9,7 +9,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { supabaseAuthHeaders, withAdminAuthTimeout } from "@/integrations/supabase/auth-attacher";
 import {
   adminMe,
-  changeCustomerPlan,
+  auditAdminSecurityAction,
   checkBot,
   checkTelegramWebhook,
   createCustomer,
@@ -41,7 +41,9 @@ import {
   setCustomerStatus,
   updateSubscription,
   updateTransaction,
+  traceInvoiceTransaction,
 } from "@/lib/admin.functions";
+import { applyThemePreference } from "@/lib/theme";
 
 const valid = new Set([
   "dashboard",
@@ -262,22 +264,18 @@ function CustomersAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promi
     setWorking("plan");
     setError("");
     try {
-      if (input.mode === "CHANGE") {
-        await changeCustomerPlan({ data: { id: customer.id, planId: input.planId } });
-      } else {
-        await grantCustomerPlan({
-          data: {
-            customerId: customer.id,
-            planId: input.planId,
-            duration: input.duration,
-            expiresAt: input.expiresAt || null,
-            noExpiry: input.duration === "NO_EXPIRY",
-            reason: input.reason,
-            unlimited: input.mode === "UNLIMITED",
-            action: input.mode === "EXTEND" ? "EXTEND" : input.mode === "CHANGE" ? "CHANGE" : "GRANT",
-          },
-        });
-      }
+      await grantCustomerPlan({
+        data: {
+          customerId: customer.id,
+          planId: input.planId,
+          duration: input.duration,
+          expiresAt: input.expiresAt || null,
+          noExpiry: input.duration === "NO_EXPIRY",
+          reason: input.reason,
+          unlimited: input.mode === "UNLIMITED",
+          action: input.mode === "EXTEND" ? "EXTEND" : input.mode === "CHANGE" ? "CHANGE" : "GRANT",
+        },
+      });
       await reload();
       await refreshDetail(customer.id);
       setPlanModal(null);
@@ -296,8 +294,10 @@ function CustomersAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promi
       await grantPremiumEmoji({
         data: {
           tenantId: customer.tenant_id,
+          duration: input.duration,
           expiresAt: input.expiresAt || null,
           noExpiry: input.duration === "NO_EXPIRY",
+          action: input.mode,
           revoke: Boolean(input.revoke),
           reason: input.reason,
         },
@@ -512,12 +512,14 @@ function PlanManagementModal({ mode, customer, subscription, plans, working, onC
 
 function PremiumEmojiModal({ revoke, working, onClose, onSubmit }: any) {
   const [duration, setDuration] = useState(revoke ? "REVOKE" : "30");
+  const [mode, setMode] = useState<"GRANT" | "EXTEND">("GRANT");
   const [expiresAt, setExpiresAt] = useState("");
   const [reason, setReason] = useState(revoke ? "Admin revoked Premium Emoji" : "Admin granted Premium Emoji");
   return (
     <ModalFrame title={revoke ? "Revoke Premium Emoji" : "Premium Emoji Add-on"} onClose={onClose}>
-      <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); void onSubmit({ revoke, duration, expiresAt, reason }); }}>
-        {!revoke ? <label className="block text-sm">Duration<select className={adminInput()} value={duration} onChange={(e) => setDuration(e.target.value)}><option value="30">30 days</option><option value="90">90 days</option><option value="365">365 days</option><option value="CUSTOM">Custom expiry</option><option value="NO_EXPIRY">No expiry</option></select></label> : null}
+      <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); void onSubmit({ revoke, duration, expiresAt, reason, mode }); }}>
+        {!revoke ? <label className="block text-sm">Action<select className={adminInput()} value={mode} onChange={(e) => setMode(e.target.value as "GRANT" | "EXTEND")}><option value="GRANT">Grant / Set</option><option value="EXTEND">Extend existing</option></select></label> : null}
+        {!revoke ? <label className="block text-sm">Duration<select className={adminInput()} value={duration} onChange={(e) => setDuration(e.target.value)}><option value="7">7 days</option><option value="30">30 days</option><option value="90">90 days</option><option value="365">365 days</option><option value="CUSTOM">Custom expiry</option><option value="NO_EXPIRY">No expiry</option></select></label> : null}
         {duration === "CUSTOM" ? <label className="block text-sm">Custom Expiry<input className={adminInput()} type="date" value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)} /></label> : null}
         <label className="block text-sm">Reason<textarea className={adminInput()} value={reason} onChange={(e) => setReason(e.target.value)} required /></label>
         <div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" disabled={working || !reason.trim()}>{working ? "Saving..." : revoke ? "Revoke" : "Save"}</Button></div>
@@ -932,8 +934,10 @@ function PaymentsAdmin({ data, reload }: { data: AnyData; reload: () => Promise<
   const legacy = Array.isArray(data?.legacyTransactions) ? data.legacyTransactions : [];
   const monitor = data?.monitor ?? {};
   const [review, setReview] = useState<null | { row: AnyData; status: string }>(null);
+  const [trace, setTrace] = useState<null | AnyData>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [result, setResult] = useState("");
   async function update(row: AnyData, status: string, txHash?: string) {
     setBusy(true);
     setError("");
@@ -963,6 +967,7 @@ function PaymentsAdmin({ data, reload }: { data: AnyData; reload: () => Promise<
           </div>
         ))}
       </section>
+      {result ? <p className="border-l-2 border-primary bg-card p-4 text-sm">{result}</p> : null}
     <AdminTable
       rows={rows}
       columns={["Invoice", "Customer", "Product", "Amount", "Status", "Blockchain", "Actions"]}
@@ -993,6 +998,9 @@ function PaymentsAdmin({ data, reload }: { data: AnyData; reload: () => Promise<
                 {status === "PAID" ? "Confirm manually" : status}
               </Button>
             ))}
+            <Button size="sm" variant="secondary" onClick={() => setTrace(row)}>
+              Trace transaction
+            </Button>
           </div>,
         ];
       }}
@@ -1012,7 +1020,40 @@ function PaymentsAdmin({ data, reload }: { data: AnyData; reload: () => Promise<
       </section>
     ) : null}
     {review ? <PaymentActionModal row={review.row} status={review.status} working={busy} onClose={() => setReview(null)} onSubmit={(txHash: string) => update(review.row, review.status, txHash)} /> : null}
+    {trace ? <TraceTransactionModal row={trace} working={busy} onClose={() => setTrace(null)} onSubmit={async (txHash: string) => {
+      setBusy(true);
+      setError("");
+      setResult("");
+      try {
+        const traced = await traceInvoiceTransaction({ data: { id: trace.id, txHash } });
+        setResult(traced.ok ? "Transaction traced and processed through blockchain validation." : `Trace mismatch: ${traced.reason}`);
+        await reload();
+        setTrace(null);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Transaction trace failed.");
+      } finally {
+        setBusy(false);
+      }
+    }} /> : null}
     </div>
+  );
+}
+
+function TraceTransactionModal({ row, working, onClose, onSubmit }: any) {
+  const [txHash, setTxHash] = useState(row.tx_hash ?? "");
+  return (
+    <ModalFrame title="Trace Transaction" onClose={onClose}>
+      <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); void onSubmit(txHash); }}>
+        <div className="grid gap-2 border border-border bg-background p-3 text-sm sm:grid-cols-2">
+          <p><span className="text-muted-foreground">Invoice:</span> {row.invoice_number ?? row.id}</p>
+          <p><span className="text-muted-foreground">Expected:</span> {Number(row.payable_amount ?? 0).toFixed(6)} USDT</p>
+          <p className="break-all sm:col-span-2"><span className="text-muted-foreground">Wallet:</span> {row.receiving_address}</p>
+        </div>
+        <label className="block text-sm">TRON transaction hash<input className={adminInput()} value={txHash} onChange={(e) => setTxHash(e.target.value)} required /></label>
+        <p className="text-xs text-muted-foreground">Trace verifies token, recipient, amount, confirmation and timestamp before processing.</p>
+        <div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" disabled={working || !txHash.trim()}>{working ? "Tracing..." : "Trace Transaction"}</Button></div>
+      </form>
+    </ModalFrame>
   );
 }
 
@@ -1447,6 +1488,7 @@ function SettingsPanel({ data }: { data: any }) {
   const payments = settings?.payments ?? {};
   const general = settings?.general ?? {};
   const registration = settings?.registration ?? {};
+  const notifications = settings?.notifications ?? {};
   const telegram = settings?.telegram ?? {};
   const monitor = settings?.monitor ?? {};
   const [generalDraft, setGeneralDraft] = useState({
@@ -1463,13 +1505,19 @@ function SettingsPanel({ data }: { data: any }) {
     invoice_expiry_minutes: Number(payments.invoice_expiry_minutes ?? 10),
     confirmations_required: Number(payments.confirmations_required ?? 1),
   });
+  const [notificationDraft, setNotificationDraft] = useState({
+    payment_confirmation_notifications: notifications.payment_confirmation_notifications !== false,
+    plan_expiry_notifications: notifications.plan_expiry_notifications !== false,
+    quota_warning_notifications: notifications.quota_warning_notifications !== false,
+    platform_announcements_enabled: notifications.platform_announcements_enabled !== false,
+  });
   const [prefs, setPrefs] = useState({ language: "en", theme: "system" });
   const [result, setResult] = useState("");
   const [saving, setSaving] = useState("");
   useEffect(() => {
     getAdminPreferences().then((p: any) => setPrefs({ language: p?.language ?? "en", theme: p?.theme ?? "system" })).catch(() => {});
   }, []);
-  async function save(key: "payments" | "general", value: Record<string, unknown>) {
+  async function save(key: "payments" | "general" | "notifications", value: Record<string, unknown>) {
     setSaving(key);
     setResult("");
     try {
@@ -1490,7 +1538,7 @@ function SettingsPanel({ data }: { data: any }) {
       document.documentElement.dir = next.language === "fa" ? "rtl" : "ltr";
       document.documentElement.lang = next.language;
       localStorage.setItem("wpay-language", next.language);
-      localStorage.setItem("wpay-theme", next.theme);
+      applyThemePreference(next.theme);
       setResult("Admin appearance and language saved.");
     } catch (e) {
       setResult(e instanceof Error ? e.message : "Could not save admin preferences.");
@@ -1550,9 +1598,12 @@ function SettingsPanel({ data }: { data: any }) {
           <p className="text-sm text-muted-foreground">Bot token is never shown here.</p>
         </SettingsCard>
         <SettingsCard title="Notifications">
-          <label className="flex items-center gap-2 text-sm"><input type="checkbox" defaultChecked /> Payment confirmations</label>
-          <label className="flex items-center gap-2 text-sm"><input type="checkbox" defaultChecked /> Plan expiry warnings</label>
-          <label className="flex items-center gap-2 text-sm"><input type="checkbox" defaultChecked /> Quota warnings</label>
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={notificationDraft.payment_confirmation_notifications} onChange={(e) => setNotificationDraft((d) => ({ ...d, payment_confirmation_notifications: e.target.checked }))} /> Payment confirmations</label>
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={notificationDraft.plan_expiry_notifications} onChange={(e) => setNotificationDraft((d) => ({ ...d, plan_expiry_notifications: e.target.checked }))} /> Plan expiry warnings</label>
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={notificationDraft.quota_warning_notifications} onChange={(e) => setNotificationDraft((d) => ({ ...d, quota_warning_notifications: e.target.checked }))} /> Quota warnings</label>
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={notificationDraft.platform_announcements_enabled} onChange={(e) => setNotificationDraft((d) => ({ ...d, platform_announcements_enabled: e.target.checked }))} /> Platform announcements</label>
+          <p className="text-xs text-muted-foreground">These settings are persisted now. Existing notification flows should check them before sending.</p>
+          <Button type="button" disabled={saving === "notifications"} onClick={() => save("notifications", notificationDraft)}>{saving === "notifications" ? "Saving..." : "Save Notification Settings"}</Button>
         </SettingsCard>
         <SettingsCard title="Security">
           <p className="text-sm text-muted-foreground">Use Account / Security to change admin email/password and sign out.</p>
@@ -1589,19 +1640,25 @@ function MonitorSummary({ monitor }: { monitor: any }) {
 
 function AccountSecurityPanel() {
   const [email, setEmail] = useState("");
+  const [loadedEmail, setLoadedEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [result, setResult] = useState("");
   const [saving, setSaving] = useState("");
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => setEmail(data.user?.email ?? "")).catch(() => {});
+    supabase.auth.getUser().then(({ data }) => {
+      setEmail(data.user?.email ?? "");
+      setLoadedEmail(data.user?.email ?? "");
+    }).catch(() => {});
   }, []);
   async function saveEmail(e: FormEvent) {
     e.preventDefault();
     setSaving("email");
     setResult("");
     const { error } = await supabase.auth.updateUser({ email });
+    if (!error) await auditAdminSecurityAction({ data: { action: "ADMIN_EMAIL_CHANGED", details: { old_email: loadedEmail, new_email: email } } });
     setResult(error ? error.message : "Admin email update requested. Confirm the email change if Supabase requires verification.");
+    if (!error) setLoadedEmail(email);
     setSaving("");
   }
   async function savePassword(e: FormEvent) {
@@ -1619,6 +1676,7 @@ function AccountSecurityPanel() {
       return;
     }
     const { error } = await supabase.auth.updateUser({ password });
+    if (!error) await auditAdminSecurityAction({ data: { action: "ADMIN_PASSWORD_CHANGED", details: {} } });
     setResult(error ? error.message : "Admin password changed.");
     setPassword("");
     setConfirmPassword("");

@@ -451,8 +451,22 @@ export async function classifyAndRecordPayment(event: {
   return { ok: true, classification, invoiceId: invoice.id };
 }
 
-export async function grantPremiumEmoji(adminId: string, tenantId: string, input: { expiresAt?: string | null; noExpiry?: boolean; reason?: string | null; revoke?: boolean }) {
+function addonExpiryFromInput(currentExpiry: string | null | undefined, input: { duration?: string; expiresAt?: string | null; noExpiry?: boolean; action?: "GRANT" | "EXTEND" }) {
+  if (input.noExpiry || input.duration === "NO_EXPIRY") return null;
+  if (input.duration === "CUSTOM") {
+    if (!input.expiresAt) throw new Error("Custom expiry date is required.");
+    return new Date(input.expiresAt).toISOString();
+  }
+  const days = Number(input.duration ?? 30);
+  if (!Number.isFinite(days) || days < 1) throw new Error("Invalid add-on duration.");
+  const current = currentExpiry ? new Date(currentExpiry).getTime() : 0;
+  const base = input.action === "EXTEND" ? Math.max(Date.now(), Number.isFinite(current) ? current : 0) : Date.now();
+  return new Date(base + days * 86400_000).toISOString();
+}
+
+export async function grantPremiumEmoji(adminId: string, tenantId: string, input: { duration?: string; expiresAt?: string | null; noExpiry?: boolean; action?: "GRANT" | "EXTEND"; reason?: string | null; revoke?: boolean }) {
   const now = new Date().toISOString();
+  const current = await premiumEmojiEntitlement(tenantId);
   if (input.revoke) {
     await db().from("tenant_addon_entitlements").upsert(
       {
@@ -470,7 +484,7 @@ export async function grantPremiumEmoji(adminId: string, tenantId: string, input
     await logAdmin({ admin_user_id: adminId, action: "PREMIUM_EMOJI_REVOKED", resource: tenantId, details: { reason: input.reason ?? null } });
     return { ok: true };
   }
-  const expiresAt = input.noExpiry ? null : input.expiresAt ? new Date(input.expiresAt).toISOString() : new Date(Date.now() + 30 * 86400_000).toISOString();
+  const expiresAt = addonExpiryFromInput(current.entitlement?.expires_at as string | null | undefined, input);
   await db().from("tenant_addon_entitlements").upsert(
     {
       tenant_id: tenantId,
@@ -487,7 +501,12 @@ export async function grantPremiumEmoji(adminId: string, tenantId: string, input
     },
     { onConflict: "tenant_id,addon_code" },
   );
-  await logAdmin({ admin_user_id: adminId, action: "PREMIUM_EMOJI_GRANTED", resource: tenantId, details: { expires_at: expiresAt, reason: input.reason ?? null } });
+  await logAdmin({
+    admin_user_id: adminId,
+    action: input.action === "EXTEND" ? "PREMIUM_EMOJI_EXTENDED" : "PREMIUM_EMOJI_GRANTED",
+    resource: tenantId,
+    details: { old_expires_at: current.entitlement?.expires_at ?? null, expires_at: expiresAt, reason: input.reason ?? null },
+  });
   return { ok: true };
 }
 

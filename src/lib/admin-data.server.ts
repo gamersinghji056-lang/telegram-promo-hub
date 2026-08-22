@@ -21,7 +21,7 @@ import {
   normalizePaymentSettings,
   premiumEmojiEntitlement,
 } from "./billing.server";
-import { tronMonitorHealth } from "./tron-monitor.server";
+import { traceInvoiceTransaction, tronMonitorHealth } from "./tron-monitor.server";
 
 export async function assertSuperAdmin(userId: string) {
   const client = db();
@@ -454,7 +454,11 @@ export async function adminGrantPlan(
     no_expiry: expires === null,
     granted_by: adminId,
     grant_reason: input.reason ?? "Manual grant",
-    metadata: { unlimited: Boolean(input.unlimited) },
+    metadata: {
+      unlimited: Boolean(input.unlimited),
+      source: input.action === "GRANT" ? "FREE_GRANT" : input.action === "CHANGE" ? "ADMIN_CHANGE" : "ADMIN_EXTEND",
+      reason: input.reason ?? null,
+    },
   });
   if (input.unlimited) {
     await client.from("tenant_entitlement_overrides").upsert(
@@ -495,7 +499,7 @@ export async function adminGrantPlan(
     admin_user_id: adminId,
     action: input.unlimited ? "CUSTOM_UNLIMITED_GRANTED" : input.action === "EXTEND" ? "PLAN_EXTENDED" : input.action === "CHANGE" ? "PLAN_CHANGED" : "PLAN_GRANTED",
     resource: customer.email as string,
-    details: { plan: plan.code, expires_at: expires, reason: input.reason ?? null },
+    details: { plan: plan.code, old_expires_at: currentSub?.expires_at ?? null, expires_at: expires, reason: input.reason ?? null, source: input.action === "GRANT" ? "FREE_GRANT" : "ADMIN" },
   });
   return { ok: true };
 }
@@ -752,9 +756,25 @@ export async function adminUpdateTransaction(
   return { ok: true };
 }
 
+export async function adminTraceInvoiceTransaction(adminId: string, invoiceId: string, txHash: string) {
+  const result = await traceInvoiceTransaction(invoiceId, txHash);
+  await logAdmin({
+    admin_user_id: adminId,
+    action: "PAYMENT_TRANSACTION_TRACED",
+    resource: invoiceId,
+    details: {
+      tx_hash: txHash,
+      ok: result.ok,
+      status: result.status,
+      reason: "reason" in result ? result.reason : null,
+    },
+  });
+  return result;
+}
+
 export async function adminGrantPremiumEmoji(
   adminId: string,
-  input: { tenantId: string; expiresAt?: string | null; noExpiry?: boolean; reason?: string | null; revoke?: boolean },
+  input: { tenantId: string; duration?: string; expiresAt?: string | null; noExpiry?: boolean; action?: "GRANT" | "EXTEND"; reason?: string | null; revoke?: boolean },
 ) {
   return grantPremiumEmoji(adminId, input.tenantId, input);
 }
@@ -830,21 +850,28 @@ export type PlatformSettings = {
     usdt_contract?: string;
     confirmations_required?: number;
   };
+  notifications: {
+    payment_confirmation_notifications?: boolean;
+    plan_expiry_notifications?: boolean;
+    quota_warning_notifications?: boolean;
+    platform_announcements_enabled?: boolean;
+  };
   telegram: Awaited<ReturnType<typeof telegramSettings>>;
   discovery: { provider_url?: string; provider_key?: string };
   monitor?: Awaited<ReturnType<typeof tronMonitorHealth>>;
 };
 
 export async function adminSettings(): Promise<PlatformSettings> {
-  const [general, registration, payments, telegram, discovery, monitor] = await Promise.all([
+  const [general, registration, payments, notifications, telegram, discovery, monitor] = await Promise.all([
     getSetting<PlatformSettings["general"]>("general"),
     getSetting<PlatformSettings["registration"]>("registration"),
     getSetting<PlatformSettings["payments"]>("payments").then((settings) => normalizePaymentSettings(settings)),
+    getSetting<PlatformSettings["notifications"]>("notifications"),
     telegramSettings(),
     getSetting<PlatformSettings["discovery"]>("discovery"),
     tronMonitorHealth(),
   ]);
-  return { general, registration, payments, telegram, discovery, monitor };
+  return { general, registration, payments, notifications, telegram, discovery, monitor };
 }
 
 export async function adminRegistration() {
@@ -925,7 +952,7 @@ export async function adminSaveRegistration(adminId: string, value: Record<strin
 
 export async function adminSaveSettings(
   adminId: string,
-  key: "general" | "registration" | "payments" | "telegram" | "discovery",
+  key: "general" | "registration" | "payments" | "telegram" | "discovery" | "notifications",
   value: Record<string, unknown>,
 ) {
   if (key === "telegram" && typeof value["mini_app_url"] === "string") {
@@ -957,6 +984,11 @@ export async function adminSaveSettings(
   await setSetting(key, { ...current, ...value });
   await logAdmin({ admin_user_id: adminId, action: "SETTINGS_UPDATED", resource: key });
   return adminSettings();
+}
+
+export async function adminAuditSecurityAction(adminId: string, action: "ADMIN_EMAIL_CHANGED" | "ADMIN_PASSWORD_CHANGED", details: Record<string, unknown>) {
+  await logAdmin({ admin_user_id: adminId, action, resource: "admin_account", details });
+  return { ok: true };
 }
 
 function normalizeMiniAppUrl(raw: string): string {

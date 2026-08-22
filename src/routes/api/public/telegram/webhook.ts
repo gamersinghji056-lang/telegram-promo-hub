@@ -12,6 +12,7 @@ import {
 } from "@/lib/customer-auth.server";
 import { normalizeLanguage, t } from "@/lib/i18n";
 import { saveCustomerPreferences } from "@/lib/preferences.server";
+import type { LanguageCode } from "@/lib/i18n";
 
 type TgUser = { id: number; username?: string; first_name?: string; language_code?: string };
 type TgChat = { id: number; type: string; title?: string; username?: string };
@@ -22,6 +23,66 @@ type Update = {
   edited_message?: TgMessage;
   callback_query?: { id: string; from: TgUser; data?: string; message?: TgMessage };
 };
+
+const botMessages: Record<LanguageCode, Record<string, string>> = {
+  en: {
+    miniAppMissing: "The Mini App URL has not been configured by the platform admin yet.",
+    helpText: "Register or log in here, then open the Mini App. It is your full dashboard.",
+    cancelDone: "Cancelled.",
+    validEmailPrompt: "Send a valid email address, or /cancel to stop.",
+    registrationPasswordPrompt: "Send a password with at least 8 characters.",
+    confirmPasswordPrompt: "Confirm your password.",
+    passwordTooShort: "Password must be at least 8 characters. Send a new password, or /cancel.",
+    passwordsMismatch: "Passwords did not match. Send /register to start again.",
+    pendingApproval: "Account created and pending admin approval.",
+    loginOpenMiniApp: "Login successful. Open the Mini App to continue.",
+    registrationOpenMiniApp: "Account created. Open the Mini App to continue.",
+  },
+  "zh-CN": {
+    miniAppMissing: "Mini App URL has not been configured.",
+    helpText: "Register or log in here, then open the Mini App.",
+    cancelDone: "Cancelled.",
+    validEmailPrompt: "Send a valid email address, or /cancel to stop.",
+    registrationPasswordPrompt: "Send a password with at least 8 characters.",
+    confirmPasswordPrompt: "Confirm your password.",
+    passwordTooShort: "Password must be at least 8 characters. Send a new password, or /cancel.",
+    passwordsMismatch: "Passwords did not match. Send /register to start again.",
+    pendingApproval: "Account created and pending admin approval.",
+    loginOpenMiniApp: "Login successful. Open the Mini App to continue.",
+    registrationOpenMiniApp: "Account created. Open the Mini App to continue.",
+  },
+  ru: {
+    miniAppMissing: "Mini App URL has not been configured.",
+    helpText: "Register or log in here, then open the Mini App.",
+    cancelDone: "Cancelled.",
+    validEmailPrompt: "Send a valid email address, or /cancel to stop.",
+    registrationPasswordPrompt: "Send a password with at least 8 characters.",
+    confirmPasswordPrompt: "Confirm your password.",
+    passwordTooShort: "Password must be at least 8 characters. Send a new password, or /cancel.",
+    passwordsMismatch: "Passwords did not match. Send /register to start again.",
+    pendingApproval: "Account created and pending admin approval.",
+    loginOpenMiniApp: "Login successful. Open the Mini App to continue.",
+    registrationOpenMiniApp: "Account created. Open the Mini App to continue.",
+  },
+  fa: {
+    miniAppMissing: "Mini App URL has not been configured.",
+    helpText: "Register or log in here, then open the Mini App.",
+    cancelDone: "Cancelled.",
+    validEmailPrompt: "Send a valid email address, or /cancel to stop.",
+    registrationPasswordPrompt: "Send a password with at least 8 characters.",
+    confirmPasswordPrompt: "Confirm your password.",
+    passwordTooShort: "Password must be at least 8 characters. Send a new password, or /cancel.",
+    passwordsMismatch: "Passwords did not match. Send /register to start again.",
+    pendingApproval: "Account created and pending admin approval.",
+    loginOpenMiniApp: "Login successful. Open the Mini App to continue.",
+    registrationOpenMiniApp: "Account created. Open the Mini App to continue.",
+  },
+};
+
+function bt(language: string | null | undefined, key: string) {
+  const lang = normalizeLanguage(language);
+  return botMessages[lang][key] ?? botMessages.en[key] ?? key;
+}
 
 function diagnostic(event: string, details: Record<string, unknown>) {
   console.info(JSON.stringify({ event: `telegram_webhook_${event}`, ...details }));
@@ -157,7 +218,7 @@ async function sendOpenMiniApp(chatId: number, text: string, sessionToken?: stri
     chatId,
     keyboard
       ? text
-      : `${text}\n\nThe Mini App URL has not been configured by the platform admin yet.`,
+      : `${text}\n\n${bt("en", "miniAppMissing")}`,
     keyboard ?? undefined,
   );
 }
@@ -169,10 +230,21 @@ async function botLanguage(user: TgUser) {
     .eq("telegram_user_id", user.id)
     .maybeSingle();
   const pref = Array.isArray(customer?.customer_preferences) ? customer?.customer_preferences[0] : customer?.customer_preferences;
-  return normalizeLanguage(pref?.language ?? user.language_code);
+  if (pref?.language) return normalizeLanguage(pref.language);
+  const { data: pending } = await db()
+    .from("bot_language_preferences")
+    .select("language")
+    .eq("telegram_user_id", user.id)
+    .maybeSingle();
+  return normalizeLanguage(pending?.language ?? user.language_code);
 }
 
 async function persistBotLanguage(userId: number, language: string) {
+  const normalized = normalizeLanguage(language);
+  await db().from("bot_language_preferences").upsert(
+    { telegram_user_id: userId, language: normalized, updated_at: new Date().toISOString() },
+    { onConflict: "telegram_user_id" },
+  );
   const { data: customer } = await db()
     .from("customers")
     .select("id, tenant_id, email, name, telegram_user_id")
@@ -187,7 +259,7 @@ async function persistBotLanguage(userId: number, language: string) {
       name: (customer.name as string | null) ?? null,
       telegramUserId: (customer.telegram_user_id as number | null) ?? null,
     },
-    { language },
+    { language: normalized },
   );
 }
 
@@ -255,6 +327,7 @@ async function handlePrivateText(msg: TgMessage) {
   const userId = msg.from!.id;
   const text = (msg.text ?? "").trim();
   const { flow, step, payload } = await getState(userId);
+  const language = await botLanguage(msg.from!);
 
   if (text === "/start" || text === "/menu") {
     diagnostic("handler", { handler: "main_menu", chat_id: chatId });
@@ -265,7 +338,7 @@ async function handlePrivateText(msg: TgMessage) {
   if (text === "/register") {
     diagnostic("handler", { handler: "registration_email", chat_id: chatId });
     await setState(userId, "REGISTRATION", "EMAIL");
-    await send(chatId, "Send the email address you want to register with.");
+    await send(chatId, t(language, "emailPrompt"));
     return;
   }
   if (text === "/login") {
@@ -274,10 +347,15 @@ async function handlePrivateText(msg: TgMessage) {
       telegram_username: msg.from?.username ?? null,
       first_name: msg.from?.first_name ?? null,
     });
-    await send(chatId, "Send your account email address.");
+    await send(chatId, t(language, "emailPrompt"));
     return;
   }
   if (text === "/help") {
+    diagnostic("handler", { handler: "help", chat_id: chatId });
+    await send(chatId, bt(language, "helpText"));
+    return;
+  }
+  if (text === "/help_legacy_disabled") {
     diagnostic("handler", { handler: "help", chat_id: chatId });
     await send(
       chatId,
@@ -288,7 +366,7 @@ async function handlePrivateText(msg: TgMessage) {
   if (text === "/cancel") {
     diagnostic("handler", { handler: "cancel", chat_id: chatId });
     await clearTelegramFlow(userId);
-    await send(chatId, "Cancelled.");
+    await send(chatId, bt(language, "cancelDone"));
     return;
   }
 
@@ -296,7 +374,7 @@ async function handlePrivateText(msg: TgMessage) {
     diagnostic("handler", { handler: "registration_password", chat_id: chatId });
     const email = normalizeEmail(text);
     if (!validEmail(email)) {
-      await send(chatId, "Send a valid email address, or /cancel to stop registration.");
+      await send(chatId, bt(language, "validEmailPrompt"));
       return;
     }
     await setState(userId, "REGISTRATION", "PASSWORD", {
@@ -304,7 +382,7 @@ async function handlePrivateText(msg: TgMessage) {
       telegram_username: msg.from?.username ?? null,
       first_name: msg.from?.first_name ?? null,
     });
-    await send(chatId, "Send a password with at least 8 characters.");
+    await send(chatId, bt(language, "registrationPasswordPrompt"));
     return;
   }
 
@@ -312,14 +390,14 @@ async function handlePrivateText(msg: TgMessage) {
     diagnostic("handler", { handler: "registration_confirm_password", chat_id: chatId });
     await deleteMessage(chatId, msg.message_id);
     if (text.length < 8) {
-      await send(chatId, "Password must be at least 8 characters. Send a new password, or /cancel.");
+      await send(chatId, bt(language, "passwordTooShort"));
       return;
     }
     await setState(userId, "REGISTRATION", "CONFIRM_PASSWORD", {
       ...payload,
       password_hash: await hashPassword(text),
     });
-    await send(chatId, "Confirm your password.");
+    await send(chatId, bt(language, "confirmPasswordPrompt"));
     return;
   }
 
@@ -330,7 +408,7 @@ async function handlePrivateText(msg: TgMessage) {
     const passwordHash = typeof payload.password_hash === "string" ? payload.password_hash : "";
     if (!email || !passwordHash || !(await verifyPassword(text, passwordHash))) {
       await clearTelegramFlow(userId);
-      await send(chatId, "Passwords did not match. Send /register to start again.");
+      await send(chatId, bt(language, "passwordsMismatch"));
       return;
     }
     const result = await registerCustomerWithPasswordHash({
@@ -346,14 +424,24 @@ async function handlePrivateText(msg: TgMessage) {
       return;
     }
     if (result.status !== "ACTIVE") {
-      await send(chatId, "Account created and pending admin approval.");
+      await send(chatId, bt(language, "pendingApproval"));
       return;
     }
+    await saveCustomerPreferences(
+      {
+        customerId: result.customerId,
+        tenantId: result.tenantId,
+        email,
+        name: typeof payload.first_name === "string" ? payload.first_name : null,
+        telegramUserId: userId,
+      },
+      { language },
+    );
     const sessionToken = await createCustomerSessionForCustomer({
       customerId: result.customerId,
       tenantId: result.tenantId,
     });
-    await sendOpenMiniApp(chatId, "Account created. Open the Mini App to continue.", sessionToken);
+    await sendOpenMiniApp(chatId, bt(language, "registrationOpenMiniApp"), sessionToken);
     return;
   }
 
@@ -361,7 +449,7 @@ async function handlePrivateText(msg: TgMessage) {
     diagnostic("handler", { handler: "login_password", chat_id: chatId });
     const email = normalizeEmail(text);
     if (!validEmail(email)) {
-      await send(chatId, "Send a valid email address, or /cancel to stop login.");
+      await send(chatId, bt(language, "validEmailPrompt"));
       return;
     }
     await setState(userId, "LOGIN", "PASSWORD", {
@@ -369,7 +457,7 @@ async function handlePrivateText(msg: TgMessage) {
       telegram_username: msg.from?.username ?? null,
       first_name: msg.from?.first_name ?? null,
     });
-    await send(chatId, "Send your password.");
+    await send(chatId, t(language, "passwordPrompt"));
     return;
   }
 
@@ -388,7 +476,17 @@ async function handlePrivateText(msg: TgMessage) {
       await send(chatId, result.error);
       return;
     }
-    await sendOpenMiniApp(chatId, "Login successful. Open the Mini App to continue.", result.token);
+    await saveCustomerPreferences(
+      {
+        customerId: result.customerId,
+        tenantId: result.tenantId,
+        email,
+        name: null,
+        telegramUserId: userId,
+      },
+      { language },
+    );
+    await sendOpenMiniApp(chatId, bt(language, "loginOpenMiniApp"), result.token);
     return;
   }
 
@@ -420,7 +518,7 @@ async function processUpdate(update: Update) {
       } else if (cq.data === "help") {
         await send(chatId, `${t(await botLanguage(cq.from), "register")} / ${t(await botLanguage(cq.from), "login")} -> ${t(await botLanguage(cq.from), "openMiniApp")}.`);
       } else if (cq.data === "miniapp_missing") {
-        await send(chatId, "The Mini App URL has not been configured by the platform admin yet.");
+        await send(chatId, bt(await botLanguage(cq.from), "miniAppMissing"));
       }
       return;
     }

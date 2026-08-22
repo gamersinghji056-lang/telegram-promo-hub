@@ -90,8 +90,10 @@ export const grantPremiumEmoji = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((i: {
     tenantId: string;
+    duration?: string;
     expiresAt?: string | null;
     noExpiry?: boolean;
+    action?: "GRANT" | "EXTEND";
     reason?: string | null;
     revoke?: boolean;
   }) => i)
@@ -186,6 +188,14 @@ export const updateTransaction = createServerFn({ method: "POST" })
     return admin.adminUpdateTransaction(context.userId, data.id, data.status, data.txHash);
   });
 
+export const traceInvoiceTransaction = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((i: { id: string; txHash: string }) => i)
+  .handler(async ({ context, data }) => {
+    await admin.assertSuperAdmin(context.userId);
+    return admin.adminTraceInvoiceTransaction(context.userId, data.id, data.txHash);
+  });
+
 export const updateSubscription = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((i: { id: string; action: "EXTEND" | "EXPIRE" | "CANCEL" | "GRANT_AGAIN"; days?: number; reason?: string }) => i)
@@ -256,10 +266,18 @@ export const saveRegistration = createServerFn({ method: "POST" })
 
 export const saveSettings = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((i: { key: "general" | "registration" | "payments" | "telegram" | "discovery"; value: Record<string, unknown> }) => i)
+  .inputValidator((i: { key: "general" | "registration" | "payments" | "telegram" | "discovery" | "notifications"; value: Record<string, unknown> }) => i)
   .handler(async ({ context, data }) => {
     await admin.assertSuperAdmin(context.userId);
     return admin.adminSaveSettings(context.userId, data.key, data.value);
+  });
+
+export const auditAdminSecurityAction = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((i: { action: "ADMIN_EMAIL_CHANGED" | "ADMIN_PASSWORD_CHANGED"; details?: Record<string, unknown> }) => i)
+  .handler(async ({ context, data }) => {
+    await admin.assertSuperAdmin(context.userId);
+    return admin.adminAuditSecurityAction(context.userId, data.action, data.details ?? {});
   });
 
 export const checkBot = createServerFn({ method: "POST" })

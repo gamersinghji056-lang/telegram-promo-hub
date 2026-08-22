@@ -387,6 +387,7 @@ export async function loginCustomer(input: {
       ok: true;
       token: string;
       customerId: string;
+      tenantId: string;
     }
   | {
       ok: false;
@@ -495,6 +496,7 @@ export async function loginCustomer(input: {
     ok: true,
     token,
     customerId: customer.id as string,
+    tenantId: customer.tenant_id as string,
   };
 }
 
