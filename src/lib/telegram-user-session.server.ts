@@ -92,9 +92,14 @@ function errorMessage(error: unknown) {
 type StoredMessageEntity = NonNullable<MessagePayload["entities"]>[number] & { premium_required?: boolean };
 export type CustomEmojiItem = {
   document_id: string;
+  access_hash?: string | null;
+  file_reference?: string | null;
   fallback: string;
   premium_required: boolean;
   free: boolean;
+  mime_type?: string | null;
+  preview_url?: string | null;
+  preview_unavailable?: boolean;
   set_title?: string | null;
   set_short_name?: string | null;
   source: "recent" | "installed" | "featured" | "search" | "category";
@@ -159,9 +164,14 @@ function emojiItem(doc: Api.TypeDocument, source: CustomEmojiItem["source"], set
   const meta = stickerSetMeta(set);
   return {
     document_id: String(doc.id),
+    access_hash: String(doc.accessHash),
+    file_reference: Buffer.from(doc.fileReference ?? Buffer.alloc(0)).toString("base64"),
     fallback: attr.alt || "⭐",
     free: attr.free === true,
     premium_required: attr.free !== true,
+    mime_type: doc.mimeType ?? null,
+    preview_url: null,
+    preview_unavailable: false,
     set_title: meta.title,
     set_short_name: meta.shortName,
     source,
@@ -293,6 +303,30 @@ export async function listCustomEmojiCatalogViaUserSession(
       console.warn("CUSTOM_EMOJI_GROUPS_FAILED", { error: errorMessage(error) });
     }
     return catalog;
+  });
+}
+
+export async function customEmojiPreviewViaUserSession(
+  tenantId: string,
+  connectionId: string,
+  documentId: string,
+): Promise<{ document_id: string; mime_type: string; data_url: string; fallback: string }> {
+  return withAuthorizedUserClient(tenantId, connectionId, async (client) => {
+    const docs = await client.invoke(new Api.messages.GetCustomEmojiDocuments({
+      documentId: [bigInt(String(documentId))],
+    }));
+    const doc = (docs ?? []).find((item) => item instanceof Api.Document && String(item.id) === String(documentId)) as Api.Document | undefined;
+    if (!doc) throw new Error("This custom emoji is no longer available.");
+    const attr = customEmojiAttribute(doc);
+    const downloaded = await client.downloadMedia(doc as never, {});
+    if (!Buffer.isBuffer(downloaded)) throw new Error("Telegram custom emoji preview could not be downloaded.");
+    const mime = doc.mimeType || "application/octet-stream";
+    return {
+      document_id: String(doc.id),
+      mime_type: mime,
+      data_url: `data:${mime};base64,${downloaded.toString("base64")}`,
+      fallback: attr?.alt || "⭐",
+    };
   });
 }
 

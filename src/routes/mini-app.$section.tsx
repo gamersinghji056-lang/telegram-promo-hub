@@ -11,6 +11,7 @@ import {
   CheckCircle2,
   Circle,
   Clock,
+  Copy,
   CreditCard,
   Eye,
   FolderOpen,
@@ -66,6 +67,7 @@ import {
   getCustomerPreferences,
   getSupportSettings,
   getCustomEmojiCatalog,
+  getCustomEmojiPreview,
   getNotifications,
   getOwnActivity,
   rejectGroup,
@@ -74,6 +76,7 @@ import {
   removeConnection,
   removeGroup,
   getInvoiceStatus,
+  checkInvoicePaymentStatus,
   requestPayment,
   requestPremiumEmojiPayment,
   runGroupDiscovery,
@@ -104,6 +107,7 @@ import {
   verifyWritableGroups,
 } from "@/lib/customer.functions";
 import { applyThemePreference } from "@/lib/theme";
+import { applyMiniAppTranslations, miniT, normalizeMiniLanguage } from "@/lib/mini-i18n";
 
 const valid = new Set([
   "dashboard",
@@ -207,6 +211,48 @@ function statusTone(status?: string) {
   return "text-primary";
 }
 
+function formatUsdtAmount(value: unknown) {
+  const raw = String(value ?? "").trim();
+  const numeric = Number(raw);
+  if (!Number.isFinite(numeric)) return raw;
+  return numeric.toFixed(6).replace(/\.?0+$/, "");
+}
+
+async function copyText(value: string) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return true;
+    } catch {
+      /* fall back for Telegram and iOS WebViews */
+    }
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } finally {
+    document.body.removeChild(textarea);
+  }
+  return copied;
+}
+
+function openExternalLink(url?: string | null, telegramOnly = false) {
+  if (!url) return;
+  const telegram = (window as unknown as { Telegram?: { WebApp?: { openTelegramLink?: (url: string) => void; openLink?: (url: string) => void } } }).Telegram?.WebApp;
+  if (telegramOnly && telegram?.openTelegramLink) telegram.openTelegramLink(url);
+  else if (telegram?.openLink) telegram.openLink(url);
+  else window.open(url, "_blank", "noopener,noreferrer");
+}
+
 function healthColor(score: number) {
   const clamped = Math.max(0, Math.min(100, score));
   return `hsl(${Math.round(clamped * 1.2)}, 78%, 45%)`;
@@ -283,6 +329,7 @@ function MiniAppSection() {
     getCustomerPreferences: useServerFn(getCustomerPreferences),
     getSupportSettings: useServerFn(getSupportSettings),
     getCustomEmojiCatalog: useServerFn(getCustomEmojiCatalog),
+    getCustomEmojiPreview: useServerFn(getCustomEmojiPreview),
     saveCustomerPreferenceSettings: useServerFn(saveCustomerPreferenceSettings),
     logout: useServerFn(logoutCustomer),
   };
@@ -298,6 +345,7 @@ function MiniAppSection() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [profile, setProfile] = useState<any>(null);
   const [showProfile, setShowProfile] = useState(false);
+  const [appLanguage, setAppLanguage] = useState(() => normalizeMiniLanguage(typeof window !== "undefined" ? localStorage.getItem("wpay-language") : "en"));
   const sectionRef = useRef(section);
   const cacheRef = useRef(new Map<string, any>());
 
@@ -373,6 +421,11 @@ function MiniAppSection() {
     if (cached && !force) {
       setAuth(nextAuth);
       setData(cached.data);
+      if (cached.data?.preferences?.language) {
+        const nextLanguage = normalizeMiniLanguage(cached.data.preferences.language);
+        setAppLanguage(nextLanguage);
+        localStorage.setItem("wpay-language", nextLanguage);
+      }
       setLoadedSection(targetSection);
       setNotifications(cached.notifications ?? notifications);
       setProfile(cached.profile ?? profile);
@@ -397,6 +450,11 @@ function MiniAppSection() {
     try {
       const result = await loaders[targetSection]?.(nextAuth);
       setData(result);
+      if (result?.preferences?.language) {
+        const nextLanguage = normalizeMiniLanguage(result.preferences.language);
+        setAppLanguage(nextLanguage);
+        localStorage.setItem("wpay-language", nextLanguage);
+      }
       setLoadedSection(targetSection);
       setBusy(false);
       void notificationsFn({ data: { auth: nextAuth } }).then((notes) => {
@@ -465,6 +523,10 @@ function MiniAppSection() {
     sectionRef.current = section;
     void load(false);
   }, [section]);
+
+  useEffect(() => {
+    applyMiniAppTranslations(appLanguage);
+  }, [appLanguage, section, data, notice, error, showNotifications, showProfile]);
 
   useEffect(() => {
     if (!notice) return;
@@ -604,7 +666,7 @@ function MiniAppSection() {
       <div className="mb-5 flex items-end justify-between gap-3">
         <div>
           <p className="text-xs font-semibold uppercase text-primary">Workspace</p>
-          <h1 className="mt-1 text-2xl font-semibold">{titles[section] ?? section}</h1>
+          <h1 className="mt-1 text-2xl font-semibold">{miniT(appLanguage, titles[section] ?? section)}</h1>
         </div>
         <div className="flex gap-2">
           <Button size="icon" variant="secondary" aria-label="Refresh" onClick={() => load(true)} disabled={busy}>
@@ -648,6 +710,8 @@ function MiniAppSection() {
           setNotice={guardedNotice(section)}
           actionBusy={actionBusy}
           runAction={runAction}
+          appLanguage={appLanguage}
+          setAppLanguage={setAppLanguage}
         />
       )}
       {showNotifications ? (
@@ -740,6 +804,8 @@ function CustomerContent(props: {
   setNotice: (value: string) => void;
   actionBusy: string;
   runAction: (label: string, fn: () => Promise<void>) => Promise<void>;
+  appLanguage?: string;
+  setAppLanguage?: (value: any) => void;
 }) {
   const { section } = props;
   if (section === "dashboard") return <Dashboard data={props.data} />;
@@ -3287,12 +3353,34 @@ function MessageForm(props: any) {
       const result = await props.actions.getCustomEmojiCatalog({
         data: { auth: props.auth, connectionId: props.connectionId, query: nextTab === "search" ? emojiSearch : "" },
       });
-      setEmojiCatalog(result);
+      const hydrated = await hydrateEmojiPreviews(result, nextTab);
+      setEmojiCatalog(hydrated);
     } catch (error) {
       setEmojiError(error instanceof Error ? error.message : "Custom emoji could not be loaded.");
     } finally {
       setEmojiLoading(false);
     }
+  }
+  async function hydrateEmojiPreviews(result: any, nextTab: string) {
+    if (!result || nextTab === "categories") return result;
+    const items = (result[nextTab] ?? []).slice(0, 24);
+    const previews = await Promise.all(items.map(async (item: any) => {
+      try {
+        return await props.actions.getCustomEmojiPreview({
+          data: { auth: props.auth, connectionId: props.connectionId, documentId: String(item.document_id) },
+        });
+      } catch {
+        return null;
+      }
+    }));
+    const byId = new Map(previews.filter(Boolean).map((preview: any) => [String(preview.document_id), preview]));
+    return {
+      ...result,
+      [nextTab]: (result[nextTab] ?? []).map((item: any) => {
+        const preview = byId.get(String(item.document_id)) as any;
+        return preview ? { ...item, preview_url: preview.data_url, mime_type: preview.mime_type, fallback: preview.fallback ?? item.fallback } : { ...item, preview_unavailable: true };
+      }),
+    };
   }
   function insertCustomEmoji(item: any) {
     if (item.premium_required && emojiCatalog?.sessionPremium !== true) {
@@ -3508,7 +3596,15 @@ function CustomEmojiPicker({
                   className={`min-h-20 border border-border bg-background p-2 text-center ${locked ? "opacity-55" : "hover:border-primary"}`}
                   onClick={() => insert(item)}
                 >
-                  <span className="block text-2xl">{item.fallback || "⭐"}</span>
+                  {item.preview_url ? (
+                    item.mime_type === "video/webm" ? (
+                      <video className="mx-auto size-9 object-contain" src={item.preview_url} muted playsInline autoPlay loop />
+                    ) : (
+                      <img className="mx-auto size-9 object-contain" src={item.preview_url} alt={item.fallback || "custom emoji"} />
+                    )
+                  ) : (
+                    <span className="block text-2xl">{item.fallback || "⭐"}</span>
+                  )}
                   <span className="mt-1 block truncate text-[10px] text-muted-foreground">{item.set_title || item.source}</span>
                   <span className={locked ? "block text-[10px] text-warning" : "block text-[10px] text-success"}>{item.free ? "Free" : "Premium"}</span>
                 </button>
@@ -3748,7 +3844,8 @@ function AnalyticsSection({
   );
 }
 
-function Billing({ auth, data, setNotice, actionBusy, runAction, reload }: any) {
+function Billing({ auth, data, setNotice, actionBusy, runAction, reload, appLanguage }: any) {
+  const language = appLanguage ?? localStorage.getItem("wpay-language") ?? "en";
   const usage = data?.usage ?? {};
   const currentPlan = usage.plan ?? data?.tenant?.plans ?? data?.subscription?.plans ?? {};
   const currentCode = currentPlan?.code ?? "";
@@ -3787,6 +3884,7 @@ function Billing({ auth, data, setNotice, actionBusy, runAction, reload }: any) 
   const paymentsEnabled = Boolean(data?.payments?.enabled);
   const invoiceCountdown = invoice?.expires_at ? Math.max(0, Math.floor((new Date(invoice.expires_at).getTime() - now) / 1000)) : 0;
   const countdownText = `${String(Math.floor(invoiceCountdown / 60)).padStart(2, "0")}:${String(invoiceCountdown % 60).padStart(2, "0")}`;
+  const exactAmount = formatUsdtAmount(invoice?.payable_amount);
   async function createOrReplaceInvoice(productLabel: string, create: (replace?: boolean) => Promise<any>) {
     try {
       const next = await create(false);
@@ -3875,15 +3973,53 @@ function Billing({ auth, data, setNotice, actionBusy, runAction, reload }: any) 
             <div className="space-y-2 text-sm">
               <p className="font-semibold text-white">USDT TRC20</p>
               <p className="text-slate-300">Exact Payable Amount</p>
-              <p className="break-all text-2xl font-semibold text-emerald-300">{Number(invoice.payable_amount).toFixed(6)} USDT</p>
+              <p className="break-all text-2xl font-semibold text-emerald-300">{exactAmount} USDT</p>
               <p className="text-slate-300">Receiving Address</p>
               <p className="break-all rounded-md border border-white/10 bg-white/[0.03] p-2 font-mono text-xs text-white">{invoice.receiving_address}</p>
               <p className="text-slate-300">Countdown: <span className="font-semibold text-white">{invoice.status === "EXPIRED" ? "Expired" : countdownText}</span></p>
               <p className="text-slate-300">Status: {invoice.status === "PENDING" ? "Waiting for payment..." : invoice.status}</p>
               <div className="flex flex-wrap gap-2">
-                <Button size="sm" type="button" onClick={() => void navigator.clipboard?.writeText(invoice.receiving_address)}>COPY ADDRESS</Button>
-                <Button size="sm" type="button" variant="secondary" onClick={() => void navigator.clipboard?.writeText(Number(invoice.payable_amount).toFixed(6))}>COPY AMOUNT</Button>
-                <Button size="sm" type="button" variant="secondary" onClick={() => window.open(invoice.tronlink_url, "_blank", "noopener,noreferrer")}>OPEN TRONLINK</Button>
+                <Button
+                  size="sm"
+                  type="button"
+                  onClick={() => void copyText(String(invoice.receiving_address ?? "")).then((ok) => setNotice(ok ? miniT(language, "Address copied") : miniT(language, "Copy failed")))}
+                >
+                  <Copy className="mr-2 size-4" />
+                  COPY ADDRESS
+                </Button>
+                <Button
+                  size="sm"
+                  type="button"
+                  variant="secondary"
+                  onClick={() => void copyText(exactAmount).then((ok) => setNotice(ok ? miniT(language, "Amount copied") : miniT(language, "Copy failed")))}
+                >
+                  <Copy className="mr-2 size-4" />
+                  COPY AMOUNT
+                </Button>
+                <Button size="sm" type="button" variant="secondary" onClick={() => openExternalLink(invoice.tronlink_url)}>OPEN TRONLINK</Button>
+                <Button
+                  size="sm"
+                  type="button"
+                  variant="secondary"
+                  disabled={actionBusy === `check-invoice-${invoice.id}`}
+                  onClick={() => void runAction(`check-invoice-${invoice.id}`, async () => {
+                    const next = await checkInvoicePaymentStatus({ data: { auth, invoiceId: invoice.id } }) as any;
+                    setInvoice(next);
+                    setNotice(next?.status === "PAID" ? miniT(language, "Payment confirmed. Your product is active.") : miniT(language, "Payment not found yet."));
+                    await reload();
+                  })}
+                >
+                  {actionBusy === `check-invoice-${invoice.id}` ? "Checking..." : "CHECK PAYMENT STATUS"}
+                </Button>
+                {invoice.tx_hash ? (
+                  <Button size="sm" type="button" variant="secondary" onClick={() => openExternalLink(invoice.tronscan_url)}>
+                    VIEW ON TRONSCAN
+                  </Button>
+                ) : invoice.receiving_address ? (
+                  <Button size="sm" type="button" variant="secondary" onClick={() => openExternalLink(`https://tronscan.org/#/address/${encodeURIComponent(invoice.receiving_address)}`)}>
+                    VIEW RECEIVING ADDRESS ON TRONSCAN
+                  </Button>
+                ) : null}
               </div>
               {invoice.status === "EXPIRED" ? (
                 <Button size="sm" type="button" onClick={() => setInvoice(null)}>CREATE NEW INVOICE</Button>
@@ -3961,7 +4097,7 @@ function Billing({ auth, data, setNotice, actionBusy, runAction, reload }: any) 
       {history.map((t: any) => (
         <article key={t.id} className={panelClass()}>
           <p className="font-medium">
-            {t.product_code ?? t.plans?.name ?? t.plan_id ?? "Payment"} - {Number(t.payable_amount ?? t.invoice_payable_amount ?? t.amount).toFixed(6)} {t.currency ?? "USDT"}
+            {t.product_code ?? t.plans?.name ?? t.plan_id ?? "Payment"} - {formatUsdtAmount(t.payable_amount ?? t.invoice_payable_amount ?? t.amount)} {t.currency ?? "USDT"}
           </p>
           <p className={`mt-1 text-xs font-semibold ${statusTone(t.status)}`}>{t.status}</p>
           <p className="mt-1 text-xs text-muted-foreground">{t.created_at ? new Date(t.created_at).toLocaleString() : ""}</p>
@@ -4030,7 +4166,7 @@ function planFeatures(plan: any) {
   ];
 }
 
-function SettingsPanel({ auth, data, actions, setNotice, actionBusy, runAction }: any) {
+function SettingsPanel({ auth, data, actions, setNotice, actionBusy, runAction, appLanguage, setAppLanguage }: any) {
   const profile = data?.profile ?? {};
   const support = data?.support ?? {};
   const [name, setName] = useState(profile.name ?? "");
@@ -4039,11 +4175,12 @@ function SettingsPanel({ auth, data, actions, setNotice, actionBusy, runAction }
   const prefs = data?.preferences ?? { language: "en", theme: "system" };
   const [language, setLanguage] = useState(prefs.language ?? "en");
   const [theme, setTheme] = useState(prefs.theme ?? "system");
+  const t = (text: string) => miniT(appLanguage ?? language, text);
   return (
     <div className="space-y-3">
       <section className={panelClass("space-y-3")}>
         <Settings className="size-5 text-primary" />
-        <p className="mt-3 font-semibold">Account Settings</p>
+        <p className="mt-3 font-semibold">{t("Account Settings")}</p>
         <div className="text-sm text-muted-foreground">
           <p>{profile.name ?? "User001"}</p>
           <p>{profile.email}</p>
@@ -4051,20 +4188,20 @@ function SettingsPanel({ auth, data, actions, setNotice, actionBusy, runAction }
         </div>
       </section>
       <section className={panelClass("space-y-3")}>
-        <p className="font-semibold">Appearance</p>
+        <p className="font-semibold">{t("Appearance")}</p>
         <select className={inputClass()} value={theme} onChange={(e) => setTheme(e.target.value)}>
-          <option value="light">Light</option>
-          <option value="dark">Dark</option>
-          <option value="system">System</option>
+          <option value="light">{t("Light")}</option>
+          <option value="dark">{t("Dark")}</option>
+          <option value="system">{t("System")}</option>
         </select>
       </section>
       <section className={panelClass("space-y-3")}>
-        <p className="font-semibold">Language</p>
+        <p className="font-semibold">{t("Language")}</p>
         <select className={inputClass()} value={language} onChange={(e) => setLanguage(e.target.value)}>
           <option value="en">English</option>
-          <option value="zh-CN">简体中文</option>
-          <option value="ru">Русский</option>
-          <option value="fa">فارسی</option>
+          <option value="zh-CN">????</option>
+          <option value="ru">???????</option>
+          <option value="fa">?????</option>
         </select>
         <Button
           type="button"
@@ -4075,15 +4212,17 @@ function SettingsPanel({ auth, data, actions, setNotice, actionBusy, runAction }
               document.documentElement.dir = language === "fa" ? "rtl" : "ltr";
               applyThemePreference(theme);
               localStorage.setItem("wpay-language", language);
-              setNotice("Settings saved.");
+              setAppLanguage?.(normalizeMiniLanguage(language));
+              applyMiniAppTranslations(language);
+              setNotice(miniT(language, "Settings saved."));
             })
           }
         >
-          {actionBusy === "save-preferences" ? "Saving..." : "SAVE PREFERENCES"}
+          {actionBusy === "save-preferences" ? "Saving..." : t("SAVE PREFERENCES")}
         </Button>
       </section>
       <section className={panelClass("space-y-3")}>
-        <p className="font-semibold">Edit Name</p>
+        <p className="font-semibold">{t("Edit Name")}</p>
         <input className={inputClass()} value={name} onChange={(e) => setName(e.target.value)} />
         <Button
           type="button"
@@ -4091,28 +4230,28 @@ function SettingsPanel({ auth, data, actions, setNotice, actionBusy, runAction }
           onClick={() =>
             runAction("update-name", async () => {
               await actions.updateAccountName({ data: { auth, name } });
-              setNotice("Name updated.");
+              setNotice(t("Name updated."));
             })
           }
         >
-          {actionBusy === "update-name" ? "Saving..." : "SAVE NAME"}
+          {actionBusy === "update-name" ? "Saving..." : t("SAVE NAME")}
         </Button>
       </section>
       <section className={panelClass("space-y-3")}>
-        <p className="font-semibold">Change Password</p>
+        <p className="font-semibold">{t("Change Password")}</p>
         <input
           className={inputClass()}
           type="password"
           value={currentPassword}
           onChange={(e) => setCurrentPassword(e.target.value)}
-          placeholder="Current password"
+          placeholder={t("Current password")}
         />
         <input
           className={inputClass()}
           type="password"
           value={newPassword}
           onChange={(e) => setNewPassword(e.target.value)}
-          placeholder="New password"
+          placeholder={t("New password")}
         />
         <Button
           type="button"
@@ -4122,11 +4261,11 @@ function SettingsPanel({ auth, data, actions, setNotice, actionBusy, runAction }
               await actions.changeAccountPassword({ data: { auth, currentPassword, newPassword } });
               setCurrentPassword("");
               setNewPassword("");
-              setNotice("Password changed.");
+              setNotice(t("Password changed."));
             })
           }
         >
-          {actionBusy === "change-password" ? "Saving..." : "CHANGE PASSWORD"}
+          {actionBusy === "change-password" ? "Saving..." : t("Change Password")}
         </Button>
       </section>
       <section className={panelClass("space-y-3")}>

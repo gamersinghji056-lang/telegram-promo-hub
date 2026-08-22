@@ -1025,7 +1025,7 @@ function PaymentsAdmin({ data, reload }: { data: AnyData; reload: () => Promise<
       setError("");
       setResult("");
       try {
-        const traced = await traceInvoiceTransaction({ data: { id: trace.id, txHash } });
+        const traced = await traceInvoiceTransaction({ data: { id: trace.id, txHash } }) as { ok?: boolean; reason?: string };
         setResult(traced.ok ? "Transaction traced and processed through blockchain validation." : `Trace mismatch: ${traced.reason}`);
         await reload();
         setTrace(null);
@@ -1576,7 +1576,7 @@ function SettingsPanel({ data }: { data: any }) {
             <p className={`text-xs ${walletValid ? "text-success" : "text-warning"}`}>{walletValid ? "Valid TRON address shape. Full checksum is verified on save." : "Enter a valid TRON mainnet Base58 address."}</p>
             <label className="block text-sm">Invoice Expiry Minutes<input className={adminInput()} type="number" min={1} value={paymentDraft.invoice_expiry_minutes} onChange={(e) => setPaymentDraft((d) => ({ ...d, invoice_expiry_minutes: Number(e.target.value) }))} /></label>
             <label className="block text-sm">Confirmations<input className={adminInput()} type="number" min={1} value={paymentDraft.confirmations_required} onChange={(e) => setPaymentDraft((d) => ({ ...d, confirmations_required: Number(e.target.value) }))} /></label>
-            <label className="block text-sm sm:col-span-2">USDT Contract<input className={adminInput()} value={String(payments.usdt_contract || "TXLAQ63Xg1NAzckPwKHvzw7CSEmLMEqcdj")} readOnly /></label>
+            <label className="block text-sm sm:col-span-2">USDT Contract<input className={adminInput()} value={String(payments.usdt_contract || "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t")} readOnly /></label>
           </div>
           <MonitorSummary monitor={monitor} />
           <Button type="button" disabled={saving === "payments"} onClick={() => save("payments", paymentDraft)}>{saving === "payments" ? "Saving..." : "Save Payment Settings"}</Button>

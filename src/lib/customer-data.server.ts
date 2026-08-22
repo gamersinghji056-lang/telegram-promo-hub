@@ -10,6 +10,7 @@ import {
   disconnectUserSession,
   discoverAudienceViaUserSession,
   importGroupsFromFolderViaUserSession,
+  customEmojiPreviewViaUserSession,
   joinGroupViaUserSession,
   listCustomEmojiCatalogViaUserSession,
   resolvePublicGroupViaUserSession,
@@ -40,6 +41,7 @@ import {
   premiumEmojiEntitlement,
   premiumEmojiSettings,
 } from "./billing.server";
+import { reconcileInvoicePayment } from "./tron-monitor.server";
 const LINK_CODE_TTL_MS = 15 * 60_000;
 
 export function hashConnectionLinkCode(code: string) {
@@ -3546,6 +3548,20 @@ export async function getInvoiceStatus(ctx: AuthContext, invoiceId: string) {
   return invoiceByIdForTenant(ctx.tenantId, invoiceId);
 }
 
+const invoiceCheckCooldown = new Map<string, number>();
+
+export async function checkInvoicePaymentStatus(ctx: AuthContext, invoiceId: string) {
+  await invoiceByIdForTenant(ctx.tenantId, invoiceId);
+  const key = `${ctx.tenantId}:${invoiceId}`;
+  const last = invoiceCheckCooldown.get(key) ?? 0;
+  if (Date.now() - last < 10_000) {
+    return invoiceByIdForTenant(ctx.tenantId, invoiceId);
+  }
+  invoiceCheckCooldown.set(key, Date.now());
+  await reconcileInvoicePayment(invoiceId);
+  return invoiceByIdForTenant(ctx.tenantId, invoiceId);
+}
+
 export function normalizeSupportTelegram(value?: string | null) {
   const raw = String(value ?? "").trim().replace(/^https?:\/\/t\.me\//i, "").replace(/^@/, "");
   if (!raw) return "";
@@ -3569,6 +3585,13 @@ export async function customEmojiCatalog(ctx: AuthContext, input: { connectionId
   return listCustomEmojiCatalogViaUserSession(ctx.tenantId, input.connectionId, {
     query: input.query ?? null,
   });
+}
+
+export async function customEmojiPreview(ctx: AuthContext, input: { connectionId: string; documentId: string }) {
+  await requireConnection(ctx, input.connectionId);
+  const entitlement = await premiumEmojiEntitlement(ctx.tenantId);
+  if (!entitlement.active) throw new Error("Premium Emoji add-on is required.");
+  return customEmojiPreviewViaUserSession(ctx.tenantId, input.connectionId, input.documentId);
 }
 
 export async function listNotifications(ctx: AuthContext) {

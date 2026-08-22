@@ -4,7 +4,8 @@ import { db, getSetting, logAdmin, logSystem, notify } from "./db.server";
 export const OFFICIAL_PLAN_CODES = ["TEST", "PLUS", "PRO", "ENTERPRISE"] as const;
 export const PLAN_RANK: Record<string, number> = { TEST: 0, PLUS: 1, PRO: 2, ENTERPRISE: 3 };
 export const PREMIUM_EMOJI_CODE = "premium_emoji";
-export const TRON_MAINNET_USDT_CONTRACT = "TXLAQ63Xg1NAzckPwKHvzw7CSEmLMEqcdj";
+export const TRON_MAINNET_USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
+export const LEGACY_WRONG_TRON_USDT_CONTRACTS = ["TXLAQ63Xg1NAzckPwKHvzw7CSEmLMEqcdj"];
 const INVOICE_MINUTES = 10;
 
 type InvoiceStatus =
@@ -93,15 +94,22 @@ export function usdtContract(settings: PaymentSettings) {
 }
 
 export function tronLinkUrl(invoice: Record<string, unknown>) {
-  const params = new URLSearchParams({
+  const params = new URLSearchParams();
+  params.set("param", JSON.stringify({
     action: "transfer",
-    network: "mainnet",
-    token: "USDT",
+    actionId: String(invoice["invoice_number"] ?? invoice["id"] ?? ""),
+    url: "https://telegram-promo-hub-production.up.railway.app/mini-app/billing",
+    callbackUrl: "https://telegram-promo-hub-production.up.railway.app/api/public/tronlink/callback",
+    dappName: "WPAY",
+    protocol: "TronLink",
+    version: "1.0",
+    chainId: "0x2b6653dc",
+    tokenId: "",
     contract: String(invoice["token_contract"] ?? TRON_MAINNET_USDT_CONTRACT),
     to: String(invoice["receiving_address"] ?? ""),
     amount: String(invoice["payable_amount"] ?? ""),
     memo: String(invoice["invoice_number"] ?? invoice["id"] ?? ""),
-  });
+  }));
   return `tronlinkoutside://pull.activity?${params.toString()}`;
 }
 
@@ -302,6 +310,7 @@ export async function activatePaidInvoice(invoiceId: string, actor: "BLOCKCHAIN"
     });
     await client.from("tenant_entitlement_overrides").delete().eq("tenant_id", paid.tenant_id);
     await notify(paid.tenant_id, "Plan activated", `Your ${plan.name} plan is active.`, "SUCCESS", "/mini-app/billing");
+    console.info("ENTITLEMENT_ACTIVATED", { invoice_id: invoiceId, tenant_id: paid.tenant_id, product_type: "PLAN", product_code: paid.product_code });
   } else if (paid.product_code === PREMIUM_EMOJI_CODE.toUpperCase()) {
     const settings = await premiumEmojiSettings();
     const expires = new Date(Date.now() + settings.duration_days * 86400_000).toISOString();
@@ -322,6 +331,7 @@ export async function activatePaidInvoice(invoiceId: string, actor: "BLOCKCHAIN"
       { onConflict: "tenant_id,addon_code" },
     );
     await notify(paid.tenant_id, "Premium Emoji activated", "WPAY Premium Emoji composer is active.", "SUCCESS", "/mini-app/billing");
+    console.info("ENTITLEMENT_ACTIVATED", { invoice_id: invoiceId, tenant_id: paid.tenant_id, product_type: "ADDON", product_code: paid.product_code });
   }
 
   await logSystem({
@@ -351,23 +361,42 @@ export async function classifyAndRecordPayment(event: {
   const client = db();
   const txHash = event.txHash.trim();
   const existingEvent = await client.from("blockchain_payment_events").select("id, invoice_id").eq("tx_hash", txHash).maybeSingle();
-  if (existingEvent.data?.invoice_id) return { ok: true, duplicate: true, invoiceId: existingEvent.data.invoice_id };
+  if (existingEvent.data?.invoice_id) return { ok: true, duplicate: true, invoiceId: String(existingEvent.data.invoice_id) };
+  console.info("TRANSFER_FOUND", {
+    network: event.network,
+    token_contract: event.tokenContract,
+    tx_hash: txHash,
+    to_address: event.toAddress,
+    normalized_amount: event.normalizedAmount.toFixed(6),
+    transaction_timestamp: event.transactionTimestamp ?? null,
+  });
 
-  const { data: invoice } = await client
-    .from("billing_invoices")
+  let invoice = null as Record<string, unknown> | null;
+  const invoiceQuery = (tokenContracts: string[]) => client.from("billing_invoices")
     .select("*")
     .eq("network", event.network.toUpperCase())
-    .eq("token_contract", event.tokenContract)
+    .in("token_contract", tokenContracts)
     .eq("receiving_address", event.toAddress)
     .eq("payable_amount", event.normalizedAmount.toFixed(6))
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
+  const exact = await invoiceQuery([event.tokenContract]);
+  invoice = (exact.data as Record<string, unknown> | null) ?? null;
+  if (!invoice && event.tokenContract === TRON_MAINNET_USDT_CONTRACT) {
+    const legacy = await invoiceQuery(LEGACY_WRONG_TRON_USDT_CONTRACTS);
+    invoice = (legacy.data as Record<string, unknown> | null) ?? null;
+    if (invoice) {
+      await client.from("billing_invoices").update({ token_contract: TRON_MAINNET_USDT_CONTRACT, updated_at: new Date().toISOString() }).eq("id", invoice.id as string);
+      invoice = { ...invoice, token_contract: TRON_MAINNET_USDT_CONTRACT };
+    }
+  }
 
   let status: InvoiceStatus = "REVIEW_REQUIRED";
   let classification = "NO_MATCH";
   let review = "No active invoice matched this exact amount.";
   if (invoice) {
+    console.info("INVOICE_MATCHED", { invoice_id: invoice.id, tx_hash: txHash, status: invoice.status, payable_amount: invoice.payable_amount });
     const sentAt = event.transactionTimestamp ? new Date(event.transactionTimestamp) : new Date();
     const expiredAt = new Date(invoice.expires_at as string);
     if (invoice.status === "CANCELLED") {
@@ -414,7 +443,10 @@ export async function classifyAndRecordPayment(event: {
     { onConflict: "network,tx_hash" },
   );
 
-  if (!invoice) return { ok: true, classification };
+  if (!invoice) {
+    console.info("TRANSFER_REJECTED", { reason: "NO_MATCH", tx_hash: txHash, to_address: event.toAddress, normalized_amount: event.normalizedAmount.toFixed(6) });
+    return { ok: true, classification };
+  }
 
   const patch = {
     status,
@@ -432,6 +464,12 @@ export async function classifyAndRecordPayment(event: {
     updated_at: new Date().toISOString(),
   };
   await client.from("billing_invoices").update(patch).eq("id", invoice.id);
+  if (status === "CONFIRMING") {
+    console.info("INVOICE_DETECTED", { invoice_id: invoice.id, tx_hash: txHash });
+    console.info("INVOICE_CONFIRMING", { invoice_id: invoice.id, tx_hash: txHash });
+  } else {
+    console.info("TRANSFER_REJECTED", { reason: classification, invoice_id: invoice.id, tx_hash: txHash });
+  }
   await client
     .from("billing_transactions")
     .update({
@@ -447,8 +485,9 @@ export async function classifyAndRecordPayment(event: {
 
   if (status === "CONFIRMING") {
     await activatePaidInvoice(invoice.id as string, "BLOCKCHAIN");
+    console.info("INVOICE_CONFIRMED", { invoice_id: invoice.id, tx_hash: txHash });
   }
-  return { ok: true, classification, invoiceId: invoice.id };
+  return { ok: true, classification, invoiceId: String(invoice.id) };
 }
 
 function addonExpiryFromInput(currentExpiry: string | null | undefined, input: { duration?: string; expiresAt?: string | null; noExpiry?: boolean; action?: "GRANT" | "EXTEND" }) {

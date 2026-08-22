@@ -86,6 +86,18 @@ function eventTimestamp(event: TronGridTransfer) {
   return event.block_timestamp ? new Date(event.block_timestamp).toISOString() : null;
 }
 
+function safeReject(reason: string, event: TronGridTransfer, details: Record<string, unknown> = {}) {
+  console.info("TRANSFER_REJECTED", {
+    reason,
+    tx_hash: event.transaction_id ?? null,
+    to_address: event.to ?? null,
+    token_contract: event.token_info?.address ?? null,
+    amount: event.value ?? null,
+    timestamp: eventTimestamp(event),
+    ...details,
+  });
+}
+
 function normalizeTransferEvent(raw: Record<string, unknown>): TronGridTransfer | null {
   const result = (raw["result"] ?? raw) as Record<string, unknown>;
   const tokenInfo = (raw["token_info"] ?? {}) as Record<string, unknown>;
@@ -111,9 +123,18 @@ function normalizeTransferEvent(raw: Record<string, unknown>): TronGridTransfer 
 
 async function recordTransfer(settings: PaymentSettings, contract: string, event: TronGridTransfer) {
   if (!event.transaction_id || !event.to || event.type !== "Transfer") return null;
-  if ((event.token_info?.address ?? contract) !== contract) return null;
-  if (!sameAddress(event.to, settings.wallet_address)) return null;
-  if (event.confirmed === false) return null;
+  if ((event.token_info?.address ?? contract) !== contract) {
+    safeReject("WRONG_CONTRACT", event, { expected_contract: contract });
+    return null;
+  }
+  if (!sameAddress(event.to, settings.wallet_address)) {
+    safeReject("WRONG_ADDRESS", event, { expected_address: settings.wallet_address });
+    return null;
+  }
+  if (event.confirmed === false) {
+    safeReject("INSUFFICIENT_CONFIRMATIONS", event);
+    return null;
+  }
   return classifyAndRecordPayment({
     network: "TRON",
     tokenContract: contract,
@@ -183,7 +204,6 @@ export async function processTronUsdtPayments() {
   url.searchParams.set("only_confirmed", "true");
   url.searchParams.set("limit", "50");
   url.searchParams.set("min_timestamp", String(since));
-  url.searchParams.set("contract_address", contract);
   const diagnostics: ScanDiagnostics = {
     scan_from: new Date(since).toISOString(),
     scan_to: new Date(scanTo).toISOString(),
@@ -238,6 +258,7 @@ export async function processTronUsdtPayments() {
       { onConflict: "id" },
     );
     console.info("TRON_MONITOR_SCAN", diagnostics);
+    console.info("INVOICE_SCAN", diagnostics);
     return { scanned: payload.data?.length ?? 0, processed, diagnostics };
   } catch (error) {
     const message = error instanceof Error ? error.message : "TRON monitor failed.";
@@ -258,6 +279,38 @@ export async function processTronUsdtPayments() {
   }
 }
 
+export async function reconcileInvoicePayment(invoiceId: string) {
+  const settings = await getSetting<PaymentSettings>("payments");
+  if (!monitorEnabled(settings)) throw new Error("TRON monitor is not configured.");
+  const contract = usdtContract(settings);
+  const { data: invoice } = await db().from("billing_invoices").select("*").eq("id", invoiceId).maybeSingle();
+  if (!invoice) throw new Error("Invoice not found.");
+  const created = new Date(String(invoice.created_at)).getTime();
+  const since = Math.max(0, created - SCAN_OVERLAP_MS);
+  const url = new URL(`${endpoint(settings)}/v1/accounts/${invoice.receiving_address}/transactions/trc20`);
+  url.searchParams.set("only_confirmed", "true");
+  url.searchParams.set("limit", "50");
+  url.searchParams.set("min_timestamp", String(since));
+  const response = await fetch(url, { headers: providerHeaders() });
+  if (!response.ok) throw new Error(`TronGrid reconciliation failed: ${response.status}`);
+  const payload = (await response.json()) as { data?: TronGridTransfer[] };
+  console.info("INVOICE_SCAN", {
+    invoice_id: invoiceId,
+    scan_from: new Date(since).toISOString(),
+    scan_to: new Date().toISOString(),
+    overlap_ms: SCAN_OVERLAP_MS,
+    events_found: payload.data?.length ?? 0,
+    mode: "manual_reconciliation",
+  });
+  let lastResult: unknown = null;
+  for (const event of payload.data ?? []) {
+    const result = await recordTransfer(settings, contract, event);
+    if (result) lastResult = result;
+  }
+  const { data: refreshed } = await db().from("billing_invoices").select("*").eq("id", invoiceId).maybeSingle();
+  return { invoice: refreshed, result: lastResult, eventsScanned: payload.data?.length ?? 0 };
+}
+
 export async function traceInvoiceTransaction(invoiceId: string, txHash: string) {
   const settings = await getSetting<PaymentSettings>("payments");
   if (!monitorEnabled(settings)) throw new Error("TRON monitor is not configured.");
@@ -275,7 +328,7 @@ export async function traceInvoiceTransaction(invoiceId: string, txHash: string)
     return { ok: false, status: "MISMATCH", reason: "No confirmed TRC20 Transfer event was found for this transaction hash." };
   }
   const mismatches: string[] = [];
-  if ((event.token_info?.address ?? "") !== String(invoice.token_contract)) mismatches.push("token contract does not match invoice");
+  if ((event.token_info?.address ?? "") !== contract && !((event.token_info?.address ?? "") === TRON_MAINNET_USDT_CONTRACT && String(invoice.token_contract) !== TRON_MAINNET_USDT_CONTRACT)) mismatches.push("token contract does not match invoice");
   if (!sameAddress(event.to, String(invoice.receiving_address))) mismatches.push("recipient address does not match invoice");
   const amount = decimalAmount(event.value ?? "0", event.token_info?.decimals ?? 6).toFixed(6);
   if (amount !== Number(invoice.payable_amount).toFixed(6)) mismatches.push("amount does not match invoice");

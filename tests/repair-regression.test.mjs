@@ -118,3 +118,68 @@ test("same active invoice remains DB/RPC idempotent and billing transaction inse
   assert(billing.includes("insertBillingTransaction"));
   assert(billing.includes(".eq(\"invoice_id\", invoice[\"id\"]"));
 });
+
+test("TRON mainnet USDT contract is official and monitor does not hide transfers behind a contract filter", () => {
+  const billing = read("src/lib/billing.server.ts");
+  const monitor = read("src/lib/tron-monitor.server.ts");
+  const migration = read("supabase/migrations/20260822143000_fix_tron_usdt_contract_and_friendly_invoice_amounts.sql");
+  assert(billing.includes('TRON_MAINNET_USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"'));
+  assert(billing.includes("LEGACY_WRONG_TRON_USDT_CONTRACTS"));
+  assert(!monitor.includes('url.searchParams.set("contract_address", contract)'));
+  assert(monitor.includes('safeReject("WRONG_CONTRACT"'));
+  assert(migration.includes("TXLAQ63Xg1NAzckPwKHvzw7CSEmLMEqcdj"));
+  assert(migration.includes("TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"));
+});
+
+test("customer payment card copies full address and exact friendly amount and checks status server-side", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  const funcs = read("src/lib/customer.functions.ts");
+  const data = read("src/lib/customer-data.server.ts");
+  assert(route.includes("function formatUsdtAmount"));
+  assert(route.includes("replace(/\\.?0+$/, \"\")"));
+  assert(route.includes("copyText(String(invoice.receiving_address"));
+  assert(route.includes("copyText(exactAmount)"));
+  assert(route.includes("checkInvoicePaymentStatus({ data: { auth, invoiceId: invoice.id } })"));
+  assert(route.includes("VIEW ON TRONSCAN"));
+  assert(route.includes("VIEW RECEIVING ADDRESS ON TRONSCAN"));
+  assert(funcs.includes("export const checkInvoicePaymentStatus"));
+  assert(data.includes("reconcileInvoicePayment(invoiceId)"));
+});
+
+test("new invoice allocation uses one-decimal friendly amounts before two-decimal fallback", () => {
+  const migration = read("supabase/migrations/20260822143000_fix_tron_usdt_contract_and_friendly_invoice_amounts.sql");
+  assert(migration.includes("suffix IN 1..9"));
+  assert(migration.includes("suffix::numeric / 10"));
+  assert(migration.includes("suffix IN 1..99"));
+  assert(migration.includes("suffix::numeric / 100"));
+  assert(migration.includes("unique_violation"));
+});
+
+test("mini app language applies immediately and contains real Chinese Russian Persian settings/payment strings", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  const i18n = read("src/lib/mini-i18n.ts");
+  assert(route.includes("applyMiniAppTranslations(appLanguage)"));
+  assert(route.includes("setAppLanguage?.(normalizeMiniLanguage(language))"));
+  assert(i18n.includes("账户设置"));
+  assert(i18n.includes("Настройки аккаунта"));
+  assert(i18n.includes("تنظیمات حساب"));
+  assert(i18n.includes("document.documentElement.dir = lang === \"fa\" ? \"rtl\" : \"ltr\""));
+});
+
+test("custom emoji preview path returns real Telegram media without exposing session material", () => {
+  const telegram = read("src/lib/telegram-user-session.server.ts");
+  const funcs = read("src/lib/customer.functions.ts");
+  const data = read("src/lib/customer-data.server.ts");
+  const route = read("src/routes/mini-app.$section.tsx");
+  assert(telegram.includes("customEmojiPreviewViaUserSession"));
+  assert(telegram.includes("GetCustomEmojiDocuments"));
+  assert(telegram.includes("client.downloadMedia"));
+  assert(telegram.includes("data_url"));
+  assert(telegram.includes("access_hash"));
+  assert(funcs.includes("getCustomEmojiPreview"));
+  assert(data.includes("Premium Emoji add-on is required."));
+  assert(route.includes("item.preview_url"));
+  assert(route.includes('type: "custom_emoji"'));
+  assert(route.includes("document_id: String(item.document_id)"));
+  assert(!route.includes("fake document"));
+});

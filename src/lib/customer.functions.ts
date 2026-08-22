@@ -545,12 +545,25 @@ export const getInvoiceStatus = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { invoiceId: string }) => i)
   .handler(async ({ data: i }) => data.getInvoiceStatus(await resolveAuth(i.auth), i.invoiceId));
 
+export const checkInvoicePaymentStatus = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { invoiceId: string }) => i)
+  .handler(async ({ data: i }) => data.checkInvoicePaymentStatus(await resolveAuth(i.auth), i.invoiceId));
+
 export const getCustomEmojiCatalog = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { connectionId: string; query?: string | null }) => i)
   .handler(async ({ data: i }) =>
     data.customEmojiCatalog(await resolveAuth(i.auth), {
       connectionId: i.connectionId,
       query: i.query ?? null,
+    }),
+  );
+
+export const getCustomEmojiPreview = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { connectionId: string; documentId: string }) => i)
+  .handler(async ({ data: i }) =>
+    data.customEmojiPreview(await resolveAuth(i.auth), {
+      connectionId: i.connectionId,
+      documentId: i.documentId,
     }),
   );
 
