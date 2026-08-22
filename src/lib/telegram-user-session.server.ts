@@ -98,6 +98,7 @@ export type CustomEmojiItem = {
   premium_required: boolean;
   free: boolean;
   mime_type?: string | null;
+  preview_format?: "image" | "tgs" | "webm" | "unknown" | null;
   preview_url?: string | null;
   preview_unavailable?: boolean;
   set_title?: string | null;
@@ -170,6 +171,7 @@ function emojiItem(doc: Api.TypeDocument, source: CustomEmojiItem["source"], set
     free: attr.free === true,
     premium_required: attr.free !== true,
     mime_type: doc.mimeType ?? null,
+    preview_format: emojiPreviewFormat(doc.mimeType ?? null),
     preview_url: null,
     preview_unavailable: false,
     set_title: meta.title,
@@ -310,7 +312,7 @@ export async function customEmojiPreviewViaUserSession(
   tenantId: string,
   connectionId: string,
   documentId: string,
-): Promise<{ document_id: string; mime_type: string; data_url: string; fallback: string }> {
+): Promise<{ document_id: string; mime_type: string; format: "image" | "tgs" | "webm" | "unknown"; data_url: string; fallback: string }> {
   return withAuthorizedUserClient(tenantId, connectionId, async (client) => {
     const docs = await client.invoke(new Api.messages.GetCustomEmojiDocuments({
       documentId: [bigInt(String(documentId))],
@@ -324,10 +326,19 @@ export async function customEmojiPreviewViaUserSession(
     return {
       document_id: String(doc.id),
       mime_type: mime,
+      format: emojiPreviewFormat(mime),
       data_url: `data:${mime};base64,${downloaded.toString("base64")}`,
       fallback: attr?.alt || "⭐",
     };
   });
+}
+
+function emojiPreviewFormat(mime?: string | null): "image" | "tgs" | "webm" | "unknown" {
+  const normalized = String(mime ?? "").toLowerCase();
+  if (normalized.includes("x-tgsticker") || normalized.includes("gzip")) return "tgs";
+  if (normalized.includes("webm") || normalized.startsWith("video/")) return "webm";
+  if (normalized.startsWith("image/")) return "image";
+  return "unknown";
 }
 
 function accessHash(value: unknown) {

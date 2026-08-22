@@ -183,3 +183,82 @@ test("custom emoji preview path returns real Telegram media without exposing ses
   assert(route.includes("document_id: String(item.document_id)"));
   assert(!route.includes("fake document"));
 });
+
+test("mini app i18n covers major customer routes and restores English without reload", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  const i18n = read("src/lib/mini-i18n.ts");
+  for (const phrase of [
+    "Add Telegram Session",
+    "Group discovery started.",
+    "DM campaign queued. Worker will process due jobs.",
+    "Payment invoice created.",
+    "Premium Emoji add-on is required.",
+    "Telegram support is not configured.",
+    "Custom emoji could not be loaded.",
+    "CHECK PAYMENT STATUS",
+  ]) {
+    assert(i18n.includes(phrase), `missing source phrase: ${phrase}`);
+  }
+  for (const phrase of ["添加 Telegram 会话", "Поиск групп запущен", "کشف گروه شروع شد"]) {
+    assert(i18n.includes(phrase), `missing translated phrase: ${phrase}`);
+  }
+  assert(i18n.includes("textOriginals = new WeakMap"));
+  assert(i18n.includes("data-i18n-original"));
+  assert(i18n.includes('document.documentElement.lang = lang'));
+  assert(i18n.includes('document.documentElement.dir = lang === "fa" ? "rtl" : "ltr"'));
+  assert(route.includes("applyMiniAppTranslations(appLanguage)"));
+});
+
+test("telegram bot uses selected language for commands, keyboards, and post-login mini app prompts", () => {
+  const webhook = read("src/routes/api/public/telegram/webhook.ts");
+  assert(webhook.includes("bot_language_preferences"));
+  assert(webhook.includes("telegram_user_id: userId"));
+  assert(webhook.includes("return normalizeLanguage(pending?.language ?? user.language_code)"));
+  assert(webhook.includes('helpText: "请在这里注册或登录'));
+  assert(webhook.includes('helpText: "Зарегистрируйтесь'));
+  assert(webhook.includes('helpText: "اینجا ثبت'));
+  assert(webhook.includes('unknownCommand: "我没有识别此命令'));
+  assert(webhook.includes("async function openMiniAppKeyboard(language?: string | null"));
+  assert(webhook.includes('bt(language, "openMiniAppButton")'));
+  assert(webhook.includes("sendOpenMiniApp(chatId, language, bt(language, \"registrationOpenMiniApp\"), sessionToken)"));
+  assert(webhook.includes("sendOpenMiniApp(chatId, language, bt(language, \"loginOpenMiniApp\"), result.token)"));
+  assert(webhook.includes('await send(chatId, bt(language, "unknownCommand"))'));
+  assert(!webhook.includes('bt("en", "miniAppMissing")'));
+});
+
+test("TGS custom emoji previews use Lottie media instead of Unicode-only fallback", () => {
+  const pkg = read("package.json");
+  const player = read("src/components/tgs-player.tsx");
+  const telegram = read("src/lib/telegram-user-session.server.ts");
+  const route = read("src/routes/mini-app.$section.tsx");
+  assert(pkg.includes('"lottie-web"'));
+  assert(pkg.includes('"pako"'));
+  assert(player.includes('import { ungzip } from "pako"'));
+  assert(player.includes('import("lottie-web")'));
+  assert(player.includes("loadAnimation"));
+  assert(player.includes("bytes[0] === 0x1f"));
+  assert(telegram.includes('"tgs"'));
+  assert(telegram.includes('"webm"'));
+  assert(telegram.includes("emojiPreviewFormat"));
+  assert(route.includes("preview_format: preview.format"));
+  assert(route.includes('item.preview_format === "tgs"'));
+  assert(route.includes("<TgsPlayer"));
+  assert(route.includes('item.preview_format === "webm"'));
+  assert(route.includes("<video"));
+});
+
+test("custom emoji document id stays in message entities through picker, draft, and send paths", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  const customerData = read("src/lib/customer-data.server.ts");
+  const worker = read("src/lib/campaign-worker.server.ts");
+  const telegram = read("src/lib/telegram-user-session.server.ts");
+  assert(route.includes('type: "custom_emoji"'));
+  assert(route.includes("document_id: String(item.document_id)"));
+  assert(route.includes("messageEntities"));
+  assert(route.includes("hydrateEmojiPreviews"));
+  assert(customerData.includes("message_entities"));
+  assert(worker.includes("sendDirectViaUserSession"));
+  assert(worker.includes("sendGroupViaUserSession"));
+  assert(telegram.includes("MessageEntityCustomEmoji"));
+  assert(telegram.includes("documentId"));
+});

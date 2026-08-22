@@ -34,6 +34,7 @@ import {
   X,
 } from "lucide-react";
 import { MiniAppShell } from "@/components/mini-app-shell";
+import { TgsPlayer } from "@/components/tgs-player";
 import { Button } from "@/components/ui/button";
 import {
   addConnection,
@@ -3378,7 +3379,9 @@ function MessageForm(props: any) {
       ...result,
       [nextTab]: (result[nextTab] ?? []).map((item: any) => {
         const preview = byId.get(String(item.document_id)) as any;
-        return preview ? { ...item, preview_url: preview.data_url, mime_type: preview.mime_type, fallback: preview.fallback ?? item.fallback } : { ...item, preview_unavailable: true };
+        return preview
+          ? { ...item, preview_url: preview.data_url, mime_type: preview.mime_type, preview_format: preview.format, fallback: preview.fallback ?? item.fallback }
+          : { ...item, preview_unavailable: true };
       }),
     };
   }
@@ -3597,7 +3600,9 @@ function CustomEmojiPicker({
                   onClick={() => insert(item)}
                 >
                   {item.preview_url ? (
-                    item.mime_type === "video/webm" ? (
+                    item.preview_format === "tgs" ? (
+                      <TgsPlayer className="mx-auto size-9" src={item.preview_url} fallback={item.fallback || "⭐"} />
+                    ) : item.preview_format === "webm" || item.mime_type === "video/webm" ? (
                       <video className="mx-auto size-9 object-contain" src={item.preview_url} muted playsInline autoPlay loop />
                     ) : (
                       <img className="mx-auto size-9 object-contain" src={item.preview_url} alt={item.fallback || "custom emoji"} />

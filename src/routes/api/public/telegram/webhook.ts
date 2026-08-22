@@ -37,45 +37,61 @@ const botMessages: Record<LanguageCode, Record<string, string>> = {
     pendingApproval: "Account created and pending admin approval.",
     loginOpenMiniApp: "Login successful. Open the Mini App to continue.",
     registrationOpenMiniApp: "Account created. Open the Mini App to continue.",
+    unknownCommand: "I did not recognize that command. Use the menu, /login, /register or /help.",
+    menuLinked: "Open the Mini App to manage your dashboard.",
+    menuGuest: "Register or log in, then open the Mini App.",
+    openMiniAppButton: "Open Mini App",
   },
   "zh-CN": {
-    miniAppMissing: "Mini App URL has not been configured.",
-    helpText: "Register or log in here, then open the Mini App.",
-    cancelDone: "Cancelled.",
-    validEmailPrompt: "Send a valid email address, or /cancel to stop.",
-    registrationPasswordPrompt: "Send a password with at least 8 characters.",
-    confirmPasswordPrompt: "Confirm your password.",
-    passwordTooShort: "Password must be at least 8 characters. Send a new password, or /cancel.",
-    passwordsMismatch: "Passwords did not match. Send /register to start again.",
-    pendingApproval: "Account created and pending admin approval.",
-    loginOpenMiniApp: "Login successful. Open the Mini App to continue.",
-    registrationOpenMiniApp: "Account created. Open the Mini App to continue.",
+    miniAppMissing: "平台管理员尚未配置 Mini App URL。",
+    helpText: "请在这里注册或登录，然后打开 Mini App。Mini App 是完整控制台。",
+    cancelDone: "已取消。",
+    validEmailPrompt: "请发送有效邮箱地址，或发送 /cancel 停止。",
+    registrationPasswordPrompt: "请发送至少 8 个字符的密码。",
+    confirmPasswordPrompt: "请确认您的密码。",
+    passwordTooShort: "密码至少需要 8 个字符。请发送新密码，或发送 /cancel。",
+    passwordsMismatch: "两次密码不一致。请发送 /register 重新开始。",
+    pendingApproval: "账户已创建，正在等待管理员批准。",
+    loginOpenMiniApp: "登录成功。请打开 Mini App 继续。",
+    registrationOpenMiniApp: "账户已创建。请打开 Mini App 继续。",
+    unknownCommand: "我没有识别此命令。请使用菜单、/login、/register 或 /help。",
+    menuLinked: "打开 Mini App 管理您的控制台。",
+    menuGuest: "注册或登录，然后打开 Mini App。",
+    openMiniAppButton: "打开 Mini App",
   },
   ru: {
-    miniAppMissing: "Mini App URL has not been configured.",
-    helpText: "Register or log in here, then open the Mini App.",
-    cancelDone: "Cancelled.",
-    validEmailPrompt: "Send a valid email address, or /cancel to stop.",
-    registrationPasswordPrompt: "Send a password with at least 8 characters.",
-    confirmPasswordPrompt: "Confirm your password.",
-    passwordTooShort: "Password must be at least 8 characters. Send a new password, or /cancel.",
-    passwordsMismatch: "Passwords did not match. Send /register to start again.",
-    pendingApproval: "Account created and pending admin approval.",
-    loginOpenMiniApp: "Login successful. Open the Mini App to continue.",
-    registrationOpenMiniApp: "Account created. Open the Mini App to continue.",
+    miniAppMissing: "Администратор платформы еще не настроил URL Mini App.",
+    helpText: "Зарегистрируйтесь или войдите здесь, затем откройте Mini App. Это ваша полная панель управления.",
+    cancelDone: "Отменено.",
+    validEmailPrompt: "Отправьте корректный email или /cancel для отмены.",
+    registrationPasswordPrompt: "Отправьте пароль минимум из 8 символов.",
+    confirmPasswordPrompt: "Подтвердите пароль.",
+    passwordTooShort: "Пароль должен быть минимум 8 символов. Отправьте новый пароль или /cancel.",
+    passwordsMismatch: "Пароли не совпали. Отправьте /register, чтобы начать заново.",
+    pendingApproval: "Аккаунт создан и ожидает одобрения администратора.",
+    loginOpenMiniApp: "Вход выполнен. Откройте Mini App, чтобы продолжить.",
+    registrationOpenMiniApp: "Аккаунт создан. Откройте Mini App, чтобы продолжить.",
+    unknownCommand: "Команда не распознана. Используйте меню, /login, /register или /help.",
+    menuLinked: "Откройте Mini App для управления панелью.",
+    menuGuest: "Зарегистрируйтесь или войдите, затем откройте Mini App.",
+    openMiniAppButton: "Открыть Mini App",
   },
   fa: {
-    miniAppMissing: "Mini App URL has not been configured.",
-    helpText: "Register or log in here, then open the Mini App.",
-    cancelDone: "Cancelled.",
-    validEmailPrompt: "Send a valid email address, or /cancel to stop.",
-    registrationPasswordPrompt: "Send a password with at least 8 characters.",
-    confirmPasswordPrompt: "Confirm your password.",
-    passwordTooShort: "Password must be at least 8 characters. Send a new password, or /cancel.",
-    passwordsMismatch: "Passwords did not match. Send /register to start again.",
-    pendingApproval: "Account created and pending admin approval.",
-    loginOpenMiniApp: "Login successful. Open the Mini App to continue.",
-    registrationOpenMiniApp: "Account created. Open the Mini App to continue.",
+    miniAppMissing: "آدرس Mini App هنوز توسط مدیر پلتفرم تنظیم نشده است.",
+    helpText: "اینجا ثبت‌نام یا ورود کنید، سپس Mini App را باز کنید. Mini App داشبورد کامل شماست.",
+    cancelDone: "لغو شد.",
+    validEmailPrompt: "یک ایمیل معتبر ارسال کنید، یا برای توقف /cancel را بفرستید.",
+    registrationPasswordPrompt: "رمزی با حداقل ۸ کاراکتر ارسال کنید.",
+    confirmPasswordPrompt: "رمز عبور خود را تایید کنید.",
+    passwordTooShort: "رمز عبور باید حداقل ۸ کاراکتر باشد. رمز جدید بفرستید یا /cancel را ارسال کنید.",
+    passwordsMismatch: "رمزها یکسان نبودند. برای شروع دوباره /register را ارسال کنید.",
+    pendingApproval: "حساب ساخته شد و در انتظار تایید مدیر است.",
+    loginOpenMiniApp: "ورود موفق بود. برای ادامه Mini App را باز کنید.",
+    registrationOpenMiniApp: "حساب ساخته شد. برای ادامه Mini App را باز کنید.",
+    unknownCommand: "این دستور شناخته نشد. از منو، /login، /register یا /help استفاده کنید.",
+    menuLinked: "برای مدیریت داشبورد، Mini App را باز کنید.",
+    menuGuest: "ثبت‌نام یا ورود کنید، سپس Mini App را باز کنید.",
+    openMiniAppButton: "باز کردن Mini App",
   },
 };
 
@@ -204,21 +220,21 @@ function miniAppUrlWithSession(url: string, sessionToken?: string) {
   return `${url}#sess=${encodeURIComponent(sessionToken)}`;
 }
 
-async function openMiniAppKeyboard(sessionToken?: string) {
+async function openMiniAppKeyboard(language?: string | null, sessionToken?: string) {
   const url = await miniAppUrl();
   if (!url) return null;
   return {
-    inline_keyboard: [[{ text: "OPEN MINI APP", web_app: { url: miniAppUrlWithSession(url, sessionToken) } }]],
+    inline_keyboard: [[{ text: bt(language, "openMiniAppButton").toUpperCase(), web_app: { url: miniAppUrlWithSession(url, sessionToken) } }]],
   };
 }
 
-async function sendOpenMiniApp(chatId: number, text: string, sessionToken?: string) {
-  const keyboard = await openMiniAppKeyboard(sessionToken);
+async function sendOpenMiniApp(chatId: number, language: string | null | undefined, text: string, sessionToken?: string) {
+  const keyboard = await openMiniAppKeyboard(language, sessionToken);
   await send(
     chatId,
     keyboard
       ? text
-      : `${text}\n\n${bt("en", "miniAppMissing")}`,
+      : `${text}\n\n${bt(language, "miniAppMissing")}`,
     keyboard ?? undefined,
   );
 }
@@ -293,8 +309,8 @@ async function mainMenu(chatId: number, user: TgUser) {
   await send(
     chatId,
     customer
-      ? `<b>${t(language, "start")}</b>\n\n${t(language, "openMiniApp")} to manage your dashboard.`
-      : `<b>${t(language, "start")}</b>\n\n${t(language, "register")} / ${t(language, "login")} -> ${t(language, "openMiniApp")}.`,
+      ? `<b>${t(language, "start")}</b>\n\n${bt(language, "menuLinked")}`
+      : `<b>${t(language, "start")}</b>\n\n${bt(language, "menuGuest")}`,
     { inline_keyboard: rows },
   );
 }
@@ -357,10 +373,7 @@ async function handlePrivateText(msg: TgMessage) {
   }
   if (text === "/help_legacy_disabled") {
     diagnostic("handler", { handler: "help", chat_id: chatId });
-    await send(
-      chatId,
-      "Register or log in here, then open the Mini App — it is your full dashboard: connections, group discovery, audience, campaigns, analytics and billing.",
-    );
+    await send(chatId, bt(language, "helpText"));
     return;
   }
   if (text === "/cancel") {
@@ -441,7 +454,7 @@ async function handlePrivateText(msg: TgMessage) {
       customerId: result.customerId,
       tenantId: result.tenantId,
     });
-    await sendOpenMiniApp(chatId, bt(language, "registrationOpenMiniApp"), sessionToken);
+    await sendOpenMiniApp(chatId, language, bt(language, "registrationOpenMiniApp"), sessionToken);
     return;
   }
 
@@ -486,11 +499,12 @@ async function handlePrivateText(msg: TgMessage) {
       },
       { language },
     );
-    await sendOpenMiniApp(chatId, bt(language, "loginOpenMiniApp"), result.token);
+    await sendOpenMiniApp(chatId, language, bt(language, "loginOpenMiniApp"), result.token);
     return;
   }
 
   diagnostic("handler", { handler: "fallback_menu", chat_id: chatId });
+  await send(chatId, bt(language, "unknownCommand"));
   await mainMenu(chatId, msg.from!);
 }
 
