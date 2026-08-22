@@ -15,6 +15,7 @@ import {
   createCustomer,
   deleteCustomer,
   forceLogoutCustomer,
+  getAdminPreferences,
   getAdminCustomers,
   getAdminCustomer,
   getAdminDashboard,
@@ -32,6 +33,7 @@ import {
   resetCustomerPassword,
   resetUsage,
   savePlan,
+  saveAdminPreferenceSettings,
   saveQuotaOverride,
   saveRegistration,
   saveSettings,
@@ -54,6 +56,7 @@ const valid = new Set([
   "registration",
   "logs",
   "settings",
+  "account",
 ]);
 
 function statusTone(status?: string) {
@@ -111,6 +114,7 @@ function AdminSection() {
         registration: getRegistration,
         telegram: getSettings,
         settings: getSettings,
+        account: getSettings,
         logs: () => getLogs({ data: { kind: "system" } }),
       };
       setData(await loaders[section]?.());
@@ -169,6 +173,7 @@ function SectionContent({
     return <RegistrationAdmin data={data ?? { settings: {}, plans: [], stats: {} }} reload={reload} />;
   if (section === "telegram") return <TelegramHealth data={data} reload={reload} />;
   if (section === "settings") return <SettingsPanel data={data} />;
+  if (section === "account") return <AccountSecurityPanel />;
   const rows = Array.isArray(data) ? data : [];
   return (
     <div className="overflow-hidden border border-border bg-card">
@@ -212,8 +217,12 @@ function CustomersAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promi
   const [error, setError] = useState("");
   const [detail, setDetail] = useState<any>(null);
   const [plans, setPlans] = useState<any[]>([]);
+  const [planModal, setPlanModal] = useState<{ action: "CHANGE" | "GRANT" | "EXTEND" | "UNLIMITED" } | null>(null);
+  const [emojiModal, setEmojiModal] = useState<{ revoke?: boolean } | null>(null);
+  const [passwordModal, setPasswordModal] = useState(false);
+  const [deleteModal, setDeleteModal] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<null | { title: string; body: string; run: () => Promise<void> }>(null);
   async function changeStatus(id: string, status: "ACTIVE" | "SUSPENDED") {
-    if (status === "SUSPENDED" && !confirm("Suspend this customer?")) return;
     setWorking(id);
     setError("");
     try {
@@ -241,59 +250,62 @@ function CustomersAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promi
       setWorking("");
     }
   }
-  async function customerAction(action: string) {
+  async function refreshDetail(customerId?: string) {
+    const id = customerId ?? detail?.customer?.id;
+    if (!id) return;
+    const customerDetail = await getAdminCustomer({ data: { id } });
+    setDetail(customerDetail);
+  }
+  async function submitPlanManagement(input: any) {
     const customer = detail?.customer;
     if (!customer) return;
-    setWorking(action);
+    setWorking("plan");
     setError("");
     try {
-      if (action === "FORCE_LOGOUT") {
-        if (!confirm("Force logout this customer?")) return;
-        await forceLogoutCustomer({ data: { id: customer.id } });
-      }
-      if (action === "DELETE") {
-        const confirmation = prompt(`Type DELETE USER PERMANENTLY or ${customer.email} to delete this user.`);
-        if (!confirmation) return;
-        await deleteCustomer({ data: { id: customer.id, confirmation } });
-        setDetail(null);
-        await reload();
-        return;
-      }
-      if (action === "CHANGE_PLAN") {
-        const code = prompt(`Enter plan code: ${plans.map((p) => p.code).join(", ")}`);
-        const plan = plans.find((p) => String(p.code).toUpperCase() === String(code).toUpperCase());
-        if (!plan) throw new Error("Plan not found.");
-        await changeCustomerPlan({ data: { id: customer.id, planId: plan.id } });
-      }
-      if (action === "GRANT_PLAN") {
-        const code = prompt(`Enter plan code to grant: ${plans.map((p) => p.code).join(", ")}`);
-        const plan = plans.find((p) => String(p.code).toUpperCase() === String(code).toUpperCase());
-        if (!plan) throw new Error("Plan not found.");
-        const duration = prompt("Duration days: 7, 30, 90, 365, NO_EXPIRY, or CUSTOM", "30") ?? "30";
-        const expiresAt = duration === "CUSTOM" ? prompt("Custom expiry date (YYYY-MM-DD)") : null;
-        const reason = prompt("Reason/note") ?? "Manual grant";
-        await grantCustomerPlan({ data: { customerId: customer.id, planId: plan.id, duration, expiresAt, reason } });
-      }
-      if (action === "UNLIMITED") {
-        const duration = prompt("Custom unlimited duration: 7, 30, 90, 365, NO_EXPIRY, or CUSTOM", "NO_EXPIRY") ?? "NO_EXPIRY";
-        const expiresAt = duration === "CUSTOM" ? prompt("Custom expiry date (YYYY-MM-DD)") : null;
-        const reason = prompt("Reason/note", "Custom unlimited grant") ?? "Custom unlimited grant";
-        await grantCustomerPlan({ data: { customerId: customer.id, duration, expiresAt, reason, unlimited: true } });
-      }
-      if (action === "PREMIUM_EMOJI") {
-        const expiresAt = prompt("Premium Emoji expiry date (YYYY-MM-DD) or blank for 30 days", "") || null;
-        const reason = prompt("Reason/note", "Admin granted Premium Emoji") ?? "Admin granted Premium Emoji";
-        await grantPremiumEmoji({ data: { tenantId: customer.tenant_id, expiresAt, reason } });
-      }
-      if (action === "REVOKE_PREMIUM_EMOJI") {
-        if (!confirm("Revoke Premium Emoji for this customer?")) return;
-        const reason = prompt("Reason/note", "Admin revoked Premium Emoji") ?? "Admin revoked Premium Emoji";
-        await grantPremiumEmoji({ data: { tenantId: customer.tenant_id, revoke: true, reason } });
+      if (input.mode === "CHANGE") {
+        await changeCustomerPlan({ data: { id: customer.id, planId: input.planId } });
+      } else {
+        await grantCustomerPlan({
+          data: {
+            customerId: customer.id,
+            planId: input.planId,
+            duration: input.duration,
+            expiresAt: input.expiresAt || null,
+            noExpiry: input.duration === "NO_EXPIRY",
+            reason: input.reason,
+            unlimited: input.mode === "UNLIMITED",
+            action: input.mode === "EXTEND" ? "EXTEND" : input.mode === "CHANGE" ? "CHANGE" : "GRANT",
+          },
+        });
       }
       await reload();
-      await openDetail(customer.id);
+      await refreshDetail(customer.id);
+      setPlanModal(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Customer action failed.");
+      setError(e instanceof Error ? e.message : "Plan action failed.");
+    } finally {
+      setWorking("");
+    }
+  }
+  async function submitPremiumEmoji(input: any) {
+    const customer = detail?.customer;
+    if (!customer) return;
+    setWorking("premium-emoji");
+    setError("");
+    try {
+      await grantPremiumEmoji({
+        data: {
+          tenantId: customer.tenant_id,
+          expiresAt: input.expiresAt || null,
+          noExpiry: input.duration === "NO_EXPIRY",
+          revoke: Boolean(input.revoke),
+          reason: input.reason,
+        },
+      });
+      await refreshDetail(customer.id);
+      setEmojiModal(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Premium Emoji action failed.");
     } finally {
       setWorking("");
     }
@@ -356,7 +368,7 @@ function CustomersAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promi
                         variant="secondary"
                         size="sm"
                         disabled={working === row["id"]}
-                        onClick={() => changeStatus(row["id"], "SUSPENDED")}
+                        onClick={() => setConfirmAction({ title: "Suspend Customer", body: `Suspend ${row["email"]}?`, run: async () => { await changeStatus(row["id"], "SUSPENDED"); } })}
                       >
                         Suspend
                       </Button>
@@ -364,7 +376,7 @@ function CustomersAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promi
                       <Button
                         size="sm"
                         disabled={working === row["id"]}
-                        onClick={() => changeStatus(row["id"], "ACTIVE")}
+                        onClick={() => setConfirmAction({ title: "Activate Customer", body: `Activate ${row["email"]}?`, run: async () => { await changeStatus(row["id"], "ACTIVE"); } })}
                       >
                         Activate
                       </Button>
@@ -414,24 +426,17 @@ function CustomersAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promi
           </div>
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
-          <Button size="sm" onClick={() => void customerAction("CHANGE_PLAN")}>Change Plan</Button>
-          <Button size="sm" variant="secondary" onClick={() => void customerAction("GRANT_PLAN")}>Grant Free/Manual</Button>
-          <Button size="sm" variant="secondary" onClick={() => void customerAction("UNLIMITED")}>Grant Unlimited</Button>
-          <Button size="sm" variant="secondary" onClick={() => void customerAction("PREMIUM_EMOJI")}>Grant Premium Emoji</Button>
-          <Button size="sm" variant="secondary" onClick={() => void customerAction("REVOKE_PREMIUM_EMOJI")}>Revoke Premium Emoji</Button>
-          <Button size="sm" variant="secondary" onClick={() => void customerAction("FORCE_LOGOUT")}>Force Logout</Button>
-          <Button size="sm" variant="secondary" onClick={() => changeStatus(detail.customer.id, "SUSPENDED")}>Suspend</Button>
-          <Button size="sm" onClick={() => changeStatus(detail.customer.id, "ACTIVE")}>Activate</Button>
-          <Button size="sm" variant="secondary" onClick={() => {
-            const password = prompt("New password, at least 8 characters");
-            if (password) {
-              setWorking("reset-password");
-              resetCustomerPassword({ data: { id: detail.customer.id, password } })
-                .then(reload)
-                .finally(() => setWorking(""));
-            }
-          }}>Reset Password</Button>
-          <Button size="sm" variant="destructive" onClick={() => void customerAction("DELETE")}>
+          <Button size="sm" onClick={() => setPlanModal({ action: "CHANGE" })}>Manage Plan</Button>
+          <Button size="sm" variant="secondary" onClick={() => setPlanModal({ action: "GRANT" })}>Grant Free</Button>
+          <Button size="sm" variant="secondary" onClick={() => setPlanModal({ action: "EXTEND" })}>Extend Plan</Button>
+          <Button size="sm" variant="secondary" onClick={() => setPlanModal({ action: "UNLIMITED" })}>Grant Unlimited</Button>
+          <Button size="sm" variant="secondary" onClick={() => setEmojiModal({})}>Grant Premium Emoji</Button>
+          <Button size="sm" variant="secondary" onClick={() => setEmojiModal({ revoke: true })}>Revoke Premium Emoji</Button>
+          <Button size="sm" variant="secondary" onClick={() => setConfirmAction({ title: "Force Logout", body: "End all customer app sessions now?", run: async () => { await forceLogoutCustomer({ data: { id: detail.customer.id } }); await refreshDetail(); } })}>Force Logout</Button>
+          <Button size="sm" variant="secondary" onClick={() => setConfirmAction({ title: "Suspend Customer", body: "Suspend this customer and tenant?", run: async () => { await changeStatus(detail.customer.id, "SUSPENDED"); await refreshDetail(); } })}>Suspend</Button>
+          <Button size="sm" onClick={() => setConfirmAction({ title: "Activate Customer", body: "Reactivate this customer and tenant?", run: async () => { await changeStatus(detail.customer.id, "ACTIVE"); await refreshDetail(); } })}>Activate</Button>
+          <Button size="sm" variant="secondary" onClick={() => setPasswordModal(true)}>Reset Password</Button>
+          <Button size="sm" variant="destructive" onClick={() => setDeleteModal(true)}>
             <Trash2 className="size-4" /> Delete User
           </Button>
         </div>
@@ -441,8 +446,137 @@ function CustomersAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promi
           <DetailList title="Recent Campaigns" rows={detail.campaigns} fields={["name", "status", "total_targets"]} />
           <DetailList title="Admin Notes/Actions" rows={detail.adminLogs} fields={["action", "resource", "created_at"]} />
         </div>
+        {planModal ? <PlanManagementModal mode={planModal.action} customer={detail.customer} subscription={detail.subscription} plans={plans} working={working === "plan"} onClose={() => setPlanModal(null)} onSubmit={submitPlanManagement} /> : null}
+        {emojiModal ? <PremiumEmojiModal revoke={emojiModal.revoke} working={working === "premium-emoji"} onClose={() => setEmojiModal(null)} onSubmit={submitPremiumEmoji} /> : null}
+        {passwordModal ? <PasswordResetModal working={working === "reset-password"} onClose={() => setPasswordModal(false)} onSubmit={async (password: string) => {
+          setWorking("reset-password");
+          await resetCustomerPassword({ data: { id: detail.customer.id, password } });
+          setWorking("");
+          setPasswordModal(false);
+          await reload();
+        }} /> : null}
+        {deleteModal ? <DeleteCustomerModal email={detail.customer.email} working={working === "delete"} onClose={() => setDeleteModal(false)} onSubmit={async (confirmation: string) => {
+          setWorking("delete");
+          await deleteCustomer({ data: { id: detail.customer.id, confirmation } });
+          setWorking("");
+          setDeleteModal(false);
+          setDetail(null);
+          await reload();
+        }} /> : null}
       </section>
     ) : null}
+    {confirmAction ? <ConfirmModal title={confirmAction.title} body={confirmAction.body} working={Boolean(working)} onClose={() => setConfirmAction(null)} onConfirm={async () => {
+      setWorking(confirmAction.title);
+      await confirmAction.run();
+      setWorking("");
+      setConfirmAction(null);
+      await reload();
+    }} /> : null}
+    </div>
+  );
+}
+
+function PlanManagementModal({ mode, customer, subscription, plans, working, onClose, onSubmit }: any) {
+  const defaultPlan = plans.find((p: any) => p.code === (mode === "UNLIMITED" ? "ENTERPRISE" : "PLUS")) ?? plans[0];
+  const [planId, setPlanId] = useState(defaultPlan?.id ?? "");
+  const [duration, setDuration] = useState(mode === "UNLIMITED" ? "NO_EXPIRY" : "30");
+  const [expiresAt, setExpiresAt] = useState("");
+  const [reason, setReason] = useState(mode === "EXTEND" ? "Admin extended current plan" : mode === "UNLIMITED" ? "Custom unlimited entitlement" : "Admin manual plan grant");
+  const selectedPlan = plans.find((p: any) => p.id === planId);
+  const currentExpiry = subscription?.no_expiry ? "No expiry" : subscription?.expires_at ? new Date(subscription.expires_at).toLocaleDateString() : "TEST fallback";
+  const newExpiry = duration === "NO_EXPIRY"
+    ? "No expiry"
+    : duration === "CUSTOM"
+      ? (expiresAt || "Custom date required")
+      : `${duration} day${duration === "1" ? "" : "s"} ${mode === "EXTEND" ? "added to current active expiry" : "from now"}`;
+  return (
+    <ModalFrame title={mode === "EXTEND" ? "Extend Current Plan" : mode === "UNLIMITED" ? "Grant Custom / Unlimited" : "Manage Plan"} onClose={onClose}>
+      <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); void onSubmit({ mode, planId, duration, expiresAt, reason }); }}>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="block text-sm">Plan<select className={adminInput()} value={planId} onChange={(e) => setPlanId(e.target.value)}>{plans.map((p: any) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}</select></label>
+          <label className="block text-sm">Duration<select className={adminInput()} value={duration} onChange={(e) => setDuration(e.target.value)}><option value="7">7 days</option><option value="30">30 days</option><option value="90">90 days</option><option value="365">365 days</option><option value="CUSTOM">Custom expiry</option><option value="NO_EXPIRY">No expiry</option></select></label>
+          {duration === "CUSTOM" ? <label className="block text-sm sm:col-span-2">Custom Expiry<input className={adminInput()} type="date" value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)} /></label> : null}
+        </div>
+        <div className="grid gap-2 border border-border bg-background p-3 text-sm sm:grid-cols-2">
+          <p><span className="text-muted-foreground">Customer:</span> {customer.email}</p>
+          <p><span className="text-muted-foreground">New plan:</span> {selectedPlan?.code ?? "Select plan"}</p>
+          <p><span className="text-muted-foreground">Current expiry:</span> {currentExpiry}</p>
+          <p><span className="text-muted-foreground">New expiry:</span> {newExpiry}</p>
+        </div>
+        <label className="block text-sm">Reason / Admin note<textarea className={adminInput()} value={reason} onChange={(e) => setReason(e.target.value)} required /></label>
+        <div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" disabled={working || !planId || !reason.trim()}>{working ? "Saving..." : "Submit"}</Button></div>
+      </form>
+    </ModalFrame>
+  );
+}
+
+function PremiumEmojiModal({ revoke, working, onClose, onSubmit }: any) {
+  const [duration, setDuration] = useState(revoke ? "REVOKE" : "30");
+  const [expiresAt, setExpiresAt] = useState("");
+  const [reason, setReason] = useState(revoke ? "Admin revoked Premium Emoji" : "Admin granted Premium Emoji");
+  return (
+    <ModalFrame title={revoke ? "Revoke Premium Emoji" : "Premium Emoji Add-on"} onClose={onClose}>
+      <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); void onSubmit({ revoke, duration, expiresAt, reason }); }}>
+        {!revoke ? <label className="block text-sm">Duration<select className={adminInput()} value={duration} onChange={(e) => setDuration(e.target.value)}><option value="30">30 days</option><option value="90">90 days</option><option value="365">365 days</option><option value="CUSTOM">Custom expiry</option><option value="NO_EXPIRY">No expiry</option></select></label> : null}
+        {duration === "CUSTOM" ? <label className="block text-sm">Custom Expiry<input className={adminInput()} type="date" value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)} /></label> : null}
+        <label className="block text-sm">Reason<textarea className={adminInput()} value={reason} onChange={(e) => setReason(e.target.value)} required /></label>
+        <div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" disabled={working || !reason.trim()}>{working ? "Saving..." : revoke ? "Revoke" : "Save"}</Button></div>
+      </form>
+    </ModalFrame>
+  );
+}
+
+function PasswordResetModal({ working, onClose, onSubmit }: any) {
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const valid = password.length >= 8 && password === confirm;
+  return (
+    <ModalFrame title="Reset Customer Password" onClose={onClose}>
+      <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); if (valid) void onSubmit(password); }}>
+        <label className="block text-sm">New Password<input className={adminInput()} type="password" value={password} onChange={(e) => setPassword(e.target.value)} /></label>
+        <label className="block text-sm">Confirm Password<input className={adminInput()} type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} /></label>
+        {!valid ? <p className="text-xs text-warning">Password must be at least 8 characters and match confirmation.</p> : null}
+        <div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" disabled={working || !valid}>{working ? "Saving..." : "Reset Password"}</Button></div>
+      </form>
+    </ModalFrame>
+  );
+}
+
+function DeleteCustomerModal({ email, working, onClose, onSubmit }: any) {
+  const [confirmation, setConfirmation] = useState("");
+  const valid = confirmation === "DELETE USER PERMANENTLY" || confirmation === email;
+  return (
+    <ModalFrame title="Delete User" onClose={onClose}>
+      <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); if (valid) void onSubmit(confirmation); }}>
+        <p className="text-sm text-destructive">This deletes the tenant and customer data. Type the customer email or DELETE USER PERMANENTLY.</p>
+        <input className={adminInput()} value={confirmation} onChange={(e) => setConfirmation(e.target.value)} placeholder={email} />
+        <div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" variant="destructive" disabled={working || !valid}>{working ? "Deleting..." : "Delete User"}</Button></div>
+      </form>
+    </ModalFrame>
+  );
+}
+
+function ConfirmModal({ title, body, working, onClose, onConfirm }: any) {
+  return (
+    <ModalFrame title={title} onClose={onClose}>
+      <div className="space-y-4">
+        <p className="text-sm text-muted-foreground">{body}</p>
+        <div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="button" disabled={working} onClick={onConfirm}>{working ? "Working..." : "Confirm"}</Button></div>
+      </div>
+    </ModalFrame>
+  );
+}
+
+function ModalFrame({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-end bg-black/50 p-3 sm:items-center sm:justify-center">
+      <section className="w-full max-w-2xl border border-border bg-card p-5 shadow-xl">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="font-semibold">{title}</h2>
+          <Button type="button" size="sm" variant="secondary" onClick={onClose}>Close</Button>
+        </div>
+        {children}
+      </section>
     </div>
   );
 }
@@ -717,50 +851,79 @@ function Dashboard({ data }: { data: any }) {
     errors: "System errors",
     revenue: "Revenue (USDT)",
     pending: "Pending payments",
+    pendingInvoices: "Pending invoices",
+    confirmingPayments: "Confirming payments",
+    paidInvoices: "Paid invoices",
+    reviewInvoices: "Review required",
+    expiredInvoices: "Expired invoices",
   };
   return (
-    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-      {Object.entries(labels).map(([key, label]) => (
-        <div key={key} className="border border-border bg-card p-5">
-          <p className="text-sm text-muted-foreground">{label}</p>
-          <p className="mt-3 text-3xl font-semibold">{Number(totals[key] ?? 0).toLocaleString()}</p>
-        </div>
-      ))}
+    <div className="space-y-4">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {Object.entries(labels).map(([key, label]) => (
+          <div key={key} className="border border-border bg-card p-5">
+            <p className="text-sm text-muted-foreground">{label}</p>
+            <p className="mt-3 text-3xl font-semibold">{Number(totals[key] ?? 0).toLocaleString()}</p>
+          </div>
+        ))}
+      </div>
+      <section className="border border-border bg-card p-5">
+        <h2 className="font-semibold">Blockchain Monitor</h2>
+        <MonitorSummary monitor={data?.monitor ?? {}} />
+      </section>
     </div>
   );
 }
 
 function SubscriptionsAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promise<void> }) {
-  async function act(id: string, action: "EXTEND" | "EXPIRE" | "CANCEL" | "GRANT_AGAIN") {
-    if ((action === "EXPIRE" || action === "CANCEL") && !confirm(`${action} this subscription?`)) return;
-    const days = action === "EXTEND" || action === "GRANT_AGAIN" ? Number(prompt("Days", "30") ?? 30) : undefined;
-    const reason = prompt("Reason/note") ?? "";
-    await updateSubscription({ data: { id, action, days, reason } });
+  const [modal, setModal] = useState<null | { id: string; action: "EXTEND" | "EXPIRE" | "CANCEL" | "GRANT_AGAIN" }>(null);
+  async function act(days: number, reason: string) {
+    if (!modal) return;
+    await updateSubscription({ data: { id: modal.id, action: modal.action, days, reason } });
+    setModal(null);
     await reload();
   }
   return (
-    <AdminTable
-      rows={rows}
-      columns={["Customer", "Plan", "Status", "Payment", "Expiry", "Actions"]}
-      render={(row) => {
-        const tenant = Array.isArray(row.tenants) ? row.tenants[0] : row.tenants;
-        const plan = Array.isArray(row.plans) ? row.plans[0] : row.plans;
-        const customer = Array.isArray(tenant?.customers) ? tenant.customers[0] : tenant?.customers;
-        return [
-          customer?.email ?? tenant?.name ?? row.tenant_id,
-          plan?.name ?? row.plan_id,
-          row.status,
-          row.payment_status,
-          row.no_expiry ? "No expiry" : row.expires_at ? new Date(row.expires_at).toLocaleDateString() : "",
-          <div className="flex flex-wrap justify-end gap-1" key="actions">
-            <Button size="sm" variant="secondary" onClick={() => void act(row.id, "EXTEND")}>Extend</Button>
-            <Button size="sm" variant="secondary" onClick={() => void act(row.id, "EXPIRE")}>Expire</Button>
-            <Button size="sm" variant="secondary" onClick={() => void act(row.id, "CANCEL")}>Cancel</Button>
-            <Button size="sm" onClick={() => void act(row.id, "GRANT_AGAIN")}>Grant Again</Button>
-          </div>,
-        ];
-      }}
-    />
+    <>
+      <AdminTable
+        rows={rows}
+        columns={["Customer", "Plan", "Status", "Payment", "Expiry", "Actions"]}
+        render={(row) => {
+          const tenant = Array.isArray(row.tenants) ? row.tenants[0] : row.tenants;
+          const plan = Array.isArray(row.plans) ? row.plans[0] : row.plans;
+          const customer = Array.isArray(tenant?.customers) ? tenant.customers[0] : tenant?.customers;
+          return [
+            customer?.email ?? tenant?.name ?? row.tenant_id,
+            plan?.name ?? row.plan_id,
+            row.status,
+            row.payment_status,
+            row.no_expiry ? "No expiry" : row.expires_at ? new Date(row.expires_at).toLocaleDateString() : "",
+            <div className="flex flex-wrap justify-end gap-1" key="actions">
+              <Button size="sm" variant="secondary" onClick={() => setModal({ id: row.id, action: "EXTEND" })}>Extend</Button>
+              <Button size="sm" variant="secondary" onClick={() => setModal({ id: row.id, action: "EXPIRE" })}>Expire</Button>
+              <Button size="sm" variant="secondary" onClick={() => setModal({ id: row.id, action: "CANCEL" })}>Cancel</Button>
+              <Button size="sm" onClick={() => setModal({ id: row.id, action: "GRANT_AGAIN" })}>Grant Again</Button>
+            </div>,
+          ];
+        }}
+      />
+      {modal ? <SubscriptionActionModal action={modal.action} onClose={() => setModal(null)} onSubmit={act} /> : null}
+    </>
+  );
+}
+
+function SubscriptionActionModal({ action, onClose, onSubmit }: any) {
+  const [days, setDays] = useState(30);
+  const [reason, setReason] = useState(`Admin ${action.toLowerCase()} subscription`);
+  const needsDays = action === "EXTEND" || action === "GRANT_AGAIN";
+  return (
+    <ModalFrame title={`${action} Subscription`} onClose={onClose}>
+      <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); void onSubmit(days, reason); }}>
+        {needsDays ? <label className="block text-sm">Days<input className={adminInput()} type="number" min={1} value={days} onChange={(e) => setDays(Number(e.target.value))} /></label> : null}
+        <label className="block text-sm">Reason<textarea className={adminInput()} value={reason} onChange={(e) => setReason(e.target.value)} required /></label>
+        <div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" disabled={!reason.trim()}>Submit</Button></div>
+      </form>
+    </ModalFrame>
   );
 }
 
@@ -768,14 +931,25 @@ function PaymentsAdmin({ data, reload }: { data: AnyData; reload: () => Promise<
   const rows = Array.isArray(data?.invoices) ? data.invoices : [];
   const legacy = Array.isArray(data?.legacyTransactions) ? data.legacyTransactions : [];
   const monitor = data?.monitor ?? {};
-  async function update(row: AnyData, status: string) {
-    if ((status === "CONFIRMED" || status === "PAID") && !confirm("Confirm this payment and activate the selected product?")) return;
-    const txHash = status === "CONFIRMED" || status === "PAID" ? prompt("Transaction hash/reference", row.tx_hash ?? "") ?? "" : row.tx_hash;
-    await updateTransaction({ data: { id: row.id, status, txHash } });
-    await reload();
+  const [review, setReview] = useState<null | { row: AnyData; status: string }>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function update(row: AnyData, status: string, txHash?: string) {
+    setBusy(true);
+    setError("");
+    try {
+      await updateTransaction({ data: { id: row.id, status, txHash: txHash ?? row.tx_hash } });
+      setReview(null);
+      await reload();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Payment action failed.");
+    } finally {
+      setBusy(false);
+    }
   }
   return (
     <div className="space-y-4">
+      {error ? <p className="border-l-2 border-destructive bg-card p-4 text-sm text-destructive">{error}</p> : null}
       <section className="grid gap-3 md:grid-cols-4">
         {[
           ["Blockchain Monitor", monitor.status ?? "UNKNOWN"],
@@ -815,7 +989,7 @@ function PaymentsAdmin({ data, reload }: { data: AnyData; reload: () => Promise<
           </div>,
           <div className="flex flex-wrap justify-end gap-1" key="actions">
             {["REVIEW_REQUIRED", "PAID", "CANCELLED"].map((status) => (
-              <Button key={status} size="sm" variant={status === "PAID" ? "default" : "secondary"} onClick={() => void update(row, status)}>
+              <Button key={status} size="sm" variant={status === "PAID" ? "default" : "secondary"} onClick={() => setReview({ row, status })}>
                 {status === "PAID" ? "Confirm manually" : status}
               </Button>
             ))}
@@ -837,30 +1011,52 @@ function PaymentsAdmin({ data, reload }: { data: AnyData; reload: () => Promise<
         />
       </section>
     ) : null}
+    {review ? <PaymentActionModal row={review.row} status={review.status} working={busy} onClose={() => setReview(null)} onSubmit={(txHash: string) => update(review.row, review.status, txHash)} /> : null}
     </div>
   );
 }
 
+function PaymentActionModal({ row, status, working, onClose, onSubmit }: any) {
+  const [txHash, setTxHash] = useState(row.tx_hash ?? "");
+  const [reason, setReason] = useState(status === "PAID" ? "Manual admin confirmation after review" : `Admin set invoice to ${status}`);
+  const needsTx = status === "PAID" || status === "CONFIRMED";
+  return (
+    <ModalFrame title={status === "PAID" ? "Manual Payment Confirmation" : "Invoice Review Action"} onClose={onClose}>
+      <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); void onSubmit(txHash); }}>
+        <div className="grid gap-2 border border-border bg-background p-3 text-sm sm:grid-cols-2">
+          <p><span className="text-muted-foreground">Invoice:</span> {row.invoice_number ?? row.id}</p>
+          <p><span className="text-muted-foreground">Status:</span> {status}</p>
+          <p><span className="text-muted-foreground">Amount:</span> {Number(row.payable_amount ?? 0).toFixed(6)} USDT</p>
+          <p><span className="text-muted-foreground">Product:</span> {row.product_code}</p>
+        </div>
+        {needsTx ? <label className="block text-sm">Transaction hash/reference<input className={adminInput()} value={txHash} onChange={(e) => setTxHash(e.target.value)} required /></label> : null}
+        <label className="block text-sm">Reason<textarea className={adminInput()} value={reason} onChange={(e) => setReason(e.target.value)} required /></label>
+        <div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" disabled={working || !reason.trim() || (needsTx && !txHash.trim())}>{working ? "Saving..." : "Submit"}</Button></div>
+      </form>
+    </ModalFrame>
+  );
+}
+
 function UsageAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promise<void> }) {
-  async function reset(tenantId: string) {
-    if (!confirm("Reset this customer's current monthly usage?")) return;
-    await resetUsage({ data: { tenantId, reason: prompt("Reason", "Admin reset") ?? "" } });
+  const [resetTarget, setResetTarget] = useState<any>(null);
+  const [overrideTarget, setOverrideTarget] = useState<any>(null);
+  async function reset(tenantId: string, reason: string) {
+    await resetUsage({ data: { tenantId, reason } });
+    setResetTarget(null);
     await reload();
   }
-  async function override(row: AnyData) {
+  async function override(row: AnyData, maxConnections: string, reason: string) {
     const customer = row.customer ?? {};
-    const raw = prompt("Override max sessions for this customer (blank = unlimited plan quota, hard cap 20). Leave cancel to skip.");
-    if (raw === null) return;
-    const reason = prompt("Reason", "Admin quota override") ?? "";
     await saveQuotaOverride({
       data: {
         tenantId: customer.tenant_id,
         fields: {
-          max_connections: raw.trim() === "" ? null : Number(raw),
+          max_connections: maxConnections.trim() === "" ? null : Number(maxConnections),
         },
         reason,
       },
     });
+    setOverrideTarget(null);
     await reload();
   }
   return (
@@ -875,8 +1071,8 @@ function UsageAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promise<v
                 <p className="text-xs text-muted-foreground">{row.usage?.plan?.name ?? "TEST"}</p>
               </div>
               <div className="flex flex-wrap justify-end gap-2">
-                <Button size="sm" variant="secondary" onClick={() => void override(row)}>Override Quota</Button>
-                <Button size="sm" variant="secondary" onClick={() => void reset(customer.tenant_id)}>Reset Usage</Button>
+                <Button size="sm" variant="secondary" onClick={() => setOverrideTarget(row)}>Override Quota</Button>
+                <Button size="sm" variant="secondary" onClick={() => setResetTarget(customer)}>Reset Usage</Button>
               </div>
             </div>
             <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
@@ -888,7 +1084,35 @@ function UsageAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promise<v
         );
       })}
       {!rows.length ? <p className="text-sm text-muted-foreground">No usage rows.</p> : null}
+      {resetTarget ? <ReasonModal title="Reset Usage" defaultReason="Admin reset monthly usage" onClose={() => setResetTarget(null)} onSubmit={(reason: string) => reset(resetTarget.tenant_id, reason)} /> : null}
+      {overrideTarget ? <QuotaOverrideModal onClose={() => setOverrideTarget(null)} onSubmit={(maxConnections: string, reason: string) => override(overrideTarget, maxConnections, reason)} /> : null}
     </div>
+  );
+}
+
+function ReasonModal({ title, defaultReason, onClose, onSubmit }: any) {
+  const [reason, setReason] = useState(defaultReason);
+  return (
+    <ModalFrame title={title} onClose={onClose}>
+      <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); void onSubmit(reason); }}>
+        <label className="block text-sm">Reason<textarea className={adminInput()} value={reason} onChange={(e) => setReason(e.target.value)} required /></label>
+        <div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" disabled={!reason.trim()}>Submit</Button></div>
+      </form>
+    </ModalFrame>
+  );
+}
+
+function QuotaOverrideModal({ onClose, onSubmit }: any) {
+  const [maxConnections, setMaxConnections] = useState("");
+  const [reason, setReason] = useState("Admin quota override");
+  return (
+    <ModalFrame title="Custom Entitlement Override" onClose={onClose}>
+      <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); void onSubmit(maxConnections, reason); }}>
+        <label className="block text-sm">Max Sessions (blank = unlimited plan quota, hard cap remains 20)<input className={adminInput()} type="number" min={0} max={20} value={maxConnections} onChange={(e) => setMaxConnections(e.target.value)} /></label>
+        <label className="block text-sm">Reason<textarea className={adminInput()} value={reason} onChange={(e) => setReason(e.target.value)} required /></label>
+        <div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" disabled={!reason.trim()}>Save Override</Button></div>
+      </form>
+    </ModalFrame>
   );
 }
 
@@ -1219,63 +1443,205 @@ function TelegramHealth({ data, reload }: { data: any; reload: () => Promise<voi
 }
 
 function SettingsPanel({ data }: { data: any }) {
-  const payments = data?.payments ?? {};
+  const [settings, setSettings] = useState(data ?? {});
+  const payments = settings?.payments ?? {};
+  const general = settings?.general ?? {};
+  const registration = settings?.registration ?? {};
+  const telegram = settings?.telegram ?? {};
+  const monitor = settings?.monitor ?? {};
+  const [generalDraft, setGeneralDraft] = useState({
+    system_name: String(general.system_name || "WPAY Promotion"),
+    support_email: String(general.support_email || ""),
+    support_telegram: String(general.support_telegram || ""),
+    maintenance_mode: Boolean(general.maintenance_mode),
+  });
   const [paymentDraft, setPaymentDraft] = useState({
     payment_enabled: Boolean(payments.payment_enabled),
-    network: String(payments.network || "TRC20"),
+    network: "TRC20",
+    tron_network: "mainnet",
     wallet_address: String(payments.wallet_address || ""),
+    invoice_expiry_minutes: Number(payments.invoice_expiry_minutes ?? 10),
+    confirmations_required: Number(payments.confirmations_required ?? 1),
   });
+  const [prefs, setPrefs] = useState({ language: "en", theme: "system" });
   const [result, setResult] = useState("");
-  async function save(key: "payments", value: Record<string, unknown>) {
+  const [saving, setSaving] = useState("");
+  useEffect(() => {
+    getAdminPreferences().then((p: any) => setPrefs({ language: p?.language ?? "en", theme: p?.theme ?? "system" })).catch(() => {});
+  }, []);
+  async function save(key: "payments" | "general", value: Record<string, unknown>) {
+    setSaving(key);
     setResult("");
     try {
-      await saveSettings({ data: { key, value } });
-      setResult("Settings saved.");
+      const next = await saveSettings({ data: { key, value } });
+      setSettings(next);
+      setResult(`${key[0]?.toUpperCase()}${key.slice(1)} settings saved.`);
     } catch (e) {
       setResult(e instanceof Error ? e.message : "Could not save settings.");
+    } finally {
+      setSaving("");
     }
   }
+  async function savePrefs() {
+    setSaving("preferences");
+    setResult("");
+    try {
+      const next = await saveAdminPreferenceSettings({ data: prefs });
+      document.documentElement.dir = next.language === "fa" ? "rtl" : "ltr";
+      document.documentElement.lang = next.language;
+      localStorage.setItem("wpay-language", next.language);
+      localStorage.setItem("wpay-theme", next.theme);
+      setResult("Admin appearance and language saved.");
+    } catch (e) {
+      setResult(e instanceof Error ? e.message : "Could not save admin preferences.");
+    } finally {
+      setSaving("");
+    }
+  }
+  const walletValid = /^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(paymentDraft.wallet_address.trim());
   return (
-    <div className="grid gap-4 md:grid-cols-2">
-      {result && (
-        <p className="md:col-span-2 border-l-2 border-primary bg-card p-4 text-sm">{result}</p>
-      )}
-      <form
-        className="border border-border bg-card p-5"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void save("payments", paymentDraft);
-        }}
-      >
-        <h2 className="font-semibold">Payments</h2>
-        <label className="mt-4 flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={paymentDraft.payment_enabled}
-            onChange={(e) => setPaymentDraft((d) => ({ ...d, payment_enabled: e.target.checked }))}
-          />{" "}
-          Payment enabled
-        </label>
-        <label className="mt-4 block text-sm">
-          Network
-          <input
-            className="mt-2 w-full rounded-md border border-input bg-background px-3 py-2.5"
-            value={paymentDraft.network}
-            onChange={(e) => setPaymentDraft((d) => ({ ...d, network: e.target.value }))}
-          />
-        </label>
-        <label className="mt-4 block text-sm">
-          USDT wallet
-          <input
-            className="mt-2 w-full rounded-md border border-input bg-background px-3 py-2.5"
-            value={paymentDraft.wallet_address}
-            onChange={(e) => setPaymentDraft((d) => ({ ...d, wallet_address: e.target.value }))}
-          />
-        </label>
-        <Button type="submit" className="mt-5 w-full">
-          Save payments
-        </Button>
+    <div className="space-y-4">
+      {result && <p className="border-l-2 border-primary bg-card p-4 text-sm">{result}</p>}
+      <div className="grid gap-4 xl:grid-cols-2">
+        <SettingsCard title="General">
+          <label className="block text-sm">Platform Name<input className={adminInput()} value={generalDraft.system_name} onChange={(e) => setGeneralDraft((d) => ({ ...d, system_name: e.target.value }))} /></label>
+          <label className="block text-sm">Support Email<input className={adminInput()} value={generalDraft.support_email} onChange={(e) => setGeneralDraft((d) => ({ ...d, support_email: e.target.value }))} /></label>
+          <label className="block text-sm">Support Telegram<input className={adminInput()} value={generalDraft.support_telegram} onChange={(e) => setGeneralDraft((d) => ({ ...d, support_telegram: e.target.value }))} /></label>
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={generalDraft.maintenance_mode} onChange={(e) => setGeneralDraft((d) => ({ ...d, maintenance_mode: e.target.checked }))} /> Maintenance mode</label>
+          <Button type="button" disabled={saving === "general"} onClick={() => save("general", generalDraft)}>{saving === "general" ? "Saving..." : "Save General Settings"}</Button>
+        </SettingsCard>
+        <SettingsCard title="Appearance">
+          <label className="block text-sm">Theme<select className={adminInput()} value={prefs.theme} onChange={(e) => setPrefs((d) => ({ ...d, theme: e.target.value }))}><option value="light">Light</option><option value="dark">Dark</option><option value="system">System</option></select></label>
+          <Button type="button" disabled={saving === "preferences"} onClick={savePrefs}>{saving === "preferences" ? "Saving..." : "Save Appearance"}</Button>
+        </SettingsCard>
+        <SettingsCard title="Language">
+          <label className="block text-sm">Admin Language<select className={adminInput()} value={prefs.language} onChange={(e) => setPrefs((d) => ({ ...d, language: e.target.value }))}><option value="en">English</option><option value="zh-CN">Simplified Chinese</option><option value="ru">Russian</option><option value="fa">Persian / Farsi</option></select></label>
+          <Button type="button" disabled={saving === "preferences"} onClick={savePrefs}>{saving === "preferences" ? "Saving..." : "Save Language"}</Button>
+        </SettingsCard>
+        <SettingsCard title="Payments">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={paymentDraft.payment_enabled} onChange={(e) => setPaymentDraft((d) => ({ ...d, payment_enabled: e.target.checked }))} /> Payment enabled</label>
+            <p className="text-sm"><span className="text-muted-foreground">Provider:</span> TronGrid {monitor.apiKeyConfigured ? "(key configured)" : "(public/limited)"}</p>
+            <label className="block text-sm">Network<input className={adminInput()} value="TRON MAINNET" readOnly /></label>
+            <label className="block text-sm">Token<input className={adminInput()} value="USDT TRC20" readOnly /></label>
+            <label className="block text-sm sm:col-span-2">Receiving Wallet Address<input className={adminInput()} value={paymentDraft.wallet_address} onChange={(e) => setPaymentDraft((d) => ({ ...d, wallet_address: e.target.value }))} placeholder="T..." /></label>
+            <p className={`text-xs ${walletValid ? "text-success" : "text-warning"}`}>{walletValid ? "Valid TRON address shape. Full checksum is verified on save." : "Enter a valid TRON mainnet Base58 address."}</p>
+            <label className="block text-sm">Invoice Expiry Minutes<input className={adminInput()} type="number" min={1} value={paymentDraft.invoice_expiry_minutes} onChange={(e) => setPaymentDraft((d) => ({ ...d, invoice_expiry_minutes: Number(e.target.value) }))} /></label>
+            <label className="block text-sm">Confirmations<input className={adminInput()} type="number" min={1} value={paymentDraft.confirmations_required} onChange={(e) => setPaymentDraft((d) => ({ ...d, confirmations_required: Number(e.target.value) }))} /></label>
+            <label className="block text-sm sm:col-span-2">USDT Contract<input className={adminInput()} value={String(payments.usdt_contract || "TXLAQ63Xg1NAzckPwKHvzw7CSEmLMEqcdj")} readOnly /></label>
+          </div>
+          <MonitorSummary monitor={monitor} />
+          <Button type="button" disabled={saving === "payments"} onClick={() => save("payments", paymentDraft)}>{saving === "payments" ? "Saving..." : "Save Payment Settings"}</Button>
+        </SettingsCard>
+        <SettingsCard title="Registration">
+          <p className="text-sm text-muted-foreground">Registration Enabled: {registration.registration_enabled !== false ? "Yes" : "No"}</p>
+          <p className="text-sm text-muted-foreground">Default Plan: {registration.default_plan_code ?? "TEST"}</p>
+          <p className="text-sm text-muted-foreground">Default Duration: {registration.default_duration_days ?? 30} days</p>
+          <p className="text-sm text-muted-foreground">Use the Registration page for detailed registration controls.</p>
+        </SettingsCard>
+        <SettingsCard title="Billing">
+          <p className="text-sm text-muted-foreground">Currency: USDT</p>
+          <p className="text-sm text-muted-foreground">Invoice expiry: {paymentDraft.invoice_expiry_minutes} minutes</p>
+          <p className="text-sm text-muted-foreground">Edit official plan prices and quotas on the Plans page.</p>
+        </SettingsCard>
+        <SettingsCard title="Telegram">
+          <p className="text-sm text-muted-foreground">Bot Username: {telegram.bot_username ?? "Unknown"}</p>
+          <p className="break-all text-sm text-muted-foreground">Mini App URL: {telegram.mini_app_url ?? "Not configured"}</p>
+          <p className="text-sm text-muted-foreground">Bot token is never shown here.</p>
+        </SettingsCard>
+        <SettingsCard title="Notifications">
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" defaultChecked /> Payment confirmations</label>
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" defaultChecked /> Plan expiry warnings</label>
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" defaultChecked /> Quota warnings</label>
+        </SettingsCard>
+        <SettingsCard title="Security">
+          <p className="text-sm text-muted-foreground">Use Account / Security to change admin email/password and sign out.</p>
+        </SettingsCard>
+        <SettingsCard title="Support">
+          <p className="text-sm text-muted-foreground">{generalDraft.support_email || "No support email configured."}</p>
+          <p className="text-sm text-muted-foreground">{generalDraft.support_telegram || "No support Telegram configured."}</p>
+        </SettingsCard>
+      </div>
+    </div>
+  );
+}
+
+function SettingsCard({ title, children }: { title: string; children: ReactNode }) {
+  return <section className="space-y-4 border border-border bg-card p-5"><h2 className="font-semibold">{title}</h2>{children}</section>;
+}
+
+function adminInput() {
+  return "mt-2 w-full rounded-md border border-input bg-background px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-ring";
+}
+
+function MonitorSummary({ monitor }: { monitor: any }) {
+  return (
+    <div className="grid gap-2 border border-border bg-background p-3 text-sm sm:grid-cols-2">
+      <p><span className="text-muted-foreground">Monitor:</span> <span className={statusTone(monitor.status)}>{monitor.status ?? "UNKNOWN"}</span></p>
+      <p><span className="text-muted-foreground">Wallet:</span> {monitor.receivingAddressConfigured ? "Configured" : "Not configured"}</p>
+      <p><span className="text-muted-foreground">Last scan:</span> {monitor.lastScannedAt ? new Date(monitor.lastScannedAt).toLocaleString() : "Never"}</p>
+      <p><span className="text-muted-foreground">Last success:</span> {monitor.lastSuccessAt ? new Date(monitor.lastSuccessAt).toLocaleString() : "Never"}</p>
+      <p><span className="text-muted-foreground">Checkpoint:</span> {monitor.lastProcessedBlock ?? "No block yet"}</p>
+      <p><span className="text-muted-foreground">Pending invoices:</span> {monitor.pendingInvoices ?? 0}</p>
+    </div>
+  );
+}
+
+function AccountSecurityPanel() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [result, setResult] = useState("");
+  const [saving, setSaving] = useState("");
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => setEmail(data.user?.email ?? "")).catch(() => {});
+  }, []);
+  async function saveEmail(e: FormEvent) {
+    e.preventDefault();
+    setSaving("email");
+    setResult("");
+    const { error } = await supabase.auth.updateUser({ email });
+    setResult(error ? error.message : "Admin email update requested. Confirm the email change if Supabase requires verification.");
+    setSaving("");
+  }
+  async function savePassword(e: FormEvent) {
+    e.preventDefault();
+    setSaving("password");
+    setResult("");
+    if (password.length < 8) {
+      setResult("Password must be at least 8 characters.");
+      setSaving("");
+      return;
+    }
+    if (password !== confirmPassword) {
+      setResult("Passwords do not match.");
+      setSaving("");
+      return;
+    }
+    const { error } = await supabase.auth.updateUser({ password });
+    setResult(error ? error.message : "Admin password changed.");
+    setPassword("");
+    setConfirmPassword("");
+    setSaving("");
+  }
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      {result ? <p className="border-l-2 border-primary bg-card p-4 text-sm lg:col-span-2">{result}</p> : null}
+      <form className="space-y-4 border border-border bg-card p-5" onSubmit={saveEmail}>
+        <h2 className="font-semibold">Admin Email</h2>
+        <label className="block text-sm">Email<input className={adminInput()} value={email} onChange={(e) => setEmail(e.target.value)} /></label>
+        <Button type="submit" disabled={saving === "email"}>{saving === "email" ? "Saving..." : "Change Email"}</Button>
       </form>
+      <form className="space-y-4 border border-border bg-card p-5" onSubmit={savePassword}>
+        <h2 className="font-semibold">Admin Password</h2>
+        <label className="block text-sm">New Password<input className={adminInput()} type="password" value={password} onChange={(e) => setPassword(e.target.value)} /></label>
+        <label className="block text-sm">Confirm Password<input className={adminInput()} type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} /></label>
+        <Button type="submit" disabled={saving === "password"}>{saving === "password" ? "Saving..." : "Change Password"}</Button>
+      </form>
+      <section className="space-y-4 border border-border bg-card p-5 lg:col-span-2">
+        <h2 className="font-semibold">Sessions</h2>
+        <Button variant="secondary" onClick={async () => { await supabase.auth.signOut(); location.href = "/admin/login"; }}>Sign Out</Button>
+      </section>
     </div>
   );
 }

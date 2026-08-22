@@ -171,7 +171,8 @@ test("admin can grant manual and no-expiry plans including custom unlimited", ()
   assert(admin.includes('payment_status: "MANUAL"'));
   assert(admin.includes('input.duration === "NO_EXPIRY"'));
   assert(admin.includes('override_type: "UNLIMITED"'));
-  assert(admin.includes('action: input.unlimited ? "CUSTOM_UNLIMITED_GRANTED" : "PLAN_GRANTED"'));
+  assert(admin.includes('input.unlimited ? "CUSTOM_UNLIMITED_GRANTED"'));
+  assert(admin.includes('input.action === "EXTEND" ? "PLAN_EXTENDED"'));
 });
 
 test("paid plans activate only after payment confirmation", () => {
@@ -403,6 +404,38 @@ test("TRON monitor is server-only, checkpointed, idempotent and scans confirmed 
   assert(monitor.includes("classifyAndRecordPayment"));
   assert(workers.includes("processTronUsdtPayments"));
   assert(workers.includes("Payment worker failed"));
+});
+
+test("admin payment settings use canonical wallet address and real TRON validation", () => {
+  const billing = read("src/lib/billing.server.ts");
+  const admin = read("src/lib/admin-data.server.ts");
+  const ui = read("src/routes/admin.$section.tsx");
+  assert(billing.includes("base58Decode"));
+  assert(billing.includes("checksum(payload).equals"));
+  assert(billing.includes("payload[0] !== 0x41"));
+  assert(billing.includes("normalizePaymentSettings"));
+  assert(admin.includes("PAYMENT_SETTINGS_UPDATED"));
+  assert(admin.includes("Enter a valid TRON mainnet Base58 address."));
+  assert(admin.includes("return adminSettings();"));
+  assert(ui.includes("Save Payment Settings"));
+  assert(ui.includes("Full checksum is verified on save"));
+});
+
+test("admin console replaces browser prompts with modal workflows", () => {
+  const ui = read("src/routes/admin.$section.tsx");
+  assert(!ui.includes("prompt("));
+  assert(!ui.includes("confirm("));
+  for (const token of ["PlanManagementModal", "PremiumEmojiModal", "PasswordResetModal", "DeleteCustomerModal", "PaymentActionModal", "QuotaOverrideModal"]) {
+    assert(ui.includes(token));
+  }
+});
+
+test("admin plan and subscription extension use current active expiry", () => {
+  const admin = read("src/lib/admin-data.server.ts");
+  assert(admin.includes("expiryFromExtension"));
+  assert(admin.includes("Math.max(Date.now()"));
+  assert(admin.includes('input.action === "EXTEND"'));
+  assert(admin.includes("PLAN_EXTENDED"));
 });
 
 test("customer billing exposes upgrade-only plans, active invoice, Premium Emoji add-on and invoice polling", () => {

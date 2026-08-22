@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { db, getSetting, logAdmin, logSystem, notify } from "./db.server";
 
 export const OFFICIAL_PLAN_CODES = ["TEST", "PLUS", "PRO", "ENTERPRISE"] as const;
@@ -25,6 +26,7 @@ export type PaymentSettings = {
   network?: string;
   tron_network?: string;
   wallet_address?: string;
+  receiving_address?: string;
   invoice_expiry_minutes?: number;
   usdt_contract?: string;
   confirmations_required?: number;
@@ -34,8 +36,56 @@ function normalizeCode(value: string) {
   return value.trim().toUpperCase();
 }
 
+const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+function base58Decode(value: string) {
+  let num = 0n;
+  for (const char of value) {
+    const index = BASE58_ALPHABET.indexOf(char);
+    if (index < 0) return null;
+    num = num * 58n + BigInt(index);
+  }
+  const bytes: number[] = [];
+  while (num > 0n) {
+    bytes.unshift(Number(num & 0xffn));
+    num >>= 8n;
+  }
+  for (const char of value) {
+    if (char !== "1") break;
+    bytes.unshift(0);
+  }
+  return Buffer.from(bytes);
+}
+
+function checksum(payload: Buffer) {
+  return createHash("sha256").update(createHash("sha256").update(payload).digest()).digest().subarray(0, 4);
+}
+
+export function normalizeTronAddress(value?: string | null) {
+  return String(value ?? "").trim();
+}
+
 export function isValidTronAddress(value?: string | null) {
-  return Boolean(value && /^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(value.trim()));
+  const address = normalizeTronAddress(value);
+  if (!/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(address)) return false;
+  const decoded = base58Decode(address);
+  if (!decoded || decoded.length !== 25) return false;
+  const payload = decoded.subarray(0, 21);
+  if (payload[0] !== 0x41) return false;
+  return checksum(payload).equals(decoded.subarray(21));
+}
+
+export function normalizePaymentSettings(input: PaymentSettings): PaymentSettings {
+  const wallet = normalizeTronAddress(input.wallet_address ?? input.receiving_address);
+  return {
+    payment_enabled: input.payment_enabled === true,
+    network: "TRC20",
+    tron_network: "mainnet",
+    wallet_address: wallet,
+    invoice_expiry_minutes: Math.max(1, Math.floor(Number(input.invoice_expiry_minutes ?? INVOICE_MINUTES))),
+    usdt_contract: TRON_MAINNET_USDT_CONTRACT,
+    confirmations_required: Math.max(1, Math.floor(Number(input.confirmations_required ?? 1))),
+  };
 }
 
 export function usdtContract(settings: PaymentSettings) {
@@ -85,7 +135,7 @@ export async function expireInvoices() {
 }
 
 async function paymentSettings() {
-  const settings = await getSetting<PaymentSettings>("payments");
+  const settings = normalizePaymentSettings(await getSetting<PaymentSettings>("payments"));
   if (!settings.payment_enabled) throw new Error("Payment address is not configured.");
   if ((settings.network ?? "TRC20").toUpperCase() !== "TRC20" && (settings.network ?? "TRON").toUpperCase() !== "TRON") {
     throw new Error("Unsupported payment network.");

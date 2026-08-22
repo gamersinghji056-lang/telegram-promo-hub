@@ -14,8 +14,11 @@ import {
 } from "./entitlements.server";
 import {
   OFFICIAL_PLAN_CODES,
+  TRON_MAINNET_USDT_CONTRACT,
   activatePaidInvoice,
   grantPremiumEmoji,
+  isValidTronAddress,
+  normalizePaymentSettings,
   premiumEmojiEntitlement,
 } from "./billing.server";
 import { tronMonitorHealth } from "./tron-monitor.server";
@@ -72,6 +75,15 @@ function expiryFromGrant(input: { duration?: string; expiresAt?: string | null; 
   return new Date(Date.now() + days * 86400_000).toISOString();
 }
 
+function expiryFromExtension(currentExpiry: string | null | undefined, duration?: string, noExpiry?: boolean) {
+  if (noExpiry || duration === "NO_EXPIRY") return null;
+  const days = Number(duration ?? 30);
+  if (!Number.isFinite(days) || days < 1) throw new Error("Invalid extension duration.");
+  const current = currentExpiry ? new Date(currentExpiry).getTime() : 0;
+  const base = Math.max(Date.now(), Number.isFinite(current) ? current : 0);
+  return new Date(base + days * 86400_000).toISOString();
+}
+
 async function customerById(customerId: string) {
   const { data } = await db()
     .from("customers")
@@ -115,6 +127,12 @@ export async function adminDashboard() {
     expiredSubscriptions,
     activeSessions,
     unhealthySessions,
+    pendingInvoices,
+    confirmingPayments,
+    paidInvoices,
+    reviewInvoices,
+    expiredInvoices,
+    monitor,
   ] =
     await Promise.all([
       c("customers"),
@@ -137,6 +155,12 @@ export async function adminDashboard() {
         .select("id", { count: "exact", head: true })
         .or("status.eq.ERROR,health_score.lt.50")
         .then((r) => r.count ?? 0),
+      c("billing_invoices", { status: "PENDING" }),
+      c("billing_invoices", { status: "CONFIRMING" }),
+      c("billing_invoices", { status: "PAID" }),
+      c("billing_invoices", { status: "REVIEW_REQUIRED" }),
+      c("billing_invoices", { status: "EXPIRED" }),
+      tronMonitorHealth(),
     ]);
 
   const { data: paid } = await client
@@ -208,7 +232,13 @@ export async function adminDashboard() {
       activeSessions,
       unhealthySessions,
       messagesThisMonth,
+      pendingInvoices,
+      confirmingPayments,
+      paidInvoices,
+      reviewInvoices,
+      expiredInvoices,
     },
+    monitor,
     charts: {
       customers: series((tenants ?? []).map((t) => ({ at: t.created_at as string }))),
       campaigns: series((allCampaigns ?? []).map((t) => ({ at: t.created_at as string }))),
@@ -384,6 +414,7 @@ export async function adminGrantPlan(
     noExpiry?: boolean;
     reason?: string | null;
     unlimited?: boolean;
+    action?: "GRANT" | "CHANGE" | "EXTEND";
   },
 ) {
   const client = db();
@@ -396,11 +427,20 @@ export async function adminGrantPlan(
   if (!planId) throw new Error("Select a plan.");
   const { data: plan } = await client.from("plans").select("*").eq("id", planId).maybeSingle();
   if (!plan) throw new Error("Plan not found.");
-  const expires = expiryFromGrant({
-    duration: input.duration,
-    expiresAt: input.expiresAt,
-    noExpiry: input.noExpiry,
-  });
+  const { data: currentSub } = await client
+    .from("subscriptions")
+    .select("expires_at, no_expiry")
+    .eq("tenant_id", customer.tenant_id)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const expires = input.action === "EXTEND"
+    ? expiryFromExtension(currentSub?.expires_at as string | null | undefined, input.duration, input.noExpiry)
+    : expiryFromGrant({
+      duration: input.duration,
+      expiresAt: input.expiresAt,
+      noExpiry: input.noExpiry,
+    });
   await client
     .from("tenants")
     .update({ plan_id: planId, plan_expires_at: expires, updated_at: new Date().toISOString() })
@@ -453,7 +493,7 @@ export async function adminGrantPlan(
   });
   await logAdmin({
     admin_user_id: adminId,
-    action: input.unlimited ? "CUSTOM_UNLIMITED_GRANTED" : "PLAN_GRANTED",
+    action: input.unlimited ? "CUSTOM_UNLIMITED_GRANTED" : input.action === "EXTEND" ? "PLAN_EXTENDED" : input.action === "CHANGE" ? "PLAN_CHANGED" : "PLAN_GRANTED",
     resource: customer.email as string,
     details: { plan: plan.code, expires_at: expires, reason: input.reason ?? null },
   });
@@ -730,7 +770,7 @@ export async function adminSubscriptionAction(
   const patch: Record<string, unknown> = {};
   if (input.action === "EXTEND" || input.action === "GRANT_AGAIN") {
     patch.status = "ACTIVE";
-    patch.expires_at = new Date(Date.now() + days * 86400_000).toISOString();
+    patch.expires_at = expiryFromExtension(sub.expires_at as string | null | undefined, String(days), false);
     patch.cancelled_at = null;
   }
   if (input.action === "EXPIRE") {
@@ -781,20 +821,30 @@ export type PlatformSettings = {
     new_user_status?: "ACTIVE" | "PENDING_APPROVAL";
     welcome_message?: string;
   };
-  payments: { payment_enabled?: boolean; network?: string; wallet_address?: string };
+  payments: {
+    payment_enabled?: boolean;
+    network?: string;
+    tron_network?: string;
+    wallet_address?: string;
+    invoice_expiry_minutes?: number;
+    usdt_contract?: string;
+    confirmations_required?: number;
+  };
   telegram: Awaited<ReturnType<typeof telegramSettings>>;
   discovery: { provider_url?: string; provider_key?: string };
+  monitor?: Awaited<ReturnType<typeof tronMonitorHealth>>;
 };
 
 export async function adminSettings(): Promise<PlatformSettings> {
-  const [general, registration, payments, telegram, discovery] = await Promise.all([
+  const [general, registration, payments, telegram, discovery, monitor] = await Promise.all([
     getSetting<PlatformSettings["general"]>("general"),
     getSetting<PlatformSettings["registration"]>("registration"),
-    getSetting<PlatformSettings["payments"]>("payments"),
+    getSetting<PlatformSettings["payments"]>("payments").then((settings) => normalizePaymentSettings(settings)),
     telegramSettings(),
     getSetting<PlatformSettings["discovery"]>("discovery"),
+    tronMonitorHealth(),
   ]);
-  return { general, registration, payments, telegram, discovery };
+  return { general, registration, payments, telegram, discovery, monitor };
 }
 
 export async function adminRegistration() {
@@ -880,6 +930,28 @@ export async function adminSaveSettings(
 ) {
   if (key === "telegram" && typeof value["mini_app_url"] === "string") {
     value["mini_app_url"] = normalizeMiniAppUrl(value["mini_app_url"]);
+  }
+  if (key === "payments") {
+    const current = normalizePaymentSettings(await getSetting("payments"));
+    const next = normalizePaymentSettings({ ...current, ...value });
+    if (next.payment_enabled && !isValidTronAddress(next.wallet_address)) {
+      throw new Error("Enter a valid TRON mainnet Base58 address.");
+    }
+    await setSetting("payments", next as Record<string, unknown>);
+    const saved = normalizePaymentSettings(await getSetting("payments"));
+    await logAdmin({
+      admin_user_id: adminId,
+      action: "PAYMENT_SETTINGS_UPDATED",
+      resource: "payments",
+      details: {
+        payment_enabled: saved.payment_enabled,
+        wallet_address_changed: current.wallet_address !== saved.wallet_address,
+        network: saved.tron_network,
+        invoice_expiry_minutes: saved.invoice_expiry_minutes,
+        usdt_contract: TRON_MAINNET_USDT_CONTRACT,
+      },
+    });
+    return adminSettings();
   }
   const current = await getSetting(key);
   await setSetting(key, { ...current, ...value });

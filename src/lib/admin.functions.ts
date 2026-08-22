@@ -79,6 +79,7 @@ export const grantCustomerPlan = createServerFn({ method: "POST" })
     noExpiry?: boolean;
     reason?: string | null;
     unlimited?: boolean;
+    action?: "GRANT" | "CHANGE" | "EXTEND";
   }) => i)
   .handler(async ({ context, data }) => {
     await admin.assertSuperAdmin(context.userId);
