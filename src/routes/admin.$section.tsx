@@ -69,7 +69,7 @@ function statusTone(status?: string) {
 }
 
 export const Route = createFileRoute("/admin/$section")({
-  beforeLoad: async ({ params }) => {
+  beforeLoad: async ({ params }: { params: { section: string } }) => {
     if (!valid.has(params.section))
       throw redirect({ to: "/admin/$section", params: { section: "dashboard" } });
     const { data } = await supabase.auth.getSession();
@@ -80,7 +80,7 @@ export const Route = createFileRoute("/admin/$section")({
       throw redirect({ to: "/admin/login" });
     }
   },
-  head: ({ params }) => ({
+  head: ({ params }: { params: { section: string } }) => ({
     meta: [
       { title: `${params.section[0]?.toUpperCase()}${params.section.slice(1)} | Admin Console` },
       { name: "description", content: `Platform owner ${params.section} administration.` },

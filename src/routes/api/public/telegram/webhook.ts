@@ -574,7 +574,7 @@ async function processUpdate(update: Update) {
 export const Route = createFileRoute("/api/public/telegram/webhook")({
   server: {
     handlers: {
-      POST: async ({ request }) => {
+      POST: async ({ request }: { request: Request }) => {
         const token = botToken();
         if (!token) return new Response("Bot not configured", { status: 503 });
 

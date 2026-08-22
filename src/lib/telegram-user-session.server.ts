@@ -11,6 +11,7 @@ import { recordSessionHealthEvidence } from "./telegram-session-health.server";
 import type { MessagePayload } from "./telegram.server";
 
 const CONNECTION_RETRIES = 3;
+const sessionLocks = new Map<string, Promise<void>>();
 type ConnectionRow = {
   id: string;
   tenant_id: string;
@@ -106,7 +107,16 @@ export type CustomEmojiItem = {
   preview_unavailable?: boolean;
   set_title?: string | null;
   set_short_name?: string | null;
+  set_id?: string | null;
   source: "recent" | "installed" | "featured" | "search" | "category";
+};
+
+export type CustomEmojiPack = {
+  id: string;
+  title: string;
+  short_name?: string | null;
+  source: CustomEmojiItem["source"];
+  items: CustomEmojiItem[];
 };
 
 export type CustomEmojiCatalog = {
@@ -116,8 +126,30 @@ export type CustomEmojiCatalog = {
   installed: CustomEmojiItem[];
   featured: CustomEmojiItem[];
   search: CustomEmojiItem[];
+  installedPacks: CustomEmojiPack[];
+  featuredPacks: CustomEmojiPack[];
+  searchPacks: CustomEmojiPack[];
   categories: { title: string; icon_document_id?: string | null; emoticons: string[] }[];
 };
+
+async function withSessionLock<T>(tenantId: string, connectionId: string, fn: () => Promise<T>) {
+  const key = `${tenantId}:${connectionId}`;
+  const previous = sessionLocks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const current = previous.catch(() => undefined).then(() => new Promise<void>((resolve) => {
+    release = resolve;
+  }));
+  sessionLocks.set(key, current);
+  await previous.catch(() => undefined);
+  console.info("SESSION_LOCK_ACQUIRED", { tenantId, connectionId });
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (sessionLocks.get(key) === current) sessionLocks.delete(key);
+    console.info("SESSION_LOCK_RELEASED", { tenantId, connectionId });
+  }
+}
 
 function utf16Length(value: string) {
   return [...value].reduce((sum, char) => sum + (char.codePointAt(0)! > 0xffff ? 2 : 1), 0);
@@ -211,6 +243,7 @@ function emojiItem(doc: Api.TypeDocument, source: CustomEmojiItem["source"], set
     preview_unavailable: false,
     set_title: meta.title,
     set_short_name: meta.shortName,
+    set_id: meta.id,
     source,
   };
 }
@@ -224,7 +257,7 @@ function uniqueEmoji(items: CustomEmojiItem[]) {
   });
 }
 
-async function stickerSetDocuments(client: TelegramClient, set: unknown, source: CustomEmojiItem["source"], limit = 24) {
+async function stickerSetDocuments(client: TelegramClient, set: unknown, source: CustomEmojiItem["source"], limit = 48) {
   const meta = stickerSetMeta(set);
   if (!meta.id || !meta.accessHash) return [];
   const full = await client.invoke(new Api.messages.GetStickerSet({
@@ -235,16 +268,30 @@ async function stickerSetDocuments(client: TelegramClient, set: unknown, source:
   return uniqueEmoji(full.documents.slice(0, limit).map((doc) => emojiItem(doc, source, full.set)).filter(Boolean) as CustomEmojiItem[]);
 }
 
-async function emojiFromSets(client: TelegramClient, sets: unknown[], source: CustomEmojiItem["source"], setLimit = 6, itemLimit = 36) {
-  const batches: CustomEmojiItem[][] = [];
+async function emojiPacksFromSets(client: TelegramClient, sets: unknown[], source: CustomEmojiItem["source"], setLimit = 24, perSetLimit = 48) {
+  const packs: CustomEmojiPack[] = [];
   for (const set of sets.slice(0, setLimit)) {
     try {
-      batches.push(await stickerSetDocuments(client, set, source, Math.ceil(itemLimit / Math.max(1, setLimit))));
+      const meta = stickerSetMeta(set);
+      const items = await stickerSetDocuments(client, set, source, perSetLimit);
+      if (items.length) {
+        packs.push({
+          id: meta.id ?? `${source}-${packs.length}`,
+          title: meta.title ?? "Emoji pack",
+          short_name: meta.shortName,
+          source,
+          items,
+        });
+      }
     } catch (error) {
       console.warn("CUSTOM_EMOJI_SET_LOAD_FAILED", { source, error: errorMessage(error) });
     }
   }
-  return uniqueEmoji(batches.flat()).slice(0, itemLimit);
+  return packs;
+}
+
+function flattenPacks(packs: CustomEmojiPack[], itemLimit = 360) {
+  return uniqueEmoji(packs.flatMap((pack) => pack.items)).slice(0, itemLimit);
 }
 
 async function validateCustomEmojiEntities(client: TelegramClient, message: MessagePayload) {
@@ -286,6 +333,9 @@ export async function listCustomEmojiCatalogViaUserSession(
       installed: [],
       featured: [],
       search: [],
+      installedPacks: [],
+      featuredPacks: [],
+      searchPacks: [],
       categories: [],
     };
     try {
@@ -299,7 +349,8 @@ export async function listCustomEmojiCatalogViaUserSession(
     try {
       const installed = await client.invoke(new Api.messages.GetEmojiStickers({ hash: bigInt(0) }));
       if (installed instanceof Api.messages.AllStickers) {
-        catalog.installed = await emojiFromSets(client, installed.sets, "installed", 8, 48);
+        catalog.installedPacks = await emojiPacksFromSets(client, installed.sets, "installed", 24, 48);
+        catalog.installed = flattenPacks(catalog.installedPacks);
       }
     } catch (error) {
       console.warn("CUSTOM_EMOJI_INSTALLED_FAILED", { error: errorMessage(error) });
@@ -308,7 +359,8 @@ export async function listCustomEmojiCatalogViaUserSession(
       const featured = await client.invoke(new Api.messages.GetFeaturedEmojiStickers({ hash: bigInt(0) }));
       if (featured instanceof Api.messages.FeaturedStickers) {
         const sets = featured.sets.map((entry) => (entry as { set?: unknown }).set).filter(Boolean);
-        catalog.featured = await emojiFromSets(client, sets, "featured", 8, 48);
+        catalog.featuredPacks = await emojiPacksFromSets(client, sets, "featured", 24, 48);
+        catalog.featured = flattenPacks(catalog.featuredPacks);
       }
     } catch (error) {
       console.warn("CUSTOM_EMOJI_FEATURED_FAILED", { error: errorMessage(error) });
@@ -322,7 +374,8 @@ export async function listCustomEmojiCatalogViaUserSession(
         }));
         if (found instanceof Api.messages.FoundStickerSets) {
           const sets = found.sets.map((entry) => (entry as { set?: unknown }).set).filter(Boolean);
-          catalog.search = await emojiFromSets(client, sets, "search", 8, 48);
+          catalog.searchPacks = await emojiPacksFromSets(client, sets, "search", 24, 48);
+          catalog.search = flattenPacks(catalog.searchPacks);
         }
       } catch (error) {
         console.warn("CUSTOM_EMOJI_SEARCH_FAILED", { error: errorMessage(error) });
@@ -662,6 +715,16 @@ export async function startUserSessionLogin(
   ctx: AuthContext,
   input: { label: string; phone: string; connectionId?: string | null },
 ) {
+  if (input.connectionId) {
+    return withSessionLock(ctx.tenantId, input.connectionId, () => startUserSessionLoginUnlocked(ctx, input));
+  }
+  return startUserSessionLoginUnlocked(ctx, input);
+}
+
+async function startUserSessionLoginUnlocked(
+  ctx: AuthContext,
+  input: { label: string; phone: string; connectionId?: string | null },
+) {
   const phone = normalizePhone(input.phone);
   const masked = maskPhone(phone);
   const clientDb = db();
@@ -783,6 +846,7 @@ export async function completeUserSessionCode(
   ctx: AuthContext,
   input: { connectionId: string; code: string },
 ) {
+  return withSessionLock(ctx.tenantId, input.connectionId, async () => {
   if (!/^\d{4,8}$/.test(input.code.trim())) throw new Error("Enter the Telegram login code.");
   const connection = await ownedConnection(ctx, input.connectionId);
   if (!connection.pending_session || !connection.pending_phone || !connection.phone_code_hash) {
@@ -832,12 +896,14 @@ export async function completeUserSessionCode(
   } finally {
     await disconnectClient(client, { tenantId: ctx.tenantId, connectionId: input.connectionId });
   }
+  });
 }
 
 export async function completeUserSessionPassword(
   ctx: AuthContext,
   input: { connectionId: string; password: string },
 ) {
+  return withSessionLock(ctx.tenantId, input.connectionId, async () => {
   if (!input.password) throw new Error("Enter the Telegram 2FA password.");
   const connection = await ownedConnection(ctx, input.connectionId);
   const pending = decryptSecret(connection.pending_session);
@@ -858,9 +924,11 @@ export async function completeUserSessionPassword(
   } finally {
     await disconnectClient(client, { tenantId: ctx.tenantId, connectionId: input.connectionId });
   }
+  });
 }
 
 export async function checkUserSession(ctx: AuthContext, connectionId: string) {
+  return withSessionLock(ctx.tenantId, connectionId, async () => {
   const connection = await ownedConnection(ctx, connectionId);
   const encrypted = decryptSecret(connection.encrypted_session);
   if (!encrypted) throw new Error("This Telegram session is not authorized.");
@@ -897,6 +965,7 @@ export async function checkUserSession(ctx: AuthContext, connectionId: string) {
   } finally {
     await disconnectClient(client, { tenantId: ctx.tenantId, connectionId });
   }
+  });
 }
 
 export async function disconnectUserSession(ctx: AuthContext, connectionId: string) {
@@ -924,6 +993,7 @@ export async function withAuthorizedUserClient<T>(
   connectionId: string,
   fn: (client: TelegramClient, connection: ConnectionRow) => Promise<T>,
 ) {
+  return withSessionLock(tenantId, connectionId, async () => {
   const { data: connection } = await db()
     .from("telegram_connections")
     .select("*")
@@ -985,6 +1055,7 @@ export async function withAuthorizedUserClient<T>(
   } finally {
     await disconnectClient(client, { tenantId, connectionId });
   }
+  });
 }
 
 export async function resolvePublicGroupViaUserSession(

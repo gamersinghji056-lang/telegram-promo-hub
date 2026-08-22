@@ -361,3 +361,40 @@ test("premium emoji preview session is separate from campaign sending session va
   assert(route.includes("SET AS PREMIUM EMOJI SESSION"));
   assert(route.includes("AUTO PREMIUM EMOJI SESSION"));
 });
+
+test("sessions page uses compact real premium badge and no large premium text", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  assert(route.includes('row.telegram_premium === true'));
+  assert(route.includes('aria-label="Telegram Premium"'));
+  assert(route.includes("<Sparkles"));
+  assert(!route.includes("Telegram Premium: {premiumLabel}"));
+});
+
+test("custom emoji picker groups packs and lazily hydrates more real previews", () => {
+  const telegram = read("src/lib/telegram-user-session.server.ts");
+  const route = read("src/routes/mini-app.$section.tsx");
+  assert(telegram.includes("CustomEmojiPack"));
+  assert(telegram.includes("installedPacks"));
+  assert(telegram.includes("featuredPacks"));
+  assert(telegram.includes("searchPacks"));
+  assert(telegram.includes("emojiPacksFromSets"));
+  assert(telegram.includes("set_id"));
+  assert(route.includes("emojiVisibleCount"));
+  assert(route.includes("loadMoreEmoji"));
+  assert(route.includes("onGridScroll"));
+  assert(route.includes("pack.items.map(renderEmojiButton)"));
+  assert(route.includes("document_id: String(item.document_id)"));
+  assert(!route.includes('>{item.free ? "Free" : "Premium"}</span>'));
+});
+
+test("telegram session operations are serialized and invalid auth stays out of candidates", () => {
+  const telegram = read("src/lib/telegram-user-session.server.ts");
+  const health = read("src/lib/telegram-session-health.server.ts");
+  assert(telegram.includes("const sessionLocks = new Map"));
+  assert(telegram.includes("withSessionLock"));
+  assert(telegram.includes("SESSION_LOCK_ACQUIRED"));
+  assert(telegram.includes("SESSION_LOCK_RELEASED"));
+  assert(telegram.includes("markInvalidAuth"));
+  assert(telegram.includes("session_error_code: \"AUTH_KEY_UNREGISTERED\""));
+  assert(health.includes("errorCode !== \"AUTH_KEY_UNREGISTERED\""));
+});

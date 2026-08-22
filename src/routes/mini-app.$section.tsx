@@ -152,7 +152,7 @@ const titles: Record<string, string> = {
 const AUTH_REQUIRED_MESSAGE = "Please login or register in @wpaypromotionbot first.";
 
 export const Route = createFileRoute("/mini-app/$section")({
-  head: ({ params }) => ({
+  head: ({ params }: { params: { section: string } }) => ({
     meta: [
       { title: `${titles[params.section] ?? "Mini App"} | WPAY Mini App` },
       { name: "description", content: "Telegram-native campaign and audience control panel." },
@@ -1194,8 +1194,6 @@ function Sessions({ auth, data, actions, reload, setNotice, actionBusy, runActio
                 : null);
           const score = Number(row.health_score ?? 75);
           const isPremium = row.telegram_premium === true;
-          const premiumKnown = row.telegram_premium === true || row.telegram_premium === false;
-          const premiumLabel = isPremium ? "Premium ✓" : premiumKnown ? "Standard" : "Unknown";
           const reconnectRequired = row.health === "RECONNECT_REQUIRED" || row.session_error_code === "AUTH_KEY_UNREGISTERED";
           const canPreferForEmoji = row.status === "CONNECTED" && row.has_session && !reconnectRequired && isPremium;
           const preferred = premiumEmojiSessionMode === "MANUAL" && preferredPremiumEmojiConnectionId === row.id;
@@ -1203,7 +1201,14 @@ function Sessions({ auth, data, actions, reload, setNotice, actionBusy, runActio
           <article key={row.id} className={panelClass()}>
             <div className="flex items-start justify-between gap-3">
               <div>
-                <p className="font-medium">{row.account_name ?? row.label}</p>
+                <p className="flex items-center gap-1.5 font-medium">
+                  <span>{row.account_name ?? row.label}</span>
+                  {isPremium ? (
+                    <span title="Telegram Premium" aria-label="Telegram Premium" className="inline-flex size-5 items-center justify-center rounded-full bg-primary/15 text-primary">
+                      <Sparkles className="size-3.5" />
+                    </span>
+                  ) : null}
+                </p>
                 <p className="mt-1 text-xs text-muted-foreground">
                   {row.username ? `@${row.username}` : "Username pending"} | ID{" "}
                   {row.telegram_user_id ?? row.telegram_id ?? "pending"}
@@ -1217,9 +1222,6 @@ function Sessions({ auth, data, actions, reload, setNotice, actionBusy, runActio
               </span>
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-              <span className={`border px-2 py-1 font-semibold ${isPremium ? "border-success text-success" : "border-border text-muted-foreground"}`}>
-                Telegram Premium: {premiumLabel}
-              </span>
               {preferred ? <span className="border border-primary px-2 py-1 font-semibold text-primary">Premium Emoji preferred</span> : null}
               {row.telegram_premium_checked_at ? (
                 <span className="text-muted-foreground">Checked {new Date(row.telegram_premium_checked_at).toLocaleString()}</span>
@@ -3414,12 +3416,14 @@ function AudienceSummary({ result, selectable, selected, setSelected, auth, acti
 }
 
 function MessageForm(props: any) {
+  const emojiPageSize = 48;
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerTab, setPickerTab] = useState<"recent" | "installed" | "featured" | "search" | "categories">("recent");
   const [emojiSearch, setEmojiSearch] = useState("");
   const [emojiCatalog, setEmojiCatalog] = useState<any>(null);
   const [emojiLoading, setEmojiLoading] = useState(false);
   const [emojiError, setEmojiError] = useState("");
+  const [emojiVisibleCount, setEmojiVisibleCount] = useState(emojiPageSize);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   function utf16Length(value: string) {
     return [...value].reduce((sum, char) => sum + (char.codePointAt(0)! > 0xffff ? 2 : 1), 0);
@@ -3427,11 +3431,12 @@ function MessageForm(props: any) {
   async function loadEmojiCatalog(nextTab = pickerTab) {
     setEmojiLoading(true);
     setEmojiError("");
+    setEmojiVisibleCount(emojiPageSize);
     try {
       const result = await props.actions.getCustomEmojiCatalog({
         data: { auth: props.auth, connectionId: props.connectionId || null, query: nextTab === "search" ? emojiSearch : "" },
       });
-      const hydrated = await hydrateEmojiPreviews(result, nextTab);
+      const hydrated = await hydrateEmojiPreviews(result, nextTab, emojiPageSize);
       setEmojiCatalog(hydrated);
     } catch (error) {
       setEmojiError(error instanceof Error ? error.message : "Custom emoji could not be loaded.");
@@ -3439,9 +3444,26 @@ function MessageForm(props: any) {
       setEmojiLoading(false);
     }
   }
-  async function hydrateEmojiPreviews(result: any, nextTab: string) {
+  function mergePreview(catalog: any, nextTab: string, itemId: string, preview: any) {
+    const patchItem = (item: any) => {
+      if (String(item.document_id) !== itemId) return item;
+      return preview
+        ? { ...item, preview_url: preview.data_url, mime_type: preview.mime_type, preview_format: preview.format, fallback: preview.fallback ?? item.fallback }
+        : { ...item, preview_unavailable: true };
+    };
+    const packKey = `${nextTab}Packs`;
+    return {
+      ...catalog,
+      [nextTab]: (catalog?.[nextTab] ?? []).map(patchItem),
+      [packKey]: (catalog?.[packKey] ?? []).map((pack: any) => ({
+        ...pack,
+        items: (pack.items ?? []).map(patchItem),
+      })),
+    };
+  }
+  async function hydrateEmojiPreviews(result: any, nextTab: string, limit = emojiPageSize) {
     if (!result || nextTab === "categories") return result;
-    const items = (result[nextTab] ?? []).slice(0, 24);
+    const items = (result[nextTab] ?? []).slice(0, limit).filter((item: any) => !item.preview_url && !item.preview_unavailable);
     const previews = await Promise.all(items.map(async (item: any) => {
       try {
         const preview = await props.actions.getCustomEmojiPreview({
@@ -3459,16 +3481,23 @@ function MessageForm(props: any) {
         return null;
       }
     }));
-    const byId = new Map(previews.filter(Boolean).map((preview: any) => [String(preview.document_id), preview]));
-    return {
-      ...result,
-      [nextTab]: (result[nextTab] ?? []).map((item: any) => {
-        const preview = byId.get(String(item.document_id)) as any;
-        return preview
-          ? { ...item, preview_url: preview.data_url, mime_type: preview.mime_type, preview_format: preview.format, fallback: preview.fallback ?? item.fallback }
-          : { ...item, preview_unavailable: true };
-      }),
-    };
+    return items.reduce((catalog: any, item: any, index: number) => {
+      const preview = previews[index];
+      return mergePreview(catalog, nextTab, String(item.document_id), preview);
+    }, result);
+  }
+  async function loadMoreEmoji() {
+    if (emojiLoading || pickerTab === "categories" || !emojiCatalog) return;
+    const total = (emojiCatalog[pickerTab] ?? []).length;
+    if (emojiVisibleCount >= total) return;
+    const nextCount = Math.min(total, emojiVisibleCount + emojiPageSize);
+    setEmojiVisibleCount(nextCount);
+    setEmojiLoading(true);
+    try {
+      setEmojiCatalog(await hydrateEmojiPreviews(emojiCatalog, pickerTab, nextCount));
+    } finally {
+      setEmojiLoading(false);
+    }
   }
   function insertCustomEmoji(item: any) {
     const fallback = item.fallback || "⭐";
@@ -3573,8 +3602,10 @@ function MessageForm(props: any) {
           query={emojiSearch}
           setQuery={setEmojiSearch}
           tab={pickerTab}
+          visibleCount={emojiVisibleCount}
           setTab={setPickerTab}
           load={loadEmojiCatalog}
+          loadMore={loadMoreEmoji}
           insert={insertCustomEmoji}
           close={() => setPickerOpen(false)}
         />
@@ -3619,16 +3650,69 @@ function CustomEmojiPicker({
   query,
   setQuery,
   tab,
+  visibleCount,
   setTab,
   load,
+  loadMore,
   insert,
   close,
 }: any) {
-  const items = tab === "categories" ? [] : (catalog?.[tab] ?? []);
+  const allItems = tab === "categories" ? [] : (catalog?.[tab] ?? []);
+  const items = allItems.slice(0, visibleCount ?? 48);
+  const packKey = `${tab}Packs`;
+  const packs = (catalog?.[packKey] ?? [])
+    .map((pack: any) => ({
+      ...pack,
+      items: (pack.items ?? []).filter((item: any) =>
+        items.some((visible: any) => String(visible.document_id) === String(item.document_id)),
+      ),
+    }))
+    .filter((pack: any) => pack.items.length);
   const tabs = ["recent", "installed", "featured", "search", "categories"];
+  const onGridScroll = (event: any) => {
+    const node = event.currentTarget;
+    if (node.scrollTop + node.clientHeight >= node.scrollHeight - 80) void loadMore();
+  };
+  const renderEmojiButton = (item: any) => (
+    <button
+      key={`${item.source}-${item.document_id}`}
+      type="button"
+      className="flex aspect-square min-h-0 items-center justify-center border border-transparent bg-transparent p-1 hover:border-primary hover:bg-primary/10"
+      onClick={() => insert(item)}
+      title={item.set_title || item.fallback || "Custom emoji"}
+      aria-label={item.set_title || item.fallback || "Custom emoji"}
+    >
+      {item.preview_url ? (
+        item.preview_format === "tgs" ? (
+          <TgsPlayer className="size-9" src={item.preview_url} fallback={item.fallback || "*"} />
+        ) : item.preview_format === "webm" || item.mime_type === "video/webm" ? (
+          <video
+            className="size-9 object-contain"
+            src={item.preview_url}
+            muted
+            playsInline
+            autoPlay
+            loop
+            onLoadedData={() => console.info("CUSTOM_EMOJI_RENDER_FORMAT", { format: "webm", document_id: String(item.document_id) })}
+            onError={() => console.warn("CUSTOM_EMOJI_PREVIEW_ERROR", { stage: "webm_render", document_id: String(item.document_id) })}
+          />
+        ) : (
+          <img
+            className="size-9 object-contain"
+            src={item.preview_url}
+            alt={item.fallback || "custom emoji"}
+            onLoad={() => console.info("CUSTOM_EMOJI_RENDER_FORMAT", { format: "image", document_id: String(item.document_id) })}
+            onError={() => console.warn("CUSTOM_EMOJI_PREVIEW_ERROR", { stage: "image_render", document_id: String(item.document_id) })}
+          />
+        )
+      ) : (
+        <span className="text-2xl leading-none">{item.fallback || "*"}</span>
+      )}
+    </button>
+  );
   return (
     <div className="fixed inset-0 z-50 flex items-end bg-black/45 p-3 sm:items-center sm:justify-center">
-      <div className="w-full max-w-lg border border-border bg-card p-4 shadow-xl">
+      <div className="w-full max-w-lg border border-border bg-card p-3 shadow-xl">
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="font-semibold">Custom Emoji</p>
@@ -3665,7 +3749,7 @@ function CustomEmojiPicker({
         {error ? <p className="mt-3 text-sm text-destructive">{error}</p> : null}
         {loading ? <p className="mt-3 text-sm text-muted-foreground">Loading custom emoji...</p> : null}
         {tab === "categories" ? (
-          <div className="mt-3 max-h-72 space-y-2 overflow-y-auto">
+          <div className="mt-3 max-h-80 space-y-2 overflow-y-auto">
             {(catalog?.categories ?? []).map((group: any) => (
               <div key={`${group.title}-${group.icon_document_id}`} className="border border-border bg-background p-3">
                 <p className="text-sm font-semibold">{group.title}</p>
@@ -3675,13 +3759,29 @@ function CustomEmojiPicker({
             {!loading && !(catalog?.categories ?? []).length ? <Empty message="No custom emoji categories returned by Telegram." /> : null}
           </div>
         ) : (
-          <div className="mt-3 grid max-h-72 grid-cols-4 gap-2 overflow-y-auto sm:grid-cols-6">
+          <div className="mt-3 max-h-80 overflow-y-auto pr-1" onScroll={onGridScroll}>
+            {packs.length ? (
+              <div className="space-y-3">
+                {packs.map((pack: any) => (
+                  <section key={`${pack.source}-${pack.id}`}>
+                    <div className="mb-1 flex items-center justify-between gap-2 text-xs">
+                      <p className="truncate font-semibold">{pack.title}</p>
+                      {pack.short_name ? <p className="truncate text-muted-foreground">@{pack.short_name}</p> : null}
+                    </div>
+                    <div className="grid grid-cols-8 gap-1 sm:grid-cols-10">
+                      {pack.items.map(renderEmojiButton)}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            ) : (
+              <div className="grid grid-cols-8 gap-1 sm:grid-cols-10">
             {items.map((item: any) => {
               return (
                 <button
                   key={`${item.source}-${item.document_id}`}
                   type="button"
-                  className="min-h-20 border border-border bg-background p-2 text-center hover:border-primary"
+                  className="flex aspect-square min-h-0 items-center justify-center border border-transparent bg-transparent p-1 text-center hover:border-primary hover:bg-primary/10"
                   onClick={() => insert(item)}
                 >
                   {item.preview_url ? (
@@ -3689,7 +3789,7 @@ function CustomEmojiPicker({
                       <TgsPlayer className="mx-auto size-9" src={item.preview_url} fallback={item.fallback || "⭐"} />
                     ) : item.preview_format === "webm" || item.mime_type === "video/webm" ? (
                       <video
-                        className="mx-auto size-9 object-contain"
+                        className="size-9 object-contain"
                         src={item.preview_url}
                         muted
                         playsInline
@@ -3700,7 +3800,7 @@ function CustomEmojiPicker({
                       />
                     ) : (
                       <img
-                        className="mx-auto size-9 object-contain"
+                        className="size-9 object-contain"
                         src={item.preview_url}
                         alt={item.fallback || "custom emoji"}
                         onLoad={() => console.info("CUSTOM_EMOJI_RENDER_FORMAT", { format: "image", document_id: String(item.document_id) })}
@@ -3710,12 +3810,13 @@ function CustomEmojiPicker({
                   ) : (
                     <span className="block text-2xl">{item.fallback || "⭐"}</span>
                   )}
-                  <span className="mt-1 block truncate text-[10px] text-muted-foreground">{item.set_title || item.source}</span>
-                  <span className={item.premium_required ? "block text-[10px] text-warning" : "block text-[10px] text-success"}>{item.free ? "Free" : "Premium"}</span>
                 </button>
               );
             })}
+              </div>
+            )}
             {!loading && !items.length ? <div className="col-span-full"><Empty message="No custom emoji returned for this tab." /></div> : null}
+            {items.length < allItems.length ? <p className="py-2 text-center text-xs text-muted-foreground">Scroll to load more</p> : null}
           </div>
         )}
       </div>
