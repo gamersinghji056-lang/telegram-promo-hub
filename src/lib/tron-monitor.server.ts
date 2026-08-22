@@ -56,6 +56,8 @@ function decimalAmount(raw: string, decimals = 6) {
 export async function tronMonitorHealth() {
   const settings = await getSetting<PaymentSettings>("payments");
   const cp = monitorEnabled(settings) ? await checkpoint(settings) : null;
+  const lastSuccessMs = cp?.last_success_at ? new Date(String(cp.last_success_at)).getTime() : 0;
+  const delayed = Boolean(lastSuccessMs && Date.now() - lastSuccessMs > 15 * 60_000);
   const { count: pending } = await db()
     .from("billing_invoices")
     .select("id", { count: "exact", head: true })
@@ -67,7 +69,7 @@ export async function tronMonitorHealth() {
     tokenContract: usdtContract(settings),
     receivingAddressConfigured: isValidTronAddress(settings.wallet_address),
     apiKeyConfigured: Boolean(process.env["TRONGRID_API_KEY"]),
-    status: !monitorEnabled(settings) ? "ERROR" : cp?.status ?? "UNKNOWN",
+    status: !monitorEnabled(settings) ? "ERROR" : cp?.status === "ERROR" ? "ERROR" : delayed ? "DELAYED" : cp?.status ?? "UNKNOWN",
     lastSuccessAt: cp?.last_success_at ?? null,
     lastScannedAt: cp?.last_scanned_at ?? null,
     lastProcessedBlock: cp?.last_processed_block ?? null,
@@ -96,7 +98,7 @@ export async function processTronUsdtPayments() {
     const payload = (await response.json()) as { data?: TronGridTransfer[] };
     let processed = 0;
     let latestBlock: number | null = cp.last_processed_block ? Number(cp.last_processed_block) : null;
-    let latestTs = since;
+    let latestTs = Date.now();
     for (const event of payload.data ?? []) {
       if (!event.transaction_id || !event.to || event.type !== "Transfer") continue;
       if ((event.token_info?.address ?? contract) !== contract) continue;

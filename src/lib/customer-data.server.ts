@@ -11,6 +11,7 @@ import {
   discoverAudienceViaUserSession,
   importGroupsFromFolderViaUserSession,
   joinGroupViaUserSession,
+  listCustomEmojiCatalogViaUserSession,
   resolvePublicGroupViaUserSession,
   searchPublicGroupsViaUserSession,
   startUserSessionReconnect,
@@ -3543,6 +3544,15 @@ export async function requestPremiumEmojiPayment(ctx: AuthContext, input: { repl
 
 export async function getInvoiceStatus(ctx: AuthContext, invoiceId: string) {
   return invoiceByIdForTenant(ctx.tenantId, invoiceId);
+}
+
+export async function customEmojiCatalog(ctx: AuthContext, input: { connectionId: string; query?: string | null }) {
+  await requireConnection(ctx, input.connectionId);
+  const entitlement = await premiumEmojiEntitlement(ctx.tenantId);
+  if (!entitlement.active) throw new Error("Premium Emoji add-on is required.");
+  return listCustomEmojiCatalogViaUserSession(ctx.tenantId, input.connectionId, {
+    query: input.query ?? null,
+  });
 }
 
 export async function listNotifications(ctx: AuthContext) {

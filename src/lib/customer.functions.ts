@@ -538,6 +538,15 @@ export const getInvoiceStatus = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { invoiceId: string }) => i)
   .handler(async ({ data: i }) => data.getInvoiceStatus(await resolveAuth(i.auth), i.invoiceId));
 
+export const getCustomEmojiCatalog = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { connectionId: string; query?: string | null }) => i)
+  .handler(async ({ data: i }) =>
+    data.customEmojiCatalog(await resolveAuth(i.auth), {
+      connectionId: i.connectionId,
+      query: i.query ?? null,
+    }),
+  );
+
 export const getNotifications = createServerFn({ method: "POST" })
   .inputValidator((i: Auth) => i)
   .handler(async ({ data: i }) => data.listNotifications(await resolveAuth(i.auth)));

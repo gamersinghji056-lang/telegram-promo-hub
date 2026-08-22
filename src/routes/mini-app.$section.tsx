@@ -64,6 +64,7 @@ import {
   getGroups,
   getKeywords,
   getCustomerPreferences,
+  getCustomEmojiCatalog,
   getNotifications,
   getOwnActivity,
   rejectGroup,
@@ -278,6 +279,7 @@ function MiniAppSection() {
     updateAccountName: useServerFn(updateAccountName),
     changeAccountPassword: useServerFn(changeAccountPassword),
     getCustomerPreferences: useServerFn(getCustomerPreferences),
+    getCustomEmojiCatalog: useServerFn(getCustomEmojiCatalog),
     saveCustomerPreferenceSettings: useServerFn(saveCustomerPreferenceSettings),
     logout: useServerFn(logoutCustomer),
   };
@@ -327,6 +329,7 @@ function MiniAppSection() {
         connections: await connectionsFn({ data: { auth: a } }),
         audience: await audienceFn({ data: { auth: a, groupIds: [], onlyNew: true } }),
         campaigns: await campaignsFn({ data: { auth: a, filter: "DM" } }),
+        billing: await billingFn({ data: { auth: a } }),
       }),
       "dm-history": (a) => campaignsFn({ data: { auth: a, filter: "DM" } }),
       campaigns: async (a) => ({
@@ -338,6 +341,7 @@ function MiniAppSection() {
         groups: await groupsFn({ data: { auth: a, status: "APPROVED_ACTIVE" } }),
         categories: await groupCategoriesFn({ data: { auth: a } }),
         campaigns: await campaignsFn({ data: { auth: a, filter: "GROUP" } }),
+        billing: await billingFn({ data: { auth: a } }),
       }),
       "group-history": (a) => campaignsFn({ data: { auth: a, filter: "GROUP" } }),
       "group-categories": async (a) => ({
@@ -2627,6 +2631,9 @@ function DMCampaign({ auth, data, actions, reload, setNotice, actionBusy, runAct
         connections={data?.connections}
       />
       <MessageForm
+        auth={auth}
+        actions={actions}
+        connectionId={connectionId}
         name={name}
         setName={setName}
         message={message}
@@ -2765,6 +2772,9 @@ function GroupCampaign({ auth, data, actions, reload, setNotice, actionBusy, run
         </select>
       </label>
       <MessageForm
+        auth={auth}
+        actions={actions}
+        connectionId={connectionId}
         name={name}
         setName={setName}
         message={message}
@@ -3252,28 +3262,88 @@ function AudienceSummary({ result, selectable, selected, setSelected, auth, acti
 }
 
 function MessageForm(props: any) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerTab, setPickerTab] = useState<"recent" | "installed" | "featured" | "search" | "categories">("recent");
+  const [emojiSearch, setEmojiSearch] = useState("");
+  const [emojiCatalog, setEmojiCatalog] = useState<any>(null);
+  const [emojiLoading, setEmojiLoading] = useState(false);
+  const [emojiError, setEmojiError] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   function utf16Length(value: string) {
     return [...value].reduce((sum, char) => sum + (char.codePointAt(0)! > 0xffff ? 2 : 1), 0);
   }
-  function addCustomEmoji() {
-    if (!props.premiumEmojiActive) {
-      alert("Premium Emoji add-on is required.");
+  async function loadEmojiCatalog(nextTab = pickerTab) {
+    if (!props.connectionId) {
+      setEmojiError("Select a connected Telegram session first.");
       return;
     }
-    const fallback = prompt("Fallback emoji", "⭐") || "⭐";
-    const documentId = prompt("Telegram custom emoji document ID");
-    if (!documentId) return;
-    const premium = confirm("Does this emoji require Telegram Premium for the sending account?");
-    const nextText = `${props.message ?? ""}${fallback}`;
+    setEmojiLoading(true);
+    setEmojiError("");
+    try {
+      const result = await props.actions.getCustomEmojiCatalog({
+        data: { auth: props.auth, connectionId: props.connectionId, query: nextTab === "search" ? emojiSearch : "" },
+      });
+      setEmojiCatalog(result);
+    } catch (error) {
+      setEmojiError(error instanceof Error ? error.message : "Custom emoji could not be loaded.");
+    } finally {
+      setEmojiLoading(false);
+    }
+  }
+  function insertCustomEmoji(item: any) {
+    if (item.premium_required && emojiCatalog?.sessionPremium !== true) {
+      setEmojiError("This linked Telegram account requires Telegram Premium to send this custom emoji.");
+      return;
+    }
+    const fallback = item.fallback || "⭐";
+    const node = textareaRef.current;
+    const current = props.message ?? "";
+    const start = node ? node.selectionStart : current.length;
+    const end = node ? node.selectionEnd : current.length;
+    const nextText = `${current.slice(0, start)}${fallback}${current.slice(end)}`;
+    const utf16Offset = utf16Length(current.slice(0, start));
+    const replacedLength = utf16Length(current.slice(start, end));
+    const insertedLength = utf16Length(fallback);
+    const shifted = (props.entities ?? [])
+      .filter((entity: any) => entity.offset + entity.length <= utf16Offset || entity.offset >= utf16Offset + replacedLength)
+      .map((entity: any) => entity.offset >= utf16Offset + replacedLength ? { ...entity, offset: entity.offset - replacedLength + insertedLength } : entity);
     props.setMessage(nextText);
-    props.setEntities([...(props.entities ?? []), {
+    props.setEntities([...shifted, {
       type: "custom_emoji",
-      offset: utf16Length(props.message ?? ""),
-      length: utf16Length(fallback),
-      document_id: documentId.trim(),
+      offset: utf16Offset,
+      length: insertedLength,
+      document_id: String(item.document_id),
       fallback,
-      premium_required: premium,
+      premium_required: item.premium_required === true,
     }]);
+    setPickerOpen(false);
+    requestAnimationFrame(() => {
+      node?.focus();
+      node?.setSelectionRange(start + fallback.length, start + fallback.length);
+    });
+  }
+  function applyEntity(type: "bold" | "italic" | "underline" | "strikethrough" | "spoiler" | "text_link") {
+    const node = textareaRef.current;
+    if (!node) return;
+    const start = node.selectionStart;
+    const end = node.selectionEnd;
+    if (start === end) return;
+    const entity: any = { type, offset: utf16Length((props.message ?? "").slice(0, start)), length: utf16Length((props.message ?? "").slice(start, end)) };
+    if (type === "text_link") {
+      const url = prompt("Link URL");
+      if (!url) return;
+      entity.url = url;
+    }
+    props.setEntities([...(props.entities ?? []), entity]);
+  }
+  function addCustomEmoji() {
+    if (!props.premiumEmojiActive) {
+      window.location.href = "/mini-app/billing";
+      return;
+    }
+    setPickerOpen(true);
+    void loadEmojiCatalog();
+    return;
   }
   return (
     <section className={panelClass("space-y-3")}>
@@ -3284,6 +3354,7 @@ function MessageForm(props: any) {
         placeholder="Campaign name"
       />
       <textarea
+        ref={textareaRef}
         className={inputClass("min-h-28")}
         value={props.message}
         onChange={(e) => {
@@ -3293,6 +3364,18 @@ function MessageForm(props: any) {
         placeholder="Message text"
       />
       <div className="flex flex-wrap gap-2">
+        {[
+          ["bold", "B"],
+          ["italic", "I"],
+          ["underline", "U"],
+          ["strikethrough", "S"],
+          ["spoiler", "Spoiler"],
+          ["text_link", "Link"],
+        ].map(([type, label]) => (
+          <Button key={type} type="button" size="sm" variant="secondary" onClick={() => applyEntity(type as any)}>
+            {label}
+          </Button>
+        ))}
         <Button type="button" size="sm" variant="secondary" onClick={addCustomEmoji}>
           <Sparkles className="size-4" />
           {props.premiumEmojiActive ? "CUSTOM EMOJI" : "Premium Emoji - $20 add-on"}
@@ -3301,6 +3384,20 @@ function MessageForm(props: any) {
           <span className="self-center text-xs text-muted-foreground">{props.entities.length} custom entity saved</span>
         ) : null}
       </div>
+      {pickerOpen ? (
+        <CustomEmojiPicker
+          catalog={emojiCatalog}
+          error={emojiError}
+          loading={emojiLoading}
+          query={emojiSearch}
+          setQuery={setEmojiSearch}
+          tab={pickerTab}
+          setTab={setPickerTab}
+          load={loadEmojiCatalog}
+          insert={insertCustomEmoji}
+          close={() => setPickerOpen(false)}
+        />
+      ) : null}
       <select
         className={inputClass()}
         value={props.mediaType}
@@ -3331,6 +3428,93 @@ function MessageForm(props: any) {
         />
       </div>
     </section>
+  );
+}
+
+function CustomEmojiPicker({
+  catalog,
+  error,
+  loading,
+  query,
+  setQuery,
+  tab,
+  setTab,
+  load,
+  insert,
+  close,
+}: any) {
+  const items = tab === "categories" ? [] : (catalog?.[tab] ?? []);
+  const tabs = ["recent", "installed", "featured", "search", "categories"];
+  return (
+    <div className="fixed inset-0 z-50 flex items-end bg-black/45 p-3 sm:items-center sm:justify-center">
+      <div className="w-full max-w-lg border border-border bg-card p-4 shadow-xl">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="font-semibold">Custom Emoji</p>
+            <p className="text-xs text-muted-foreground">
+              {catalog?.sessionPremium ? "Telegram Premium sending available." : "Premium-only emoji require Telegram Premium on this linked account."}
+            </p>
+          </div>
+          <Button type="button" size="icon" variant="secondary" onClick={close} aria-label="Close custom emoji picker">
+            <X className="size-4" />
+          </Button>
+        </div>
+        <div className="mt-3 flex gap-1 overflow-x-auto">
+          {tabs.map((name) => (
+            <Button
+              key={name}
+              type="button"
+              size="sm"
+              variant={tab === name ? "default" : "secondary"}
+              onClick={() => {
+                setTab(name);
+                void load(name);
+              }}
+            >
+              {name.toUpperCase()}
+            </Button>
+          ))}
+        </div>
+        {tab === "search" ? (
+          <div className="mt-3 flex gap-2">
+            <input className={inputClass()} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search custom emoji sets" />
+            <Button type="button" variant="secondary" onClick={() => load("search")}>SEARCH</Button>
+          </div>
+        ) : null}
+        {error ? <p className="mt-3 text-sm text-destructive">{error}</p> : null}
+        {loading ? <p className="mt-3 text-sm text-muted-foreground">Loading custom emoji...</p> : null}
+        {tab === "categories" ? (
+          <div className="mt-3 max-h-72 space-y-2 overflow-y-auto">
+            {(catalog?.categories ?? []).map((group: any) => (
+              <div key={`${group.title}-${group.icon_document_id}`} className="border border-border bg-background p-3">
+                <p className="text-sm font-semibold">{group.title}</p>
+                <p className="mt-1 break-words text-xs text-muted-foreground">{(group.emoticons ?? []).join(" ") || "No category keywords returned."}</p>
+              </div>
+            ))}
+            {!loading && !(catalog?.categories ?? []).length ? <Empty message="No custom emoji categories returned by Telegram." /> : null}
+          </div>
+        ) : (
+          <div className="mt-3 grid max-h-72 grid-cols-4 gap-2 overflow-y-auto sm:grid-cols-6">
+            {items.map((item: any) => {
+              const locked = item.premium_required && catalog?.sessionPremium !== true;
+              return (
+                <button
+                  key={`${item.source}-${item.document_id}`}
+                  type="button"
+                  className={`min-h-20 border border-border bg-background p-2 text-center ${locked ? "opacity-55" : "hover:border-primary"}`}
+                  onClick={() => insert(item)}
+                >
+                  <span className="block text-2xl">{item.fallback || "⭐"}</span>
+                  <span className="mt-1 block truncate text-[10px] text-muted-foreground">{item.set_title || item.source}</span>
+                  <span className={locked ? "block text-[10px] text-warning" : "block text-[10px] text-success"}>{item.free ? "Free" : "Premium"}</span>
+                </button>
+              );
+            })}
+            {!loading && !items.length ? <div className="col-span-full"><Empty message="No custom emoji returned for this tab." /></div> : null}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 

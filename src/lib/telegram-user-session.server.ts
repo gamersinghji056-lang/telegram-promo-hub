@@ -90,6 +90,24 @@ function errorMessage(error: unknown) {
 }
 
 type StoredMessageEntity = NonNullable<MessagePayload["entities"]>[number] & { premium_required?: boolean };
+export type CustomEmojiItem = {
+  document_id: string;
+  fallback: string;
+  premium_required: boolean;
+  free: boolean;
+  set_title?: string | null;
+  set_short_name?: string | null;
+  source: "recent" | "installed" | "featured" | "search" | "category";
+};
+
+export type CustomEmojiCatalog = {
+  sessionPremium: boolean;
+  recent: CustomEmojiItem[];
+  installed: CustomEmojiItem[];
+  featured: CustomEmojiItem[];
+  search: CustomEmojiItem[];
+  categories: { title: string; icon_document_id?: string | null; emoticons: string[] }[];
+};
 
 function utf16Length(value: string) {
   return [...value].reduce((sum, char) => sum + (char.codePointAt(0)! > 0xffff ? 2 : 1), 0);
@@ -119,6 +137,69 @@ function buildFormattingEntities(message: MessagePayload) {
   }).filter(Boolean) as Api.TypeMessageEntity[];
 }
 
+function customEmojiAttribute(doc: Api.TypeDocument) {
+  if (!(doc instanceof Api.Document)) return null;
+  return doc.attributes.find((attr) => attr instanceof Api.DocumentAttributeCustomEmoji) as Api.DocumentAttributeCustomEmoji | undefined;
+}
+
+function stickerSetMeta(set: unknown) {
+  const value = set as { title?: string; shortName?: string; id?: unknown; accessHash?: unknown };
+  return {
+    title: typeof value?.title === "string" ? value.title : null,
+    shortName: typeof value?.shortName === "string" ? value.shortName : null,
+    id: value?.id == null ? null : String(value.id),
+    accessHash: value?.accessHash == null ? null : String(value.accessHash),
+  };
+}
+
+function emojiItem(doc: Api.TypeDocument, source: CustomEmojiItem["source"], set?: unknown): CustomEmojiItem | null {
+  if (!(doc instanceof Api.Document)) return null;
+  const attr = customEmojiAttribute(doc);
+  if (!attr) return null;
+  const meta = stickerSetMeta(set);
+  return {
+    document_id: String(doc.id),
+    fallback: attr.alt || "⭐",
+    free: attr.free === true,
+    premium_required: attr.free !== true,
+    set_title: meta.title,
+    set_short_name: meta.shortName,
+    source,
+  };
+}
+
+function uniqueEmoji(items: CustomEmojiItem[]) {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (seen.has(item.document_id)) return false;
+    seen.add(item.document_id);
+    return true;
+  });
+}
+
+async function stickerSetDocuments(client: TelegramClient, set: unknown, source: CustomEmojiItem["source"], limit = 24) {
+  const meta = stickerSetMeta(set);
+  if (!meta.id || !meta.accessHash) return [];
+  const full = await client.invoke(new Api.messages.GetStickerSet({
+    stickerset: new Api.InputStickerSetID({ id: bigInt(meta.id), accessHash: bigInt(meta.accessHash) }),
+    hash: 0,
+  }));
+  if (!(full instanceof Api.messages.StickerSet)) return [];
+  return uniqueEmoji(full.documents.slice(0, limit).map((doc) => emojiItem(doc, source, full.set)).filter(Boolean) as CustomEmojiItem[]);
+}
+
+async function emojiFromSets(client: TelegramClient, sets: unknown[], source: CustomEmojiItem["source"], setLimit = 6, itemLimit = 36) {
+  const batches: CustomEmojiItem[][] = [];
+  for (const set of sets.slice(0, setLimit)) {
+    try {
+      batches.push(await stickerSetDocuments(client, set, source, Math.ceil(itemLimit / Math.max(1, setLimit))));
+    } catch (error) {
+      console.warn("CUSTOM_EMOJI_SET_LOAD_FAILED", { source, error: errorMessage(error) });
+    }
+  }
+  return uniqueEmoji(batches.flat()).slice(0, itemLimit);
+}
+
 async function validateCustomEmojiEntities(client: TelegramClient, message: MessagePayload) {
   const custom = (message.entities ?? []).filter((entity): entity is StoredMessageEntity =>
     entity.type === "custom_emoji" && Boolean(entity.document_id),
@@ -142,6 +223,77 @@ async function validateCustomEmojiEntities(client: TelegramClient, message: Mess
   if (custom.some((entity) => entity.premium_required === true) && !user.premium) {
     throw new Error("This linked Telegram account requires Telegram Premium to send this custom emoji.");
   }
+}
+
+export async function listCustomEmojiCatalogViaUserSession(
+  tenantId: string,
+  connectionId: string,
+  options: { query?: string | null } = {},
+): Promise<CustomEmojiCatalog> {
+  return withAuthorizedUserClient(tenantId, connectionId, async (client) => {
+    const me = (await client.getMe()) as Api.User & { premium?: boolean };
+    const catalog: CustomEmojiCatalog = {
+      sessionPremium: me.premium === true,
+      recent: [],
+      installed: [],
+      featured: [],
+      search: [],
+      categories: [],
+    };
+    try {
+      const recent = await client.invoke(new Api.messages.GetRecentStickers({ attached: true, hash: bigInt(0) }));
+      if (recent instanceof Api.messages.RecentStickers) {
+        catalog.recent = uniqueEmoji(recent.stickers.map((doc) => emojiItem(doc, "recent")).filter(Boolean) as CustomEmojiItem[]).slice(0, 36);
+      }
+    } catch (error) {
+      console.warn("CUSTOM_EMOJI_RECENT_FAILED", { error: errorMessage(error) });
+    }
+    try {
+      const installed = await client.invoke(new Api.messages.GetEmojiStickers({ hash: bigInt(0) }));
+      if (installed instanceof Api.messages.AllStickers) {
+        catalog.installed = await emojiFromSets(client, installed.sets, "installed", 8, 48);
+      }
+    } catch (error) {
+      console.warn("CUSTOM_EMOJI_INSTALLED_FAILED", { error: errorMessage(error) });
+    }
+    try {
+      const featured = await client.invoke(new Api.messages.GetFeaturedEmojiStickers({ hash: bigInt(0) }));
+      if (featured instanceof Api.messages.FeaturedStickers) {
+        const sets = featured.sets.map((entry) => (entry as { set?: unknown }).set).filter(Boolean);
+        catalog.featured = await emojiFromSets(client, sets, "featured", 8, 48);
+      }
+    } catch (error) {
+      console.warn("CUSTOM_EMOJI_FEATURED_FAILED", { error: errorMessage(error) });
+    }
+    if (options.query?.trim()) {
+      try {
+        const found = await client.invoke(new Api.messages.SearchEmojiStickerSets({
+          q: options.query.trim(),
+          excludeFeatured: false,
+          hash: bigInt(0),
+        }));
+        if (found instanceof Api.messages.FoundStickerSets) {
+          const sets = found.sets.map((entry) => (entry as { set?: unknown }).set).filter(Boolean);
+          catalog.search = await emojiFromSets(client, sets, "search", 8, 48);
+        }
+      } catch (error) {
+        console.warn("CUSTOM_EMOJI_SEARCH_FAILED", { error: errorMessage(error) });
+      }
+    }
+    try {
+      const groups = await client.invoke(new Api.messages.GetEmojiGroups({ hash: 0 }));
+      if (groups instanceof Api.messages.EmojiGroups) {
+        catalog.categories = groups.groups.map((group) => ({
+          title: (group as { title?: string }).title ?? "Emoji",
+          icon_document_id: (group as { iconEmojiId?: unknown }).iconEmojiId == null ? null : String((group as { iconEmojiId?: unknown }).iconEmojiId),
+          emoticons: Array.isArray((group as { emoticons?: string[] }).emoticons) ? ((group as { emoticons?: string[] }).emoticons ?? []) : [],
+        }));
+      }
+    } catch (error) {
+      console.warn("CUSTOM_EMOJI_GROUPS_FAILED", { error: errorMessage(error) });
+    }
+    return catalog;
+  });
 }
 
 function accessHash(value: unknown) {
