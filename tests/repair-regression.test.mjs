@@ -159,7 +159,7 @@ test("mini app language applies immediately and contains real Chinese Russian Pe
   const route = read("src/routes/mini-app.$section.tsx");
   const i18n = read("src/lib/mini-i18n.ts");
   assert(route.includes("applyMiniAppTranslations(appLanguage)"));
-  assert(route.includes("setAppLanguage?.(normalizeMiniLanguage(language))"));
+  assert(route.includes('setAppLanguage?.(nextLanguage, "settings-select", true)'));
   assert(i18n.includes("账户设置"));
   assert(i18n.includes("Настройки аккаунта"));
   assert(i18n.includes("تنظیمات حساب"));
@@ -261,4 +261,57 @@ test("custom emoji document id stays in message entities through picker, draft, 
   assert(worker.includes("sendGroupViaUserSession"));
   assert(telegram.includes("MessageEntityCustomEmoji"));
   assert(telegram.includes("documentId"));
+});
+
+test("mini app has one authoritative language state and cannot render question-mark locale labels", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  const i18n = read("src/lib/mini-i18n.ts");
+  const styles = read("src/styles.css");
+  assert(i18n.includes("MINI_LANGUAGE_LABELS"));
+  assert(i18n.includes("简体中文"));
+  assert(i18n.includes("Русский"));
+  assert(i18n.includes("فارسی"));
+  assert(!route.includes("????"));
+  assert(route.includes("languageVersionRef"));
+  assert(route.includes("manualLanguageRef"));
+  assert(route.includes("currentLanguageRef"));
+  assert(route.includes("I18N_STALE_UPDATE_IGNORED"));
+  assert(route.includes("I18N_LOCALE_CHANGED"));
+  assert(route.includes("I18N_LOCALE_SOURCE"));
+  assert(route.includes("applyAuthoritativeLanguage(result.preferences.language"));
+  assert(route.includes("telegramLanguageHint()"));
+  assert(route.includes('saveCustomerPreferenceSettings({ data: { auth, language: nextLanguage } })'));
+  assert(route.includes('saveCustomerPreferenceSettings({ data: { auth, theme } })'));
+  assert(!route.includes("language, theme"));
+  assert(styles.includes('"Noto Sans CJK SC"'));
+  assert(styles.includes('"Noto Sans Arabic"'));
+});
+
+test("mini app translation restores English source after React renders a translated string", () => {
+  const i18n = read("src/lib/mini-i18n.ts");
+  assert(i18n.includes("sourceByTranslation"));
+  assert(i18n.includes("sourceTextFor"));
+  assert(i18n.includes("sourceByTranslation.get(trimmed)"));
+  assert(i18n.includes("textOriginals.set(textNode, raw)"));
+});
+
+test("custom emoji preview diagnostics expose real media format without secrets", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  const telegram = read("src/lib/telegram-user-session.server.ts");
+  const player = read("src/components/tgs-player.tsx");
+  assert(telegram.includes("CUSTOM_EMOJI_PREVIEW_REQUEST"));
+  assert(telegram.includes("CUSTOM_EMOJI_PREVIEW_RESULT"));
+  assert(telegram.includes("CUSTOM_EMOJI_PREVIEW_ERROR"));
+  assert(telegram.includes("mime_type"));
+  assert(telegram.includes("preview_format"));
+  assert(telegram.includes("bytes: downloaded.length"));
+  assert(!telegram.includes("session_string"));
+  assert(route.includes("CUSTOM_EMOJI_RENDER_FORMAT"));
+  assert(route.includes('format: "webm"'));
+  assert(route.includes('format: "image"'));
+  assert(player.includes("CUSTOM_EMOJI_RENDER_FORMAT"));
+  assert(player.includes('format: "tgs"'));
+  assert(player.includes("ungzip(bytes)"));
+  assert(player.includes("JSON.parse(json)"));
+  assert(player.includes("lottie.default ?? lottie"));
 });

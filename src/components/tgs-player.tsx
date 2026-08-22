@@ -35,7 +35,9 @@ export function TgsPlayer({ src, fallback = "⭐", className = "" }: TgsPlayerPr
     void import("lottie-web")
       .then((lottie) => {
         if (cancelled || !ref.current) return;
-        animation = lottie.default.loadAnimation({
+        console.info("CUSTOM_EMOJI_RENDER_FORMAT", { format: "tgs" });
+        const lottieApi = lottie.default ?? lottie;
+        animation = lottieApi.loadAnimation({
           container: ref.current,
           renderer: "svg",
           loop: true,
@@ -43,7 +45,10 @@ export function TgsPlayer({ src, fallback = "⭐", className = "" }: TgsPlayerPr
           animationData: parseTgs(src),
         });
       })
-      .catch(() => setFailed(true));
+      .catch((error) => {
+        console.warn("CUSTOM_EMOJI_PREVIEW_ERROR", { stage: "tgs_render", error: error instanceof Error ? error.message : "TGS render failed" });
+        if (!cancelled) setFailed(true);
+      });
     return () => {
       cancelled = true;
       animation?.destroy();

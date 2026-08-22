@@ -1,5 +1,11 @@
 export const MINI_LANGUAGES = ["en", "zh-CN", "ru", "fa"] as const;
 export type MiniLanguage = (typeof MINI_LANGUAGES)[number];
+export const MINI_LANGUAGE_LABELS: Record<MiniLanguage, string> = {
+  en: "English",
+  "zh-CN": "简体中文",
+  ru: "Русский",
+  fa: "فارسی",
+};
 
 const dictionaries: Record<MiniLanguage, Record<string, string>> = {
   en: {},
@@ -786,6 +792,22 @@ function dictionaryFor(language: MiniLanguage) {
   return { ...dictionaries[language], ...(extraDictionaries[language] ?? {}) };
 }
 
+const sourceByTranslation = new Map<string, string>();
+for (const language of MINI_LANGUAGES) {
+  if (language === "en") continue;
+  const dictionary = dictionaryFor(language);
+  for (const [source, translated] of Object.entries(dictionary)) {
+    if (translated && !sourceByTranslation.has(translated)) sourceByTranslation.set(translated, source);
+  }
+}
+
+function sourceTextFor(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return value;
+  const restored = sourceByTranslation.get(trimmed);
+  return restored ? value.replace(trimmed, restored) : value;
+}
+
 export function applyMiniAppTranslations(language: string | null | undefined, root: ParentNode = document.body) {
   const lang = normalizeMiniLanguage(language);
   const dictionary = dictionaryFor(lang);
@@ -795,8 +817,8 @@ export function applyMiniAppTranslations(language: string | null | undefined, ro
     for (const attr of ["placeholder", "aria-label", "title"]) {
       const stored = node.getAttribute(`data-i18n-original-${attr}`);
       const current = node.getAttribute(attr);
-      const original = stored ?? current ?? "";
-      if (current && !stored) node.setAttribute(`data-i18n-original-${attr}`, current);
+      const original = stored ?? sourceTextFor(current ?? "");
+      if (current && !stored) node.setAttribute(`data-i18n-original-${attr}`, original);
       if (!original) continue;
       node.setAttribute(attr, lang === "en" ? original : dictionary[original] ?? original);
     }
@@ -806,7 +828,7 @@ export function applyMiniAppTranslations(language: string | null | undefined, ro
   let current = walker.nextNode();
   while (current) {
     const textNode = current as Text;
-    const raw = textOriginals.get(textNode) ?? textNode.textContent ?? "";
+    const raw = textOriginals.get(textNode) ?? sourceTextFor(textNode.textContent ?? "");
     const trimmed = raw.trim();
     if (!textOriginals.has(textNode)) textOriginals.set(textNode, raw);
     if (lang === "en") {

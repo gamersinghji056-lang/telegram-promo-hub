@@ -108,7 +108,7 @@ import {
   verifyWritableGroups,
 } from "@/lib/customer.functions";
 import { applyThemePreference } from "@/lib/theme";
-import { applyMiniAppTranslations, miniT, normalizeMiniLanguage } from "@/lib/mini-i18n";
+import { MINI_LANGUAGE_LABELS, applyMiniAppTranslations, miniT, normalizeMiniLanguage } from "@/lib/mini-i18n";
 
 const valid = new Set([
   "dashboard",
@@ -192,6 +192,16 @@ async function telegramAuthReady() {
     await new Promise((resolve) => setTimeout(resolve, 125));
   }
   return null;
+}
+
+function telegramLanguageHint() {
+  if (typeof window === "undefined") return "en";
+  const telegram = (
+    window as unknown as {
+      Telegram?: { WebApp?: { initDataUnsafe?: { user?: { language_code?: string } } } };
+    }
+  ).Telegram?.WebApp;
+  return normalizeMiniLanguage(telegram?.initDataUnsafe?.user?.language_code ?? null);
 }
 
 function inputClass(extra = "") {
@@ -346,9 +356,33 @@ function MiniAppSection() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [profile, setProfile] = useState<any>(null);
   const [showProfile, setShowProfile] = useState(false);
-  const [appLanguage, setAppLanguage] = useState(() => normalizeMiniLanguage(typeof window !== "undefined" ? localStorage.getItem("wpay-language") : "en"));
+  const [appLanguage, setAppLanguageState] = useState(() => normalizeMiniLanguage(typeof window !== "undefined" ? localStorage.getItem("wpay-language") : telegramLanguageHint()));
   const sectionRef = useRef(section);
   const cacheRef = useRef(new Map<string, any>());
+  const languageVersionRef = useRef(0);
+  const manualLanguageRef = useRef(false);
+  const currentLanguageRef = useRef(appLanguage);
+
+  function applyAuthoritativeLanguage(value: string | null | undefined, source = "mini-app", manual = false, requestVersion = languageVersionRef.current) {
+    const next = normalizeMiniLanguage(value);
+    if (!manual && manualLanguageRef.current && (requestVersion < languageVersionRef.current || next !== currentLanguageRef.current)) {
+      console.info("I18N_STALE_UPDATE_IGNORED", { source, attempted_locale: next, current_locale: currentLanguageRef.current, request_version: requestVersion, current_version: languageVersionRef.current });
+      return;
+    }
+    if (manual) {
+      manualLanguageRef.current = true;
+      languageVersionRef.current += 1;
+    }
+    console.info(manual ? "I18N_LOCALE_CHANGED" : "I18N_LOCALE_SOURCE", { source, locale: next, manual });
+    currentLanguageRef.current = next;
+    setAppLanguageState(next);
+    try {
+      localStorage.setItem("wpay-language", next);
+    } catch {
+      /* restricted webviews can block localStorage */
+    }
+    applyMiniAppTranslations(next);
+  }
 
   const loaders = useMemo<Record<string, (auth: string) => Promise<any>>>(
     () => ({
@@ -416,6 +450,7 @@ function MiniAppSection() {
 
   async function load(force = false) {
     const targetSection = section;
+    const requestLanguageVersion = languageVersionRef.current;
     const nextAuth = await telegramAuthReady();
     const cacheKey = `${nextAuth ?? "none"}:${targetSection}`;
     const cached = cacheRef.current.get(cacheKey);
@@ -423,9 +458,7 @@ function MiniAppSection() {
       setAuth(nextAuth);
       setData(cached.data);
       if (cached.data?.preferences?.language) {
-        const nextLanguage = normalizeMiniLanguage(cached.data.preferences.language);
-        setAppLanguage(nextLanguage);
-        localStorage.setItem("wpay-language", nextLanguage);
+        applyAuthoritativeLanguage(cached.data.preferences.language, "cache", false, requestLanguageVersion);
       }
       setLoadedSection(targetSection);
       setNotifications(cached.notifications ?? notifications);
@@ -452,9 +485,9 @@ function MiniAppSection() {
       const result = await loaders[targetSection]?.(nextAuth);
       setData(result);
       if (result?.preferences?.language) {
-        const nextLanguage = normalizeMiniLanguage(result.preferences.language);
-        setAppLanguage(nextLanguage);
-        localStorage.setItem("wpay-language", nextLanguage);
+        applyAuthoritativeLanguage(result.preferences.language, "server-preferences", false, requestLanguageVersion);
+      } else if (!manualLanguageRef.current) {
+        applyAuthoritativeLanguage(telegramLanguageHint(), "telegram-language-code", false, requestLanguageVersion);
       }
       setLoadedSection(targetSection);
       setBusy(false);
@@ -712,7 +745,7 @@ function MiniAppSection() {
           actionBusy={actionBusy}
           runAction={runAction}
           appLanguage={appLanguage}
-          setAppLanguage={setAppLanguage}
+          setAppLanguage={applyAuthoritativeLanguage}
         />
       )}
       {showNotifications ? (
@@ -3367,10 +3400,18 @@ function MessageForm(props: any) {
     const items = (result[nextTab] ?? []).slice(0, 24);
     const previews = await Promise.all(items.map(async (item: any) => {
       try {
-        return await props.actions.getCustomEmojiPreview({
+        const preview = await props.actions.getCustomEmojiPreview({
           data: { auth: props.auth, connectionId: props.connectionId, documentId: String(item.document_id) },
         });
+        console.info("CUSTOM_EMOJI_PREVIEW_RESULT", {
+          document_id: String(item.document_id),
+          mime_type: preview?.mime_type,
+          preview_format: preview?.format,
+          has_data_url: Boolean(preview?.data_url),
+        });
+        return preview;
       } catch {
+        console.warn("CUSTOM_EMOJI_PREVIEW_ERROR", { document_id: String(item.document_id), stage: "client_hydrate" });
         return null;
       }
     }));
@@ -3603,9 +3644,24 @@ function CustomEmojiPicker({
                     item.preview_format === "tgs" ? (
                       <TgsPlayer className="mx-auto size-9" src={item.preview_url} fallback={item.fallback || "⭐"} />
                     ) : item.preview_format === "webm" || item.mime_type === "video/webm" ? (
-                      <video className="mx-auto size-9 object-contain" src={item.preview_url} muted playsInline autoPlay loop />
+                      <video
+                        className="mx-auto size-9 object-contain"
+                        src={item.preview_url}
+                        muted
+                        playsInline
+                        autoPlay
+                        loop
+                        onLoadedData={() => console.info("CUSTOM_EMOJI_RENDER_FORMAT", { format: "webm", document_id: String(item.document_id) })}
+                        onError={() => console.warn("CUSTOM_EMOJI_PREVIEW_ERROR", { stage: "webm_render", document_id: String(item.document_id) })}
+                      />
                     ) : (
-                      <img className="mx-auto size-9 object-contain" src={item.preview_url} alt={item.fallback || "custom emoji"} />
+                      <img
+                        className="mx-auto size-9 object-contain"
+                        src={item.preview_url}
+                        alt={item.fallback || "custom emoji"}
+                        onLoad={() => console.info("CUSTOM_EMOJI_RENDER_FORMAT", { format: "image", document_id: String(item.document_id) })}
+                        onError={() => console.warn("CUSTOM_EMOJI_PREVIEW_ERROR", { stage: "image_render", document_id: String(item.document_id) })}
+                      />
                     )
                   ) : (
                     <span className="block text-2xl">{item.fallback || "⭐"}</span>
@@ -4178,9 +4234,12 @@ function SettingsPanel({ auth, data, actions, setNotice, actionBusy, runAction, 
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const prefs = data?.preferences ?? { language: "en", theme: "system" };
-  const [language, setLanguage] = useState(prefs.language ?? "en");
   const [theme, setTheme] = useState(prefs.theme ?? "system");
+  const language = normalizeMiniLanguage(appLanguage ?? prefs.language ?? "en");
   const t = (text: string) => miniT(appLanguage ?? language, text);
+  useEffect(() => {
+    setTheme(prefs.theme ?? "system");
+  }, [prefs.theme]);
   return (
     <div className="space-y-3">
       <section className={panelClass("space-y-3")}>
@@ -4202,23 +4261,30 @@ function SettingsPanel({ auth, data, actions, setNotice, actionBusy, runAction, 
       </section>
       <section className={panelClass("space-y-3")}>
         <p className="font-semibold">{t("Language")}</p>
-        <select className={inputClass()} value={language} onChange={(e) => setLanguage(e.target.value)}>
-          <option value="en">English</option>
-          <option value="zh-CN">????</option>
-          <option value="ru">???????</option>
-          <option value="fa">?????</option>
+        <select
+          className={inputClass()}
+          value={language}
+          onChange={(e) => {
+            const nextLanguage = normalizeMiniLanguage(e.target.value);
+            setAppLanguage?.(nextLanguage, "settings-select", true);
+            void runAction("save-language", async () => {
+              await actions.saveCustomerPreferenceSettings({ data: { auth, language: nextLanguage } });
+              setNotice(miniT(nextLanguage, "Settings saved."));
+            });
+          }}
+        >
+          <option value="en">{MINI_LANGUAGE_LABELS.en}</option>
+          <option value="zh-CN">{MINI_LANGUAGE_LABELS["zh-CN"]}</option>
+          <option value="ru">{MINI_LANGUAGE_LABELS.ru}</option>
+          <option value="fa">{MINI_LANGUAGE_LABELS.fa}</option>
         </select>
         <Button
           type="button"
           disabled={actionBusy === "save-preferences"}
           onClick={() =>
             runAction("save-preferences", async () => {
-              await actions.saveCustomerPreferenceSettings({ data: { auth, language, theme } });
-              document.documentElement.dir = language === "fa" ? "rtl" : "ltr";
+              await actions.saveCustomerPreferenceSettings({ data: { auth, theme } });
               applyThemePreference(theme);
-              localStorage.setItem("wpay-language", language);
-              setAppLanguage?.(normalizeMiniLanguage(language));
-              applyMiniAppTranslations(language);
               setNotice(miniT(language, "Settings saved."));
             })
           }
