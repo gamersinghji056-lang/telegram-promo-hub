@@ -26,6 +26,9 @@ type ConnectionRow = {
   health?: string | null;
   health_score?: number | null;
   health_summary?: string | null;
+  telegram_premium?: boolean | null;
+  telegram_premium_checked_at?: string | null;
+  session_error_code?: string | null;
 };
 
 function credentials() {
@@ -108,6 +111,7 @@ export type CustomEmojiItem = {
 
 export type CustomEmojiCatalog = {
   sessionPremium: boolean;
+  previewConnectionId?: string | null;
   recent: CustomEmojiItem[];
   installed: CustomEmojiItem[];
   featured: CustomEmojiItem[];
@@ -146,6 +150,37 @@ function buildFormattingEntities(message: MessagePayload) {
 function customEmojiAttribute(doc: Api.TypeDocument) {
   if (!(doc instanceof Api.Document)) return null;
   return doc.attributes.find((attr) => attr instanceof Api.DocumentAttributeCustomEmoji) as Api.DocumentAttributeCustomEmoji | undefined;
+}
+
+function userPremium(user: Api.User) {
+  return (user as unknown as { premium?: boolean }).premium === true;
+}
+
+async function markInvalidAuth(tenantId: string, connectionId: string, message: string) {
+  await db()
+    .from("telegram_connections")
+    .update({
+      status: "ERROR",
+      health: "RECONNECT_REQUIRED",
+      health_score: 0,
+      health_summary: "Telegram session expired. Reconnect this account.",
+      restriction_status: "REQUIRES_ACTION",
+      restriction_reason: message,
+      error_message: "Telegram session expired. Reconnect this account.",
+      session_error_code: "AUTH_KEY_UNREGISTERED",
+      last_sync_at: new Date().toISOString(),
+      health_updated_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", connectionId)
+    .eq("tenant_id", tenantId);
+  await recordSessionHealthEvidence({
+    tenantId,
+    connectionId,
+    evidence: "AUTH_FAILURE",
+    reason: "Telegram session expired. Reconnect this account.",
+    details: { code: "AUTH_KEY_UNREGISTERED" },
+  });
 }
 
 function stickerSetMeta(set: unknown) {
@@ -246,6 +281,7 @@ export async function listCustomEmojiCatalogViaUserSession(
     const me = (await client.getMe()) as Api.User & { premium?: boolean };
     const catalog: CustomEmojiCatalog = {
       sessionPremium: me.premium === true,
+      previewConnectionId: connectionId,
       recent: [],
       installed: [],
       featured: [],
@@ -545,7 +581,7 @@ function classifyAudienceError(error: unknown) {
 }
 
 function publicFields() {
-  return "id, tenant_id, label, account_name, username, telegram_id, telegram_user_id, phone_masked, status, health, health_score, health_updated_at, health_summary, error_message, restriction_status, restriction_reason, last_active_at, last_used_at, last_sync_at, cooldown_until, auth_step, created_at, updated_at";
+  return "id, tenant_id, label, account_name, username, telegram_id, telegram_user_id, phone_masked, status, health, health_score, health_updated_at, health_summary, telegram_premium, telegram_premium_checked_at, session_error_code, error_message, restriction_status, restriction_reason, last_active_at, last_used_at, last_sync_at, cooldown_until, auth_step, created_at, updated_at";
 }
 
 async function ownedConnection(ctx: AuthContext, connectionId: string) {
@@ -591,6 +627,9 @@ async function saveConnectedProfile(
       health_score: 90,
       health_updated_at: new Date().toISOString(),
       health_summary: "Healthy - authorization valid",
+      telegram_premium: userPremium(user),
+      telegram_premium_checked_at: new Date().toISOString(),
+      session_error_code: null,
       restriction_status: "NONE",
       restriction_reason: null,
       error_message: null,
@@ -841,18 +880,7 @@ export async function checkUserSession(ctx: AuthContext, connectionId: string) {
     const message = errorMessage(error);
     if (invalidSessionError(error)) {
       console.warn("SESSION_INVALID", { tenantId: ctx.tenantId, connectionId, reason: message });
-      await db()
-        .from("telegram_connections")
-        .update({
-          status: "ERROR",
-          health: "REQUIRES_ACTION",
-          restriction_status: "REQUIRES_ACTION",
-          restriction_reason: message,
-          error_message: message,
-          last_sync_at: new Date().toISOString(),
-        })
-        .eq("id", connectionId)
-        .eq("tenant_id", ctx.tenantId);
+      await markInvalidAuth(ctx.tenantId, connectionId, message);
     } else {
       console.warn("SESSION_CHECK_FAILED", { tenantId: ctx.tenantId, connectionId, reason: message });
       await db()
@@ -929,6 +957,9 @@ export async function withAuthorizedUserClient<T>(
       .update({
         status: "CONNECTED",
         health: "HEALTHY",
+        telegram_premium: userPremium(me as Api.User),
+        telegram_premium_checked_at: new Date().toISOString(),
+        session_error_code: null,
         restriction_status: "NONE",
         error_message: null,
         last_active_at: new Date().toISOString(),
@@ -948,25 +979,7 @@ export async function withAuthorizedUserClient<T>(
     if (invalidSessionError(error)) {
       const message = errorMessage(error);
       console.warn("SESSION_INVALID", { tenantId, connectionId, reason: message });
-      await db()
-        .from("telegram_connections")
-        .update({
-          status: "ERROR",
-          health: "REQUIRES_ACTION",
-          restriction_status: "REQUIRES_ACTION",
-          restriction_reason: message,
-          error_message: message,
-          last_sync_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", connectionId)
-        .eq("tenant_id", tenantId);
-      await recordSessionHealthEvidence({
-        tenantId,
-        connectionId,
-        evidence: "AUTH_FAILURE",
-        reason: message,
-      });
+      await markInvalidAuth(tenantId, connectionId, message);
     }
     throw error;
   } finally {

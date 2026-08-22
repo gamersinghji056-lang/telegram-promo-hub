@@ -39,8 +39,12 @@ export function sessionUsable(row: Record<string, unknown>) {
   const cooldown = row.cooldown_until ? new Date(String(row.cooldown_until)).getTime() : 0;
   const status = String(row.status ?? "");
   const restriction = String(row.restriction_status ?? "NONE");
+  const health = String(row.health ?? "");
+  const errorCode = String(row.session_error_code ?? "");
   return Boolean(row.encrypted_session) &&
     !["DISCONNECTED", "AUTH_CODE_SENT", "TWO_FACTOR_REQUIRED", "ERROR"].includes(status) &&
+    !["RECONNECT_REQUIRED", "INVALID_AUTH", "REQUIRES_ACTION"].includes(health) &&
+    errorCode !== "AUTH_KEY_UNREGISTERED" &&
     restriction !== "REQUIRES_ACTION" &&
     (!cooldown || cooldown <= Date.now());
 }

@@ -91,6 +91,7 @@ import {
   pauseBulkJoin,
   saveGroupCategory,
   saveCustomerPreferenceSettings,
+  setPreferredPremiumEmojiSession,
   testSendableGroups,
   testSessionHealth,
   resumeBulkJoin,
@@ -341,6 +342,7 @@ function MiniAppSection() {
     getSupportSettings: useServerFn(getSupportSettings),
     getCustomEmojiCatalog: useServerFn(getCustomEmojiCatalog),
     getCustomEmojiPreview: useServerFn(getCustomEmojiPreview),
+    setPreferredPremiumEmojiSession: useServerFn(setPreferredPremiumEmojiSession),
     saveCustomerPreferenceSettings: useServerFn(saveCustomerPreferenceSettings),
     logout: useServerFn(logoutCustomer),
   };
@@ -968,6 +970,8 @@ function QuickLink({ href, label, body, icon: Icon }: { href: string; label: str
 
 function Sessions({ auth, data, actions, reload, setNotice, actionBusy, runAction }: any) {
   const rows = Array.isArray(data) ? data : [];
+  const premiumEmojiSessionMode = rows[0]?.premiumEmojiSessionMode ?? "AUTO";
+  const preferredPremiumEmojiConnectionId = rows[0]?.preferredPremiumEmojiConnectionId ?? null;
   const [label, setLabel] = useState("");
   const [phone, setPhone] = useState("");
   const [connectionId, setConnectionId] = useState("");
@@ -1052,6 +1056,13 @@ function Sessions({ auth, data, actions, reload, setNotice, actionBusy, runActio
         ...current,
         [id]: `Health ${result.health_score ?? 0}% - ${failed ? `${failed} failed` : warned ? `${warned} warning(s)` : "diagnostics passed"}`,
       }));
+      await reload();
+    });
+  }
+  async function setPremiumEmojiSession(mode: "AUTO" | "MANUAL", id?: string | null) {
+    await sessionAction(`premium-emoji-session-${id ?? "auto"}`, id ?? "premium-auto", async () => {
+      await actions.setPreferredPremiumEmojiSession({ data: { auth, mode, connectionId: id ?? null } });
+      setNotice(mode === "AUTO" ? "Premium Emoji session selection set to AUTO." : "Preferred Premium Emoji session saved.");
       await reload();
     });
   }
@@ -1182,6 +1193,12 @@ function Sessions({ auth, data, actions, reload, setNotice, actionBusy, runActio
                 ? { step: "PASSWORD" as const, code: "", password: "" }
                 : null);
           const score = Number(row.health_score ?? 75);
+          const isPremium = row.telegram_premium === true;
+          const premiumKnown = row.telegram_premium === true || row.telegram_premium === false;
+          const premiumLabel = isPremium ? "Premium ✓" : premiumKnown ? "Standard" : "Unknown";
+          const reconnectRequired = row.health === "RECONNECT_REQUIRED" || row.session_error_code === "AUTH_KEY_UNREGISTERED";
+          const canPreferForEmoji = row.status === "CONNECTED" && row.has_session && !reconnectRequired && isPremium;
+          const preferred = premiumEmojiSessionMode === "MANUAL" && preferredPremiumEmojiConnectionId === row.id;
           return (
           <article key={row.id} className={panelClass()}>
             <div className="flex items-start justify-between gap-3">
@@ -1196,8 +1213,17 @@ function Sessions({ auth, data, actions, reload, setNotice, actionBusy, runActio
                 </p>
               </div>
               <span className={`text-xs font-semibold ${statusTone(row.status)}`}>
-                {row.status}
+                {reconnectRequired ? "RECONNECT REQUIRED" : row.status}
               </span>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+              <span className={`border px-2 py-1 font-semibold ${isPremium ? "border-success text-success" : "border-border text-muted-foreground"}`}>
+                Telegram Premium: {premiumLabel}
+              </span>
+              {preferred ? <span className="border border-primary px-2 py-1 font-semibold text-primary">Premium Emoji preferred</span> : null}
+              {row.telegram_premium_checked_at ? (
+                <span className="text-muted-foreground">Checked {new Date(row.telegram_premium_checked_at).toLocaleString()}</span>
+              ) : null}
             </div>
             <div className="mt-3 space-y-1">
               <div className="flex items-center justify-between text-xs">
@@ -1221,7 +1247,7 @@ function Sessions({ auth, data, actions, reload, setNotice, actionBusy, runActio
                 {row.last_used_at ? new Date(row.last_used_at).toLocaleString() : "never"}
               </p>
               <p>Restriction: {row.restriction_status ?? "NONE"}</p>
-              <p>{row.restriction_reason ?? row.error_message ?? "No errors"}</p>
+              <p>{reconnectRequired ? "Telegram session expired. Reconnect this account." : row.restriction_reason ?? row.error_message ?? "No errors"}</p>
             </div>
             {cardMessage[row.id] ? (
               <p className="mt-3 text-sm font-semibold text-primary">{cardMessage[row.id]}</p>
@@ -1284,6 +1310,26 @@ function Sessions({ auth, data, actions, reload, setNotice, actionBusy, runActio
               <Button size="sm" variant="secondary" disabled={busy === `reconnect-${row.id}`} onClick={() => reconnect(row)}>
                 {busy === `reconnect-${row.id}` ? "Sending..." : "RECONNECT"}
               </Button>
+              {canPreferForEmoji ? (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={busy === `premium-emoji-session-${row.id}` || preferred}
+                  onClick={() => setPremiumEmojiSession("MANUAL", row.id)}
+                >
+                  {preferred ? "PREFERRED PREMIUM EMOJI SESSION" : "SET AS PREMIUM EMOJI SESSION"}
+                </Button>
+              ) : null}
+              {preferred ? (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={busy === "premium-emoji-session-auto"}
+                  onClick={() => setPremiumEmojiSession("AUTO")}
+                >
+                  AUTO PREMIUM EMOJI SESSION
+                </Button>
+              ) : null}
               <Button
                 size="sm"
                 variant="secondary"
@@ -2738,6 +2784,7 @@ function DMCampaign({ auth, data, actions, reload, setNotice, actionBusy, runAct
         auth={auth}
         actions={actions}
         connectionId={connectionId}
+        sendingConnection={(data?.connections ?? []).find((connection: any) => connection.id === connectionId)}
         name={name}
         setName={setName}
         message={message}
@@ -2879,6 +2926,7 @@ function GroupCampaign({ auth, data, actions, reload, setNotice, actionBusy, run
         auth={auth}
         actions={actions}
         connectionId={connectionId}
+        sendingConnection={(data?.connections ?? []).find((connection: any) => connection.id === connectionId)}
         name={name}
         setName={setName}
         message={message}
@@ -3377,15 +3425,11 @@ function MessageForm(props: any) {
     return [...value].reduce((sum, char) => sum + (char.codePointAt(0)! > 0xffff ? 2 : 1), 0);
   }
   async function loadEmojiCatalog(nextTab = pickerTab) {
-    if (!props.connectionId) {
-      setEmojiError("Select a connected Telegram session first.");
-      return;
-    }
     setEmojiLoading(true);
     setEmojiError("");
     try {
       const result = await props.actions.getCustomEmojiCatalog({
-        data: { auth: props.auth, connectionId: props.connectionId, query: nextTab === "search" ? emojiSearch : "" },
+        data: { auth: props.auth, connectionId: props.connectionId || null, query: nextTab === "search" ? emojiSearch : "" },
       });
       const hydrated = await hydrateEmojiPreviews(result, nextTab);
       setEmojiCatalog(hydrated);
@@ -3401,7 +3445,7 @@ function MessageForm(props: any) {
     const previews = await Promise.all(items.map(async (item: any) => {
       try {
         const preview = await props.actions.getCustomEmojiPreview({
-          data: { auth: props.auth, connectionId: props.connectionId, documentId: String(item.document_id) },
+          data: { auth: props.auth, connectionId: props.connectionId || null, documentId: String(item.document_id) },
         });
         console.info("CUSTOM_EMOJI_PREVIEW_RESULT", {
           document_id: String(item.document_id),
@@ -3427,10 +3471,6 @@ function MessageForm(props: any) {
     };
   }
   function insertCustomEmoji(item: any) {
-    if (item.premium_required && emojiCatalog?.sessionPremium !== true) {
-      setEmojiError("This linked Telegram account requires Telegram Premium to send this custom emoji.");
-      return;
-    }
     const fallback = item.fallback || "⭐";
     const node = textareaRef.current;
     const current = props.message ?? "";
@@ -3516,6 +3556,11 @@ function MessageForm(props: any) {
           <Sparkles className="size-4" />
           {props.premiumEmojiActive ? "CUSTOM EMOJI" : "Premium Emoji - $20 add-on"}
         </Button>
+        {props.sendingConnection ? (
+          <span className={`self-center text-xs font-semibold ${props.sendingConnection.telegram_premium === true ? "text-success" : "text-warning"}`}>
+            Sending account: {props.sendingConnection.username ? `@${props.sendingConnection.username}` : props.sendingConnection.account_name ?? "selected"} - {props.sendingConnection.telegram_premium === true ? "Telegram Premium ✓" : props.sendingConnection.telegram_premium === false ? "Telegram Premium required" : "Telegram Premium unknown"}
+          </span>
+        ) : null}
         {(props.entities ?? []).length ? (
           <span className="self-center text-xs text-muted-foreground">{props.entities.length} custom entity saved</span>
         ) : null}
@@ -3588,7 +3633,7 @@ function CustomEmojiPicker({
           <div>
             <p className="font-semibold">Custom Emoji</p>
             <p className="text-xs text-muted-foreground">
-              {catalog?.sessionPremium ? "Telegram Premium sending available." : "Premium-only emoji require Telegram Premium on this linked account."}
+              {catalog?.previewConnectionId ? "Preview uses a healthy linked Telegram session. Sending still depends on the selected campaign account." : "Preview session is selected automatically."}
             </p>
           </div>
           <Button type="button" size="icon" variant="secondary" onClick={close} aria-label="Close custom emoji picker">
@@ -3632,12 +3677,11 @@ function CustomEmojiPicker({
         ) : (
           <div className="mt-3 grid max-h-72 grid-cols-4 gap-2 overflow-y-auto sm:grid-cols-6">
             {items.map((item: any) => {
-              const locked = item.premium_required && catalog?.sessionPremium !== true;
               return (
                 <button
                   key={`${item.source}-${item.document_id}`}
                   type="button"
-                  className={`min-h-20 border border-border bg-background p-2 text-center ${locked ? "opacity-55" : "hover:border-primary"}`}
+                  className="min-h-20 border border-border bg-background p-2 text-center hover:border-primary"
                   onClick={() => insert(item)}
                 >
                   {item.preview_url ? (
@@ -3667,7 +3711,7 @@ function CustomEmojiPicker({
                     <span className="block text-2xl">{item.fallback || "⭐"}</span>
                   )}
                   <span className="mt-1 block truncate text-[10px] text-muted-foreground">{item.set_title || item.source}</span>
-                  <span className={locked ? "block text-[10px] text-warning" : "block text-[10px] text-success"}>{item.free ? "Free" : "Premium"}</span>
+                  <span className={item.premium_required ? "block text-[10px] text-warning" : "block text-[10px] text-success"}>{item.free ? "Free" : "Premium"}</span>
                 </button>
               );
             })}

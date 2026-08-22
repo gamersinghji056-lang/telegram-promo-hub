@@ -315,3 +315,49 @@ test("custom emoji preview diagnostics expose real media format without secrets"
   assert(player.includes("JSON.parse(json)"));
   assert(player.includes("lottie.default ?? lottie"));
 });
+
+test("telegram premium capability is persisted and invalid auth becomes reconnect required", () => {
+  const migration = read("supabase/migrations/20260822195500_premium_session_capability_and_preferred_emoji_session.sql");
+  const telegram = read("src/lib/telegram-user-session.server.ts");
+  const health = read("src/lib/telegram-session-health.server.ts");
+  const customer = read("src/lib/customer-data.server.ts");
+  assert(migration.includes("telegram_premium boolean"));
+  assert(migration.includes("telegram_premium_checked_at"));
+  assert(migration.includes("session_error_code"));
+  assert(telegram.includes("userPremium(user)"));
+  assert(telegram.includes("telegram_premium: userPremium"));
+  assert(telegram.includes("health: \"RECONNECT_REQUIRED\""));
+  assert(telegram.includes("session_error_code: \"AUTH_KEY_UNREGISTERED\""));
+  assert(health.includes("RECONNECT_REQUIRED"));
+  assert(health.includes("AUTH_KEY_UNREGISTERED"));
+  assert(customer.includes("telegram_premium, telegram_premium_checked_at, session_error_code"));
+});
+
+test("premium emoji preview auto-selects healthy premium sessions and falls back on session failures", () => {
+  const migration = read("supabase/migrations/20260822195500_premium_session_capability_and_preferred_emoji_session.sql");
+  const customer = read("src/lib/customer-data.server.ts");
+  const funcs = read("src/lib/customer.functions.ts");
+  assert(migration.includes("premium_emoji_session_mode"));
+  assert(migration.includes("preferred_premium_emoji_connection_id"));
+  assert(customer.includes("premiumEmojiPreviewCandidates"));
+  assert(customer.includes("preferred_premium_emoji_connection_id"));
+  assert(customer.includes("telegram_premium === true"));
+  assert(customer.includes("sessionLevelPreviewFailure"));
+  assert(customer.includes("CUSTOM_EMOJI_PREVIEW_SESSION_FAILED"));
+  assert(customer.includes("preview_connection_id"));
+  assert(funcs.includes("setPreferredPremiumEmojiSession"));
+  assert(funcs.includes("connectionId?: string | null"));
+});
+
+test("premium emoji preview session is separate from campaign sending session validation", () => {
+  const customer = read("src/lib/customer-data.server.ts");
+  const route = read("src/routes/mini-app.$section.tsx");
+  assert(customer.includes("validateSendingSessionForCustomEmoji"));
+  assert(customer.includes("This linked Telegram account requires Telegram Premium to send this custom emoji."));
+  assert(customer.includes("await checkUserSession(ctx, String(connection.id))"));
+  assert(route.includes("Preview uses a healthy linked Telegram session"));
+  assert(route.includes("Sending account:"));
+  assert(route.includes("Telegram Premium required"));
+  assert(route.includes("SET AS PREMIUM EMOJI SESSION"));
+  assert(route.includes("AUTO PREMIUM EMOJI SESSION"));
+});

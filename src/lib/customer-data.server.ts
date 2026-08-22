@@ -23,6 +23,7 @@ import {
 import {
   bestTenantSession,
   eligibleTenantSessions,
+  sessionUsable,
 } from "./telegram-session-health.server";
 import {
   assertEntitlement,
@@ -400,18 +401,60 @@ export async function changeAccountPassword(
 
 export async function listConnections(ctx: AuthContext) {
   const client = db();
-  const { data } = await client
+  const [{ data }, { data: preferences }] = await Promise.all([
+    client
     .from("telegram_connections")
     .select(
-      "id, tenant_id, label, account_name, username, telegram_id, telegram_user_id, phone_masked, status, health, health_score, health_updated_at, health_summary, error_message, restriction_status, restriction_reason, last_active_at, last_used_at, last_sync_at, link_expires_at, cooldown_until, auth_step, encrypted_session, created_at, updated_at",
+      "id, tenant_id, label, account_name, username, telegram_id, telegram_user_id, phone_masked, status, health, health_score, health_updated_at, health_summary, telegram_premium, telegram_premium_checked_at, session_error_code, error_message, restriction_status, restriction_reason, last_active_at, last_used_at, last_sync_at, link_expires_at, cooldown_until, auth_step, encrypted_session, created_at, updated_at",
     )
     .eq("tenant_id", ctx.tenantId)
-    .order("created_at", { ascending: false });
+    .order("created_at", { ascending: false }),
+    client
+      .from("customer_preferences")
+      .select("premium_emoji_session_mode, preferred_premium_emoji_connection_id")
+      .eq("tenant_id", ctx.tenantId)
+      .eq("customer_id", ctx.customerId)
+      .maybeSingle(),
+  ]);
   const rows = data ?? [];
   return rows.map(({ encrypted_session, ...row }) => ({
-    ...row,
-    has_session: Boolean(encrypted_session),
-  }));
+      ...row,
+      has_session: Boolean(encrypted_session),
+      premiumEmojiSessionMode: preferences?.premium_emoji_session_mode ?? "AUTO",
+      preferredPremiumEmojiConnectionId: preferences?.preferred_premium_emoji_connection_id ?? null,
+    }));
+}
+
+export async function setPreferredPremiumEmojiSession(
+  ctx: AuthContext,
+  input: { mode: "AUTO" | "MANUAL"; connectionId?: string | null },
+) {
+  const mode = input.mode === "MANUAL" ? "MANUAL" : "AUTO";
+  let connectionId: string | null = null;
+  if (mode === "MANUAL") {
+    const row = await requireConnection(ctx, input.connectionId);
+    if (!sessionUsable(row as Record<string, unknown>)) {
+      throw new Error("Choose a connected healthy Telegram session.");
+    }
+    if ((row as { telegram_premium?: boolean | null }).telegram_premium !== true) {
+      throw new Error("Choose a Telegram Premium session.");
+    }
+    connectionId = String(row.id);
+  }
+  await db().from("customer_preferences").upsert(
+    {
+      customer_id: ctx.customerId,
+      tenant_id: ctx.tenantId,
+      premium_emoji_session_mode: mode,
+      preferred_premium_emoji_connection_id: connectionId,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "customer_id" },
+  );
+  return {
+    premium_emoji_session_mode: mode,
+    preferred_premium_emoji_connection_id: connectionId,
+  };
 }
 
 export async function createConnection(ctx: AuthContext, label: string) {
@@ -2801,6 +2844,7 @@ export async function createCampaign(
     ctx,
     input.connection_id,
   );
+  await validateSendingSessionForCustomEmoji(ctx, connection, input.message);
 
   let campaignGroups: { id: string }[] = [];
 
@@ -3126,7 +3170,10 @@ export async function updateCampaign(
   if (minDelay > maxDelay) throw new Error("Minimum delay must be less than or equal to maximum delay.");
   if (!input.name.trim()) throw new Error("Campaign name is required.");
   if (!input.message.text && !input.message.media_url) throw new Error("Message cannot be empty.");
-  if (input.connection_id) await requireConnection(ctx, input.connection_id);
+  if (input.connection_id) {
+    const connection = await requireConnection(ctx, input.connection_id);
+    await validateSendingSessionForCustomEmoji(ctx, connection, input.message);
+  }
   const { data, error } = await db()
     .from("campaigns")
     .update({
@@ -3578,20 +3625,111 @@ export async function supportSettings() {
   };
 }
 
-export async function customEmojiCatalog(ctx: AuthContext, input: { connectionId: string; query?: string | null }) {
-  await requireConnection(ctx, input.connectionId);
-  const entitlement = await premiumEmojiEntitlement(ctx.tenantId);
-  if (!entitlement.active) throw new Error("Premium Emoji add-on is required.");
-  return listCustomEmojiCatalogViaUserSession(ctx.tenantId, input.connectionId, {
-    query: input.query ?? null,
-  });
+function sessionLevelPreviewFailure(error: unknown) {
+  const message = (error instanceof Error ? error.message : String(error)).toUpperCase();
+  return message.includes("AUTH_KEY_UNREGISTERED") ||
+    message.includes("SESSION") ||
+    message.includes("TIMEOUT") ||
+    message.includes("NETWORK") ||
+    message.includes("ECONN") ||
+    message.includes("COOLING DOWN");
 }
 
-export async function customEmojiPreview(ctx: AuthContext, input: { connectionId: string; documentId: string }) {
-  await requireConnection(ctx, input.connectionId);
+async function validateSendingSessionForCustomEmoji(
+  ctx: AuthContext,
+  connection: Record<string, unknown>,
+  message: { entities?: { type?: string; premium_required?: boolean }[] },
+) {
+  const needsPremium = (message.entities ?? []).some((entity) => entity.type === "custom_emoji" && entity.premium_required === true);
+  if (!needsPremium) return;
+  const checkedAt = connection.telegram_premium_checked_at ? new Date(String(connection.telegram_premium_checked_at)).getTime() : 0;
+  const stale = !checkedAt || Date.now() - checkedAt > 24 * 60 * 60 * 1000;
+  let current = connection;
+  if (stale && connection.id) {
+    const refreshed = await checkUserSession(ctx, String(connection.id));
+    if (refreshed.ok) current = refreshed.connection as unknown as Record<string, unknown>;
+  }
+  if (current.telegram_premium !== true) {
+    throw new Error("This linked Telegram account requires Telegram Premium to send this custom emoji.");
+  }
+}
+
+async function premiumEmojiPreviewCandidates(ctx: AuthContext, requestedConnectionId?: string | null) {
+  const client = db();
+  const [{ data: preferences }, { data: rows }] = await Promise.all([
+    client
+      .from("customer_preferences")
+      .select("premium_emoji_session_mode, preferred_premium_emoji_connection_id")
+      .eq("tenant_id", ctx.tenantId)
+      .eq("customer_id", ctx.customerId)
+      .maybeSingle(),
+    client
+      .from("telegram_connections")
+      .select("*")
+      .eq("tenant_id", ctx.tenantId)
+      .not("encrypted_session", "is", null),
+  ]);
+  const connections = (rows ?? []).filter((row) => sessionUsable(row as Record<string, unknown>));
+  const byId = new Map(connections.map((row) => [String(row.id), row]));
+  const ordered: string[] = [];
+  const add = (id?: string | null) => {
+    if (id && byId.has(id) && !ordered.includes(id)) ordered.push(id);
+  };
+  if (preferences?.premium_emoji_session_mode === "MANUAL") {
+    const preferred = byId.get(String(preferences.preferred_premium_emoji_connection_id ?? ""));
+    if (preferred && (preferred as { telegram_premium?: boolean | null }).telegram_premium === true) add(String(preferred.id));
+  }
+  const requested = requestedConnectionId ? byId.get(requestedConnectionId) : null;
+  if (requested && (requested as { telegram_premium?: boolean | null }).telegram_premium === true) add(requestedConnectionId);
+  connections
+    .filter((row) => (row as { telegram_premium?: boolean | null }).telegram_premium === true)
+    .sort((a, b) => Number(b.health_score ?? 0) - Number(a.health_score ?? 0))
+    .forEach((row) => add(String(row.id)));
+  if (requested) add(requestedConnectionId);
+  connections
+    .sort((a, b) => Number(b.health_score ?? 0) - Number(a.health_score ?? 0))
+    .forEach((row) => add(String(row.id)));
+  if (!ordered.length) throw new Error("Connect a healthy Telegram session first.");
+  return ordered;
+}
+
+export async function customEmojiCatalog(ctx: AuthContext, input: { connectionId?: string | null; query?: string | null }) {
   const entitlement = await premiumEmojiEntitlement(ctx.tenantId);
   if (!entitlement.active) throw new Error("Premium Emoji add-on is required.");
-  return customEmojiPreviewViaUserSession(ctx.tenantId, input.connectionId, input.documentId);
+  const candidates = await premiumEmojiPreviewCandidates(ctx, input.connectionId ?? null);
+  let lastError: unknown = null;
+  for (const connectionId of candidates) {
+    try {
+      return await listCustomEmojiCatalogViaUserSession(ctx.tenantId, connectionId, {
+        query: input.query ?? null,
+      });
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn("CUSTOM_EMOJI_PREVIEW_SESSION_FAILED", { tenant_id: ctx.tenantId, connection_id: connectionId, error: message });
+      if (!sessionLevelPreviewFailure(error)) break;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Custom emoji could not be loaded.");
+}
+
+export async function customEmojiPreview(ctx: AuthContext, input: { connectionId?: string | null; documentId: string }) {
+  const entitlement = await premiumEmojiEntitlement(ctx.tenantId);
+  if (!entitlement.active) throw new Error("Premium Emoji add-on is required.");
+  const candidates = await premiumEmojiPreviewCandidates(ctx, input.connectionId ?? null);
+  let lastError: unknown = null;
+  for (const connectionId of candidates) {
+    try {
+      const result = await customEmojiPreviewViaUserSession(ctx.tenantId, connectionId, input.documentId);
+      return { ...result, preview_connection_id: connectionId };
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn("CUSTOM_EMOJI_PREVIEW_SESSION_FAILED", { tenant_id: ctx.tenantId, connection_id: connectionId, document_id: input.documentId, error: message });
+      if (!sessionLevelPreviewFailure(error)) break;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Telegram custom emoji preview could not be downloaded.");
 }
 
 export async function listNotifications(ctx: AuthContext) {

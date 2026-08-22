@@ -124,6 +124,15 @@ export const testSessionHealth = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { id: string }) => i)
   .handler(async ({ data: i }) => jsonSafe(await data.testSessionHealth(await resolveAuth(i.auth), i.id)));
 
+export const setPreferredPremiumEmojiSession = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { mode: "AUTO" | "MANUAL"; connectionId?: string | null }) => i)
+  .handler(async ({ data: i }) =>
+    data.setPreferredPremiumEmojiSession(await resolveAuth(i.auth), {
+      mode: i.mode,
+      connectionId: i.connectionId ?? null,
+    }),
+  );
+
 export const reconnectConnection = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { id: string }) => i)
   .handler(async ({ data: i }) => data.reconnectConnection(await resolveAuth(i.auth), i.id));
@@ -550,7 +559,7 @@ export const checkInvoicePaymentStatus = createServerFn({ method: "POST" })
   .handler(async ({ data: i }) => data.checkInvoicePaymentStatus(await resolveAuth(i.auth), i.invoiceId));
 
 export const getCustomEmojiCatalog = createServerFn({ method: "POST" })
-  .inputValidator((i: Auth & { connectionId: string; query?: string | null }) => i)
+  .inputValidator((i: Auth & { connectionId?: string | null; query?: string | null }) => i)
   .handler(async ({ data: i }) =>
     data.customEmojiCatalog(await resolveAuth(i.auth), {
       connectionId: i.connectionId,
@@ -559,7 +568,7 @@ export const getCustomEmojiCatalog = createServerFn({ method: "POST" })
   );
 
 export const getCustomEmojiPreview = createServerFn({ method: "POST" })
-  .inputValidator((i: Auth & { connectionId: string; documentId: string }) => i)
+  .inputValidator((i: Auth & { connectionId?: string | null; documentId: string }) => i)
   .handler(async ({ data: i }) =>
     data.customEmojiPreview(await resolveAuth(i.auth), {
       connectionId: i.connectionId,
