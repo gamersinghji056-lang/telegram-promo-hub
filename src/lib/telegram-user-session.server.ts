@@ -522,7 +522,7 @@ export async function listCustomEmojiCatalogViaUserSession(
   }
   console.info("CUSTOM_EMOJI_CATALOG_CACHE_MISS", { connection_id: connectionId, tab, query: Boolean(query) });
   const catalog = await loadCustomEmojiCatalogFromTelegram(tenantId, connectionId, tab, query, started);
-  void writeCatalogCache({ tenantId, connectionId, tab, query, catalog });
+  await writeCatalogCache({ tenantId, connectionId, tab, query, catalog });
   return catalog;
 }
 
