@@ -37,6 +37,13 @@ import { MiniAppShell } from "@/components/mini-app-shell";
 import { TgsPlayer } from "@/components/tgs-player";
 import { Button } from "@/components/ui/button";
 import {
+  normalizeMessageEntities,
+  reconcileEntitiesAfterTextChange,
+  replaceTextAndShiftEntities,
+  utf16Length,
+  utf16Offset,
+} from "@/lib/message-entities";
+import {
   addConnection,
   addApprovedGroupByUsername,
   addGroupByUsername,
@@ -3429,6 +3436,7 @@ function MessageForm(props: any) {
   const [selectedEmojiPack, setSelectedEmojiPack] = useState<string | null>(null);
   const [emojiPreviewLoading, setEmojiPreviewLoading] = useState<Record<string, boolean>>({});
   const [emojiPackErrors, setEmojiPackErrors] = useState<Record<string, string>>({});
+  const [selectedEmojiIds, setSelectedEmojiIds] = useState<Record<string, boolean>>({});
   const emojiRequestRef = useRef(0);
   const pickerTabRef = useRef(pickerTab);
   const selectedEmojiPackRef = useRef<string | null>(selectedEmojiPack);
@@ -3439,9 +3447,6 @@ function MessageForm(props: any) {
   useEffect(() => {
     selectedEmojiPackRef.current = selectedEmojiPack;
   }, [selectedEmojiPack]);
-  function utf16Length(value: string) {
-    return [...value].reduce((sum, char) => sum + (char.codePointAt(0)! > 0xffff ? 2 : 1), 0);
-  }
   function packKeyFor(tab: string) {
     return `${tab}Packs`;
   }
@@ -3561,22 +3566,23 @@ function MessageForm(props: any) {
     const current = props.message ?? "";
     const start = node ? node.selectionStart : current.length;
     const end = node ? node.selectionEnd : current.length;
-    const nextText = `${current.slice(0, start)}${fallback}${current.slice(end)}`;
-    const utf16Offset = utf16Length(current.slice(0, start));
-    const replacedLength = utf16Length(current.slice(start, end));
-    const insertedLength = utf16Length(fallback);
-    const shifted = (props.entities ?? [])
-      .filter((entity: any) => entity.offset + entity.length <= utf16Offset || entity.offset >= utf16Offset + replacedLength)
-      .map((entity: any) => entity.offset >= utf16Offset + replacedLength ? { ...entity, offset: entity.offset - replacedLength + insertedLength } : entity);
-    props.setMessage(nextText);
-    props.setEntities([...shifted, {
+    const replaced = replaceTextAndShiftEntities({
+      text: current,
+      entities: props.entities ?? [],
+      start,
+      end,
+      insertText: fallback,
+    });
+    props.setMessage(replaced.text);
+    props.setEntities([...replaced.entities, {
       type: "custom_emoji",
-      offset: utf16Offset,
-      length: insertedLength,
+      offset: replaced.startOffset,
+      length: replaced.insertedLength,
       document_id: String(item.document_id),
       fallback,
       premium_required: item.premium_required === true,
     }]);
+    setSelectedEmojiIds((currentIds) => ({ ...currentIds, [String(item.document_id)]: true }));
     setPickerOpen(false);
     requestAnimationFrame(() => {
       node?.focus();
@@ -3589,13 +3595,13 @@ function MessageForm(props: any) {
     const start = node.selectionStart;
     const end = node.selectionEnd;
     if (start === end) return;
-    const entity: any = { type, offset: utf16Length((props.message ?? "").slice(0, start)), length: utf16Length((props.message ?? "").slice(start, end)) };
+    const entity: any = { type, offset: utf16Offset(props.message ?? "", start), length: utf16Length((props.message ?? "").slice(start, end)) };
     if (type === "text_link") {
       const url = prompt("Link URL");
       if (!url) return;
       entity.url = url;
     }
-    props.setEntities([...(props.entities ?? []), entity]);
+    props.setEntities(normalizeMessageEntities([...(props.entities ?? []), entity], props.message ?? ""));
   }
   function addCustomEmoji() {
     if (!props.premiumEmojiActive) {
@@ -3619,8 +3625,9 @@ function MessageForm(props: any) {
         className={inputClass("min-h-28")}
         value={props.message}
         onChange={(e) => {
-          props.setMessage(e.target.value);
-          if ((props.entities ?? []).length) props.setEntities([]);
+          const nextText = e.target.value;
+          props.setEntities(reconcileEntitiesAfterTextChange(props.message ?? "", nextText, props.entities ?? []));
+          props.setMessage(nextText);
         }}
         placeholder="Message text"
       />
@@ -3662,6 +3669,7 @@ function MessageForm(props: any) {
           selectedPack={selectedEmojiPack}
           previewLoading={emojiPreviewLoading}
           packErrors={emojiPackErrors}
+          selectedEmojiIds={selectedEmojiIds}
           setTab={setPickerTab}
           selectPack={selectEmojiPack}
           load={loadEmojiCatalog}
@@ -3714,6 +3722,7 @@ function CustomEmojiPicker({
   selectedPack,
   previewLoading,
   packErrors,
+  selectedEmojiIds,
   setTab,
   selectPack,
   load,
@@ -3735,7 +3744,7 @@ function CustomEmojiPicker({
     <button
       key={`${item.source}-${item.document_id}`}
       type="button"
-      className="relative flex aspect-square min-h-0 items-center justify-center border border-transparent bg-transparent p-1 hover:border-primary hover:bg-primary/10"
+      className={`relative flex aspect-square min-h-0 items-center justify-center border bg-transparent p-1 hover:border-primary hover:bg-primary/10 ${selectedEmojiIds?.[String(item.document_id)] ? "border-primary bg-primary/10" : "border-transparent"}`}
       onClick={() => insert(item)}
       title={item.set_title || item.fallback || "Custom emoji"}
       aria-label={item.set_title || item.fallback || "Custom emoji"}

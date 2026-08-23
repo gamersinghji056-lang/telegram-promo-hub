@@ -44,6 +44,7 @@ import {
   premiumEmojiSettings,
 } from "./billing.server";
 import { reconcileInvoicePayment } from "./tron-monitor.server";
+import { normalizeMessageEntities } from "./message-entities";
 const LINK_CODE_TTL_MS = 15 * 60_000;
 
 export function hashConnectionLinkCode(code: string) {
@@ -2904,6 +2905,10 @@ export async function createCampaign(
     : input.scheduled_at
       ? "SCHEDULED"
       : "PENDING_APPROVAL";
+  const normalizedMessage = {
+    ...input.message,
+    entities: normalizeMessageEntities(input.message.entities ?? [], input.message.text ?? ""),
+  };
 
   const { data: campaign, error } =
     await client
@@ -2917,8 +2922,8 @@ export async function createCampaign(
           input.connection_id ?? null,
         template_id:
           input.template_id ?? null,
-        message: input.message,
-        message_entities: input.message.entities ?? [],
+        message: normalizedMessage,
+        message_entities: normalizedMessage.entities,
         group_category_id:
           input.group_category_id ?? null,
         min_delay_seconds: minDelay,
@@ -3175,14 +3180,18 @@ export async function updateCampaign(
     const connection = await requireConnection(ctx, input.connection_id);
     await validateSendingSessionForCustomEmoji(ctx, connection, input.message);
   }
+  const normalizedMessage = {
+    ...input.message,
+    entities: normalizeMessageEntities(input.message.entities ?? [], input.message.text ?? ""),
+  };
   const { data, error } = await db()
     .from("campaigns")
     .update({
       name: input.name.trim(),
       connection_id: input.connection_id ?? null,
       group_category_id: input.group_category_id ?? null,
-      message: input.message,
-      message_entities: input.message.entities ?? [],
+      message: normalizedMessage,
+      message_entities: normalizedMessage.entities,
       min_delay_seconds: minDelay,
       max_delay_seconds: maxDelay,
       cycle_delay_minutes: Math.max(1, Number(input.cycle_delay_minutes ?? 20)),

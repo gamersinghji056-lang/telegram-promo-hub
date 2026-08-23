@@ -1,5 +1,6 @@
 import { db, getSetting } from "./db.server";
 import { deriveWebhookSecret } from "./security.server";
+import type { CanonicalMessageEntity } from "./message-entities";
 
 export const TELEGRAM_API = "https://api.telegram.org";
 
@@ -41,14 +42,7 @@ export async function callBot<T = unknown>(
 
 export type MessagePayload = {
   text?: string;
-  entities?: {
-    type: "custom_emoji" | "bold" | "italic" | "underline" | "strikethrough" | "spoiler" | "text_link";
-    offset: number;
-    length: number;
-    document_id?: string;
-    fallback?: string;
-    url?: string;
-  }[];
+  entities?: CanonicalMessageEntity[];
   media_type?: string | null;
   media_url?: string | null;
   buttons?: { text: string; url: string }[];

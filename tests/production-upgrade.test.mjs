@@ -470,7 +470,8 @@ test("custom emoji entities are stored, validated and sent with GramJS formattin
   const telegram = read("src/lib/telegram-user-session.server.ts");
   const ui = read("src/routes/mini-app.$section.tsx");
   assert(migration.includes("message_entities jsonb"));
-  assert(customer.includes("message_entities: input.message.entities ?? []"));
+  assert(customer.includes("normalizeMessageEntities(input.message.entities ?? [], input.message.text ?? \"\")"));
+  assert(customer.includes("message_entities: normalizedMessage.entities"));
   assert(telegram.includes("MessageEntityCustomEmoji"));
   assert(telegram.includes("GetCustomEmojiDocuments"));
   assert(telegram.includes("formattingEntities"));

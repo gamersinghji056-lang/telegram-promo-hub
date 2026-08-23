@@ -3,6 +3,7 @@ import { assertUsageQuota, incrementMonthlyUsage } from "./entitlements.server";
 import type { MessagePayload } from "./telegram.server";
 import { sendDirectViaUserSession, sendGroupViaUserSession } from "./telegram-user-session.server";
 import { classifyTelegramError as classifyRpcError } from "./telegram-errors.server";
+import { normalizeMessageEntities } from "./message-entities";
 
 const DEFAULT_BATCH_LIMIT = 10;
 const DEFAULT_SEND_DELAY_MS = 2_000;
@@ -86,22 +87,31 @@ function backoffMinutes(attempts: number) {
 async function campaignMessage(campaignId: string, tenantId: string) {
   const { data } = await db()
     .from("campaigns")
-    .select("id, tenant_id, status, type, message, connection_id, min_delay_seconds, max_delay_seconds, cycle_delay_minutes")
+    .select("id, tenant_id, status, type, message, message_entities, connection_id, min_delay_seconds, max_delay_seconds, cycle_delay_minutes")
     .eq("id", campaignId)
     .eq("tenant_id", tenantId)
     .maybeSingle();
   if (!data) throw new Error("Campaign not found.");
   if (data.status !== "RUNNING") throw new Error("Campaign is not running.");
-  return data as {
+  const campaign = data as {
     id: string;
     status: string;
     type: string;
     message: MessagePayload;
+    message_entities?: unknown;
     connection_id: string | null;
     min_delay_seconds?: number | null;
     max_delay_seconds?: number | null;
     cycle_delay_minutes?: number | null;
   };
+  campaign.message = {
+    ...(campaign.message ?? {}),
+    entities: normalizeMessageEntities(
+      campaign.message?.entities?.length ? campaign.message.entities : campaign.message_entities,
+      campaign.message?.text ?? "",
+    ),
+  };
+  return campaign;
 }
 
 function campaignDelayMs(campaign: { min_delay_seconds?: number | null; max_delay_seconds?: number | null }) {

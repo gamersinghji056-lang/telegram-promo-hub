@@ -9,11 +9,13 @@ import { decryptSecret, encryptSecret } from "./security.server";
 import { classifyTelegramError, telegramErrorMessage } from "./telegram-errors.server";
 import { recordSessionHealthEvidence } from "./telegram-session-health.server";
 import type { MessagePayload } from "./telegram.server";
+import { entityDiagnostics, normalizeMessageEntities, utf16Length } from "./message-entities";
 
 const CONNECTION_RETRIES = 3;
 const sessionLocks = new Map<string, Promise<void>>();
 const PREVIEW_CACHE_TTL_MS = 10 * 60_000;
 const PREVIEW_BATCH_CONCURRENCY = 6;
+const PERSISTENT_PREVIEW_CACHE_TTL_MS = 7 * 86400_000;
 const previewCache = new Map<string, { expiresAt: number; value: CustomEmojiPreview }>();
 type ConnectionRow = {
   id: string;
@@ -162,10 +164,6 @@ async function withSessionLock<T>(tenantId: string, connectionId: string, fn: ()
   }
 }
 
-function utf16Length(value: string) {
-  return [...value].reduce((sum, char) => sum + (char.codePointAt(0)! > 0xffff ? 2 : 1), 0);
-}
-
 function sendText(message: MessagePayload) {
   return [message.text ?? ""]
     .concat((message.buttons ?? []).map((button) => `${button.text}: ${button.url}`))
@@ -174,7 +172,8 @@ function sendText(message: MessagePayload) {
 }
 
 function buildFormattingEntities(message: MessagePayload) {
-  return (message.entities ?? []).map((entity: StoredMessageEntity) => {
+  const entities = normalizeMessageEntities(message.entities ?? [], message.text ?? "");
+  return entities.map((entity: StoredMessageEntity) => {
     const base = { offset: entity.offset, length: entity.length };
     if (entity.type === "custom_emoji") {
       if (!entity.document_id) throw new Error("This custom emoji is no longer available.");
@@ -188,6 +187,17 @@ function buildFormattingEntities(message: MessagePayload) {
     if (entity.type === "text_link" && entity.url) return new Api.MessageEntityTextUrl({ ...base, url: entity.url });
     return null;
   }).filter(Boolean) as Api.TypeMessageEntity[];
+}
+
+function logOutgoingEntities(scope: string, tenantId: string, connectionId: string, message: MessagePayload) {
+  const entities = normalizeMessageEntities(message.entities ?? [], message.text ?? "");
+  console.info("TELEGRAM_SEND_ENTITIES", {
+    scope,
+    tenant_id: tenantId,
+    connection_id: connectionId,
+    text_utf16_length: (message.text ?? "").length,
+    entities: entityDiagnostics(entities),
+  });
 }
 
 function customEmojiAttribute(doc: Api.TypeDocument) {
@@ -324,6 +334,50 @@ function storePreview(preview: CustomEmojiPreview) {
   return preview;
 }
 
+async function cachedPersistentPreviews(documentIds: string[]) {
+  if (!documentIds.length) return new Map<string, CustomEmojiPreview>();
+  const { data, error } = await db()
+    .from("custom_emoji_preview_cache")
+    .select("document_id,mime_type,preview_format,data_url,fallback,expires_at")
+    .in("document_id", documentIds)
+    .gt("expires_at", new Date().toISOString());
+  if (error) {
+    console.warn("CUSTOM_EMOJI_CACHE_ERROR", { stage: "read", error: errorMessage(error) });
+    return new Map<string, CustomEmojiPreview>();
+  }
+  const out = new Map<string, CustomEmojiPreview>();
+  for (const row of data ?? []) {
+    const preview = storePreview({
+      document_id: String(row.document_id),
+      mime_type: String(row.mime_type),
+      format: String(row.preview_format) as CustomEmojiPreview["format"],
+      data_url: String(row.data_url),
+      fallback: String(row.fallback ?? "*"),
+    });
+    console.info("CUSTOM_EMOJI_CACHE_HIT", { document_id: preview.document_id, persistent: true });
+    out.set(preview.document_id, preview);
+  }
+  return out;
+}
+
+async function storePersistentPreview(preview: CustomEmojiPreview) {
+  const expiresAt = new Date(Date.now() + PERSISTENT_PREVIEW_CACHE_TTL_MS).toISOString();
+  const { error } = await db()
+    .from("custom_emoji_preview_cache")
+    .upsert({
+      document_id: preview.document_id,
+      media_identity: "telegram-document",
+      mime_type: preview.mime_type,
+      preview_format: preview.format,
+      data_url: preview.data_url,
+      fallback: preview.fallback || "*",
+      byte_length: preview.data_url.length,
+      updated_at: new Date().toISOString(),
+      expires_at: expiresAt,
+    }, { onConflict: "document_id" });
+  if (error) console.warn("CUSTOM_EMOJI_CACHE_ERROR", { stage: "write", document_id: preview.document_id, error: errorMessage(error) });
+}
+
 async function downloadCustomEmojiPreview(client: TelegramClient, connectionId: string, documentId: string): Promise<CustomEmojiPreview> {
   const started = Date.now();
   console.info("CUSTOM_EMOJI_PREVIEW_REQUEST", { connection_id: connectionId, document_id: String(documentId) });
@@ -345,13 +399,15 @@ async function downloadCustomEmojiPreview(client: TelegramClient, connectionId: 
     bytes: downloaded.length,
   });
   console.info("CUSTOM_EMOJI_PREVIEW_MS", { connection_id: connectionId, document_id: String(doc.id), ms: Date.now() - started });
-  return storePreview({
+  const preview = storePreview({
     document_id: String(doc.id),
     mime_type: mime,
     format,
     data_url: `data:${mime};base64,${downloaded.toString("base64")}`,
     fallback: attr?.alt || "*",
   });
+  void storePersistentPreview(preview);
+  return preview;
 }
 
 async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
@@ -499,6 +555,9 @@ export async function customEmojiPreviewViaUserSession(
 ): Promise<CustomEmojiPreview> {
   const cached = cachedPreview(String(documentId));
   if (cached) return cached;
+  const persistent = await cachedPersistentPreviews([String(documentId)]);
+  const persisted = persistent.get(String(documentId));
+  if (persisted) return persisted;
   try {
     return await withAuthorizedUserClient(tenantId, connectionId, async (client) => {
       console.info("CUSTOM_EMOJI_PREVIEW_REQUEST", { connection_id: connectionId, document_id: String(documentId) });
@@ -551,6 +610,13 @@ export async function customEmojiPreviewsViaUserSession(
     const cached = cachedPreview(id);
     if (cached) previews.push(cached);
     else missing.push(id);
+  }
+  if (missing.length) {
+    const persistent = await cachedPersistentPreviews(missing);
+    for (const [id, preview] of persistent) previews.push(preview);
+    for (let index = missing.length - 1; index >= 0; index -= 1) {
+      if (persistent.has(missing[index]!)) missing.splice(index, 1);
+    }
   }
   if (missing.length) {
     await withAuthorizedUserClient(tenantId, connectionId, async (client) => {
@@ -1859,6 +1925,7 @@ export async function sendViaUserSession(
     try {
       await validateCustomEmojiEntities(client, message);
       const text = sendText(message);
+      logOutgoingEntities("direct_target", tenantId, connectionId, message);
       await client.sendMessage(target, {
         ...(text ? { message: text } : {}),
         ...(message.media_url ? { file: message.media_url } : {}),
@@ -1918,6 +1985,7 @@ export async function sendGroupViaUserSession(
       }
       await validateCustomEmojiEntities(client, message);
       const text = sendText(message);
+      logOutgoingEntities("group", tenantId, connectionId, message);
       await client.sendMessage(entity, {
         ...(text ? { message: text } : {}),
         ...(message.media_url ? { file: message.media_url } : {}),
@@ -1969,6 +2037,7 @@ export async function sendDirectViaUserSession(
       });
       await validateCustomEmojiEntities(client, message);
       const text = sendText(message);
+      logOutgoingEntities("dm", tenantId, connectionId, message);
       await client.sendMessage(entity, {
         ...(text ? { message: text } : {}),
         ...(message.media_url ? { file: message.media_url } : {}),

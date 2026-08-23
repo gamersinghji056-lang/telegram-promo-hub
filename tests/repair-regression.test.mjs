@@ -435,3 +435,42 @@ test("telegram session operations are serialized and invalid auth stays out of c
   assert(telegram.includes("session_error_code: \"AUTH_KEY_UNREGISTERED\""));
   assert(health.includes("errorCode !== \"AUTH_KEY_UNREGISTERED\""));
 });
+
+test("campaign message entities are canonical from composer through worker send", () => {
+  const entities = read("src/lib/message-entities.ts");
+  const route = read("src/routes/mini-app.$section.tsx");
+  const customer = read("src/lib/customer-data.server.ts");
+  const worker = read("src/lib/campaign-worker.server.ts");
+  const telegram = read("src/lib/telegram-user-session.server.ts");
+  assert(entities.includes("export type CanonicalMessageEntity"));
+  assert(entities.includes("export function utf16Offset"));
+  assert(entities.includes("replaceTextAndShiftEntities"));
+  assert(entities.includes("reconcileEntitiesAfterTextChange"));
+  assert(route.includes("replaceTextAndShiftEntities"));
+  assert(route.includes("reconcileEntitiesAfterTextChange"));
+  assert(!route.includes("if ((props.entities ?? []).length) props.setEntities([])"));
+  assert(route.includes("selectedEmojiIds"));
+  assert(customer.includes("message_entities: normalizedMessage.entities"));
+  assert(worker.includes("message_entities"));
+  assert(worker.includes("normalizeMessageEntities("));
+  assert(telegram.includes("MessageEntityBold"));
+  assert(telegram.includes("MessageEntityItalic"));
+  assert(telegram.includes("MessageEntityUnderline"));
+  assert(telegram.includes("MessageEntityStrike"));
+  assert(telegram.includes("MessageEntitySpoiler"));
+  assert(telegram.includes("MessageEntityTextUrl"));
+  assert(telegram.includes("MessageEntityCustomEmoji"));
+  assert(telegram.includes("TELEGRAM_SEND_ENTITIES"));
+});
+
+test("custom emoji previews use persistent cache before Telegram downloads", () => {
+  const telegram = read("src/lib/telegram-user-session.server.ts");
+  const migration = read("supabase/migrations/20260822234500_custom_emoji_preview_cache.sql");
+  assert(migration.includes("CREATE TABLE IF NOT EXISTS public.custom_emoji_preview_cache"));
+  assert(migration.includes("document_id text PRIMARY KEY"));
+  assert(migration.includes("expires_at"));
+  assert(telegram.includes("cachedPersistentPreviews"));
+  assert(telegram.includes("storePersistentPreview"));
+  assert(telegram.includes(".from(\"custom_emoji_preview_cache\")"));
+  assert(telegram.includes("CUSTOM_EMOJI_CACHE_HIT"));
+});
