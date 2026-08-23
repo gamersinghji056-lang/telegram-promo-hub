@@ -252,6 +252,7 @@ test("custom emoji document id stays in message entities through picker, draft, 
   const customerData = read("src/lib/customer-data.server.ts");
   const worker = read("src/lib/campaign-worker.server.ts");
   const telegram = read("src/lib/telegram-user-session.server.ts");
+  const diagnostic = read("src/routes/api/internal/entity-send-test.ts");
   assert(route.includes('type: "custom_emoji"'));
   assert(route.includes("document_id: String(item.document_id)"));
   assert(route.includes("messageEntities"));
@@ -442,6 +443,7 @@ test("campaign message entities are canonical from composer through worker send"
   const customer = read("src/lib/customer-data.server.ts");
   const worker = read("src/lib/campaign-worker.server.ts");
   const telegram = read("src/lib/telegram-user-session.server.ts");
+  const diagnostic = read("src/routes/api/internal/entity-send-test.ts");
   assert(entities.includes("export type CanonicalMessageEntity"));
   assert(entities.includes("export function utf16Offset"));
   assert(entities.includes("replaceTextAndShiftEntities"));
@@ -461,6 +463,10 @@ test("campaign message entities are canonical from composer through worker send"
   assert(telegram.includes("MessageEntityTextUrl"));
   assert(telegram.includes("MessageEntityCustomEmoji"));
   assert(telegram.includes("TELEGRAM_SEND_ENTITIES"));
+  assert(diagnostic.includes("CAMPAIGN_WORKER_KEY"));
+  assert(diagnostic.includes("sendViaUserSession"));
+  assert(diagnostic.includes('"me"'));
+  assert(diagnostic.includes("WPAY entity test"));
 });
 
 test("custom emoji previews use persistent cache before Telegram downloads", () => {

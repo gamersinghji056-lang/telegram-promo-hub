@@ -19,6 +19,7 @@ import { Route as MiniAppSectionRouteImport } from './routes/mini-app.$section'
 import { Route as MiniAppLoginRouteImport } from './routes/mini-app.login'
 import { Route as MiniAppRegisterRouteImport } from './routes/mini-app.register'
 import { Route as ApiInternalCampaignWorkerRouteImport } from './routes/api/internal/campaign-worker'
+import { Route as ApiInternalEntitySendTestRouteImport } from './routes/api/internal/entity-send-test'
 import { Route as ApiPublicTelegramWebhookRouteImport } from './routes/api/public/telegram/webhook'
 
 const IndexRoute = IndexRouteImport.update({
@@ -72,6 +73,12 @@ const ApiInternalCampaignWorkerRoute =
     path: '/api/internal/campaign-worker',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiInternalEntitySendTestRoute =
+  ApiInternalEntitySendTestRouteImport.update({
+    id: '/api/internal/entity-send-test',
+    path: '/api/internal/entity-send-test',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiPublicTelegramWebhookRoute =
   ApiPublicTelegramWebhookRouteImport.update({
     id: '/api/public/telegram/webhook',
@@ -90,6 +97,7 @@ export interface FileRoutesByFullPath {
   '/mini-app/register': typeof MiniAppRegisterRoute
   '/mini-app/': typeof MiniAppIndexRoute
   '/api/internal/campaign-worker': typeof ApiInternalCampaignWorkerRoute
+  '/api/internal/entity-send-test': typeof ApiInternalEntitySendTestRoute
   '/api/public/telegram/webhook': typeof ApiPublicTelegramWebhookRoute
 }
 export interface FileRoutesByTo {
@@ -102,6 +110,7 @@ export interface FileRoutesByTo {
   '/mini-app/register': typeof MiniAppRegisterRoute
   '/mini-app': typeof MiniAppIndexRoute
   '/api/internal/campaign-worker': typeof ApiInternalCampaignWorkerRoute
+  '/api/internal/entity-send-test': typeof ApiInternalEntitySendTestRoute
   '/api/public/telegram/webhook': typeof ApiPublicTelegramWebhookRoute
 }
 export interface FileRoutesById {
@@ -116,6 +125,7 @@ export interface FileRoutesById {
   '/mini-app/register': typeof MiniAppRegisterRoute
   '/mini-app/': typeof MiniAppIndexRoute
   '/api/internal/campaign-worker': typeof ApiInternalCampaignWorkerRoute
+  '/api/internal/entity-send-test': typeof ApiInternalEntitySendTestRoute
   '/api/public/telegram/webhook': typeof ApiPublicTelegramWebhookRoute
 }
 export interface FileRouteTypes {
@@ -131,6 +141,7 @@ export interface FileRouteTypes {
     | '/mini-app/register'
     | '/mini-app/'
     | '/api/internal/campaign-worker'
+    | '/api/internal/entity-send-test'
     | '/api/public/telegram/webhook'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -143,6 +154,7 @@ export interface FileRouteTypes {
     | '/mini-app/register'
     | '/mini-app'
     | '/api/internal/campaign-worker'
+    | '/api/internal/entity-send-test'
     | '/api/public/telegram/webhook'
   id:
     | '__root__'
@@ -156,6 +168,7 @@ export interface FileRouteTypes {
     | '/mini-app/register'
     | '/mini-app/'
     | '/api/internal/campaign-worker'
+    | '/api/internal/entity-send-test'
     | '/api/public/telegram/webhook'
   fileRoutesById: FileRoutesById
 }
@@ -164,6 +177,7 @@ export interface RootRouteChildren {
   AdminRoute: typeof AdminRouteWithChildren
   MiniAppRoute: typeof MiniAppRouteWithChildren
   ApiInternalCampaignWorkerRoute: typeof ApiInternalCampaignWorkerRoute
+  ApiInternalEntitySendTestRoute: typeof ApiInternalEntitySendTestRoute
   ApiPublicTelegramWebhookRoute: typeof ApiPublicTelegramWebhookRoute
 }
 
@@ -239,6 +253,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiInternalCampaignWorkerRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/internal/entity-send-test': {
+      id: '/api/internal/entity-send-test'
+      path: '/api/internal/entity-send-test'
+      fullPath: '/api/internal/entity-send-test'
+      preLoaderRoute: typeof ApiInternalEntitySendTestRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/telegram/webhook': {
       id: '/api/public/telegram/webhook'
       path: '/api/public/telegram/webhook'
@@ -283,6 +304,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminRoute: AdminRouteWithChildren,
   MiniAppRoute: MiniAppRouteWithChildren,
   ApiInternalCampaignWorkerRoute: ApiInternalCampaignWorkerRoute,
+  ApiInternalEntitySendTestRoute: ApiInternalEntitySendTestRoute,
   ApiPublicTelegramWebhookRoute: ApiPublicTelegramWebhookRoute,
 }
 export const routeTree = rootRouteImport
