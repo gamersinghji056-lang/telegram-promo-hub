@@ -567,3 +567,45 @@ test("custom emoji picker uses Mini App lifetime cache and visible-only TGS play
   assert(player.includes("if (!visible) return"));
   assert(player.includes("animation?.destroy()"));
 });
+
+test("campaign composer renders a Telegram-style preview from canonical entities", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  assert(route.includes("function TelegramMessagePreview"));
+  assert(route.includes("function RenderedTelegramText"));
+  assert(route.includes("normalizeMessageEntities(entities ?? [], text ?? \"\")"));
+  assert(route.includes("font-bold"));
+  assert(route.includes("italic"));
+  assert(route.includes("underline underline-offset-2"));
+  assert(route.includes("line-through"));
+  assert(route.includes("function TelegramSpoiler"));
+  assert(route.includes("Reveal spoiler"));
+  assert(route.includes("text-sky-700 underline"));
+  assert(route.includes("Telegram Preview"));
+  assert(!route.includes("function Preview({ message"));
+});
+
+test("composer custom emoji preview uses media cache without changing canonical payload", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  const customer = read("src/lib/customer-data.server.ts");
+  assert(route.includes("composerPreviewCacheRef"));
+  assert(route.includes("getCustomEmojiPreviews"));
+  assert(route.includes("function TelegramCustomEmoji"));
+  assert(route.includes("<TgsPlayer"));
+  assert(route.includes("<video"));
+  assert(route.includes("<img"));
+  assert(route.includes("Premium emoji preview unavailable"));
+  assert(route.includes("document_id: String(item.document_id)"));
+  assert(route.includes("composerPreviewCacheRef.current[String(item.document_id)] = preview"));
+  assert(!customer.includes("preview_url"));
+});
+
+test("DM and Group campaign composers share the same visual preview and canonical send payload", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  assert.equal((route.match(/<MessageForm/g) ?? []).length, 2);
+  assert.equal((route.match(/<TelegramMessagePreview/g) ?? []).length, 1);
+  assert(route.includes("entities={messageEntities}"));
+  assert(route.includes("setEntities={setMessageEntities}"));
+  assert(route.includes("entities: messageEntities"));
+  assert(route.includes("reconcileEntitiesAfterTextChange"));
+  assert(route.includes("replaceTextAndShiftEntities"));
+});

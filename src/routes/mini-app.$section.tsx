@@ -2822,12 +2822,6 @@ function DMCampaign({ auth, data, actions, reload, setNotice, actionBusy, runAct
           <input className={inputClass()} type="number" min={1} value={maxDelay} onChange={(e) => setMaxDelay(Number(e.target.value))} />
         </label>
       </section>
-      <Preview
-        message={message}
-        mediaUrl={mediaUrl}
-        buttonText={buttonText}
-        buttonUrl={buttonUrl}
-      />
       <Button
         className="w-full"
         type="submit"
@@ -2977,12 +2971,6 @@ function GroupCampaign({ auth, data, actions, reload, setNotice, actionBusy, run
           <input className={inputClass()} type="number" min={1} value={cycleDelay} onChange={(e) => setCycleDelay(Number(e.target.value))} />
         </label>
       </section>
-      <Preview
-        message={message}
-        mediaUrl={mediaUrl}
-        buttonText={buttonText}
-        buttonUrl={buttonUrl}
-      />
       <Button
         className="w-full"
         type="submit"
@@ -3437,8 +3425,11 @@ function MessageForm(props: any) {
   const [emojiPreviewLoading, setEmojiPreviewLoading] = useState<Record<string, boolean>>({});
   const [emojiPackErrors, setEmojiPackErrors] = useState<Record<string, string>>({});
   const [selectedEmojiIds, setSelectedEmojiIds] = useState<Record<string, boolean>>({});
+  const [composerPreviews, setComposerPreviews] = useState<Record<string, any>>({});
+  const [composerPreviewLoading, setComposerPreviewLoading] = useState<Record<string, boolean>>({});
   const emojiRequestRef = useRef(0);
   const emojiCatalogCacheRef = useRef<Record<string, any>>({});
+  const composerPreviewCacheRef = useRef<Record<string, any>>({});
   const pickerTabRef = useRef(pickerTab);
   const selectedEmojiPackRef = useRef<string | null>(selectedEmojiPack);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -3448,6 +3439,28 @@ function MessageForm(props: any) {
   useEffect(() => {
     selectedEmojiPackRef.current = selectedEmojiPack;
   }, [selectedEmojiPack]);
+  useEffect(() => {
+    const entities = normalizeMessageEntities(props.entities ?? [], props.message ?? "");
+    const ids = [...new Set(entities.filter((entity) => entity.type === "custom_emoji" && entity.document_id).map((entity) => String(entity.document_id)))];
+    const missing = ids.filter((id) => !composerPreviewCacheRef.current[id] && !composerPreviewLoading[id]);
+    if (!missing.length) return;
+    setComposerPreviewLoading((current) => ({ ...current, ...Object.fromEntries(missing.map((id) => [id, true])) }));
+    void props.actions.getCustomEmojiPreviews({
+      data: { auth: props.auth, connectionId: props.connectionId || null, documentIds: missing },
+    }).then((response: any) => {
+      const previews = Object.fromEntries((response?.previews ?? []).map((preview: any) => [String(preview.document_id), preview]));
+      composerPreviewCacheRef.current = { ...composerPreviewCacheRef.current, ...previews };
+      setComposerPreviews((current) => ({ ...current, ...previews }));
+    }).catch((error: unknown) => {
+      console.warn("CUSTOM_EMOJI_PREVIEW_ERROR", { stage: "composer_preview", error: error instanceof Error ? error.message : "Composer preview failed" });
+    }).finally(() => {
+      setComposerPreviewLoading((current) => {
+        const next = { ...current };
+        missing.forEach((id) => delete next[id]);
+        return next;
+      });
+    });
+  }, [props.message, props.entities, props.connectionId]);
   function packKeyFor(tab: string) {
     return `${tab}Packs`;
   }
@@ -3601,6 +3614,17 @@ function MessageForm(props: any) {
       fallback,
       premium_required: item.premium_required === true,
     }]);
+    if (item.preview_url) {
+      const preview = {
+        document_id: String(item.document_id),
+        data_url: item.preview_url,
+        format: item.preview_format,
+        mime_type: item.mime_type,
+        fallback,
+      };
+      composerPreviewCacheRef.current[String(item.document_id)] = preview;
+      setComposerPreviews((current) => ({ ...current, [String(item.document_id)]: preview }));
+    }
     setSelectedEmojiIds((currentIds) => ({ ...currentIds, [String(item.document_id)]: true }));
     setPickerOpen(false);
     requestAnimationFrame(() => {
@@ -3649,6 +3673,15 @@ function MessageForm(props: any) {
           props.setMessage(nextText);
         }}
         placeholder="Message text"
+      />
+      <TelegramMessagePreview
+        text={props.message ?? ""}
+        entities={props.entities ?? []}
+        emojiPreviews={composerPreviews}
+        emojiLoading={composerPreviewLoading}
+        mediaUrl={props.mediaUrl}
+        buttonText={props.buttonText}
+        buttonUrl={props.buttonUrl}
       />
       <div className="flex flex-wrap gap-2">
         {[
@@ -3900,16 +3933,129 @@ function CustomEmojiPicker({
   );
 }
 
-function Preview({ message, mediaUrl, buttonText, buttonUrl }: any) {
+function TelegramMessagePreview({ text, entities, emojiPreviews, emojiLoading, mediaUrl, buttonText, buttonUrl }: any) {
+  const normalized = normalizeMessageEntities(entities ?? [], text ?? "");
   return (
-    <section className={panelClass()}>
-      <p className="text-xs font-semibold uppercase text-muted-foreground">Preview</p>
-      <p className="mt-3 whitespace-pre-wrap text-sm">{message || "No text"}</p>
-      {mediaUrl ? <p className="mt-2 break-all text-xs text-primary">{mediaUrl}</p> : null}
-      {buttonText && buttonUrl ? (
-        <p className="mt-2 text-xs text-primary">{`${buttonText} -> ${buttonUrl}`}</p>
-      ) : null}
+    <section className="rounded-none border border-border bg-[#d7e6f3] p-3">
+      <p className="mb-2 text-xs font-semibold uppercase text-slate-700">Telegram Preview</p>
+      <div className="max-w-[92%] rounded-lg rounded-bl-sm bg-white px-3 py-2 text-sm leading-relaxed text-slate-950 shadow-sm">
+        {text ? (
+          <RenderedTelegramText
+            text={text}
+            entities={normalized}
+            emojiPreviews={emojiPreviews ?? {}}
+            emojiLoading={emojiLoading ?? {}}
+          />
+        ) : (
+          <span className="text-slate-500">No text</span>
+        )}
+        {mediaUrl ? <p className="mt-2 break-all text-xs text-sky-700">{mediaUrl}</p> : null}
+        {buttonText && buttonUrl ? (
+          <a className="mt-2 block rounded border border-sky-200 px-2 py-1 text-center text-xs font-semibold text-sky-700" href={buttonUrl} target="_blank" rel="noreferrer">
+            {buttonText}
+          </a>
+        ) : null}
+      </div>
     </section>
+  );
+}
+
+function RenderedTelegramText({ text, entities, emojiPreviews, emojiLoading }: any) {
+  const out: any[] = [];
+  const custom = (entities ?? []).filter((entity: any) => entity.type === "custom_emoji" && entity.document_id);
+  let pos = 0;
+  let key = 0;
+  while (pos < text.length) {
+    const emoji = custom.find((entity: any) => entity.offset === pos);
+    if (emoji) {
+      out.push(
+        <TelegramCustomEmoji
+          key={`emoji-${key++}`}
+          entity={emoji}
+          preview={emojiPreviews?.[String(emoji.document_id)]}
+          loading={emojiLoading?.[String(emoji.document_id)]}
+        />,
+      );
+      pos += emoji.length;
+      continue;
+    }
+    const nextEmoji = custom.filter((entity: any) => entity.offset > pos).sort((a: any, b: any) => a.offset - b.offset)[0];
+    const boundary = Math.min(nextEmoji?.offset ?? text.length, nextEntityBoundary(text, entities, pos));
+    const chunk = text.slice(pos, boundary);
+    out.push(
+      <TelegramFormattedSpan key={`span-${key++}`} text={chunk} active={activeEntities(entities, pos, boundary)} />,
+    );
+    pos = boundary;
+  }
+  return <p className="whitespace-pre-wrap break-words">{out}</p>;
+}
+
+function nextEntityBoundary(text: string, entities: any[], pos: number) {
+  const points = [text.length];
+  for (const entity of entities ?? []) {
+    if (entity.type === "custom_emoji") continue;
+    const start = Number(entity.offset ?? 0);
+    const end = start + Number(entity.length ?? 0);
+    if (start > pos) points.push(start);
+    if (end > pos) points.push(end);
+  }
+  return Math.min(...points);
+}
+
+function activeEntities(entities: any[], start: number, end: number) {
+  return (entities ?? []).filter((entity) => entity.type !== "custom_emoji" && entity.offset <= start && entity.offset + entity.length >= end);
+}
+
+function TelegramFormattedSpan({ text, active }: any) {
+  const classes = [
+    active.some((entity: any) => entity.type === "bold") ? "font-bold" : "",
+    active.some((entity: any) => entity.type === "italic") ? "italic" : "",
+    active.some((entity: any) => entity.type === "underline") ? "underline underline-offset-2" : "",
+    active.some((entity: any) => entity.type === "strikethrough") ? "line-through" : "",
+    active.some((entity: any) => entity.type === "text_url") ? "text-sky-700 underline underline-offset-2" : "",
+  ].filter(Boolean).join(" ");
+  const link = active.find((entity: any) => entity.type === "text_url" && entity.url);
+  const content = active.some((entity: any) => entity.type === "spoiler") ? <TelegramSpoiler>{text}</TelegramSpoiler> : text;
+  if (link) {
+    return (
+      <a className={classes} href={link.url} target="_blank" rel="noreferrer" onClick={(event) => event.preventDefault()}>
+        {content}
+      </a>
+    );
+  }
+  return <span className={classes}>{content}</span>;
+}
+
+function TelegramSpoiler({ children }: any) {
+  const [revealed, setRevealed] = useState(false);
+  return (
+    <button
+      type="button"
+      className={`rounded px-0.5 ${revealed ? "bg-slate-200 text-slate-950" : "bg-slate-800 text-transparent"}`}
+      onClick={() => setRevealed((value) => !value)}
+      aria-label={revealed ? "Hide spoiler" : "Reveal spoiler"}
+    >
+      {children}
+    </button>
+  );
+}
+
+function TelegramCustomEmoji({ entity, preview, loading }: any) {
+  const fallback = entity.fallback || "*";
+  if (preview?.data_url && preview.format === "tgs") {
+    return <TgsPlayer className="mx-0.5 inline-block size-5 align-[-0.25em]" src={preview.data_url} fallback={fallback} />;
+  }
+  if (preview?.data_url && (preview.format === "webm" || preview.mime_type === "video/webm")) {
+    return <video className="mx-0.5 inline-block size-5 align-[-0.25em]" src={preview.data_url} muted playsInline autoPlay loop />;
+  }
+  if (preview?.data_url) {
+    return <img className="mx-0.5 inline-block size-5 object-contain align-[-0.25em]" src={preview.data_url} alt={fallback} />;
+  }
+  return (
+    <span className={`mx-0.5 inline-flex items-center gap-0.5 align-[-0.15em] ${loading ? "opacity-60" : "text-warning"}`} title={loading ? "Loading premium emoji preview" : "Premium emoji preview unavailable"}>
+      <span>{fallback}</span>
+      {!loading ? <AlertTriangle className="size-3" aria-hidden="true" /> : null}
+    </span>
   );
 }
 
