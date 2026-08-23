@@ -16,6 +16,8 @@ const sessionLocks = new Map<string, Promise<void>>();
 const PREVIEW_CACHE_TTL_MS = 10 * 60_000;
 const PREVIEW_BATCH_CONCURRENCY = 6;
 const PERSISTENT_PREVIEW_CACHE_TTL_MS = 7 * 86400_000;
+const CATALOG_CACHE_STALE_MS = 30 * 60_000;
+const CATALOG_CACHE_EXPIRES_MS = 7 * 86400_000;
 const previewCache = new Map<string, { expiresAt: number; value: CustomEmojiPreview }>();
 type ConnectionRow = {
   id: string;
@@ -144,6 +146,52 @@ export type CustomEmojiPreview = {
   data_url: string;
   fallback: string;
 };
+
+function catalogCacheKey(tenantId: string, connectionId: string, tab: string, query: string) {
+  return [tenantId, connectionId, tab, query.trim().toLowerCase()].join(":");
+}
+
+async function readCatalogCache(cacheKey: string) {
+  const { data, error } = await db()
+    .from("custom_emoji_catalog_cache")
+    .select("catalog,stale_at,expires_at")
+    .eq("cache_key", cacheKey)
+    .gt("expires_at", new Date().toISOString())
+    .maybeSingle();
+  if (error) {
+    console.warn("CUSTOM_EMOJI_CATALOG_CACHE_ERROR", { stage: "read", error: errorMessage(error) });
+    return null;
+  }
+  if (!data?.catalog) return null;
+  return {
+    catalog: data.catalog as CustomEmojiCatalog,
+    stale: data.stale_at ? new Date(data.stale_at as string) <= new Date() : true,
+  };
+}
+
+async function writeCatalogCache(input: {
+  tenantId: string;
+  connectionId: string;
+  tab: string;
+  query: string;
+  catalog: CustomEmojiCatalog;
+}) {
+  const now = Date.now();
+  const { error } = await db()
+    .from("custom_emoji_catalog_cache")
+    .upsert({
+      cache_key: catalogCacheKey(input.tenantId, input.connectionId, input.tab, input.query),
+      tenant_id: input.tenantId,
+      connection_id: input.connectionId,
+      tab: input.tab,
+      query: input.query,
+      catalog: input.catalog,
+      updated_at: new Date(now).toISOString(),
+      stale_at: new Date(now + CATALOG_CACHE_STALE_MS).toISOString(),
+      expires_at: new Date(now + CATALOG_CACHE_EXPIRES_MS).toISOString(),
+    }, { onConflict: "cache_key" });
+  if (error) console.warn("CUSTOM_EMOJI_CATALOG_CACHE_ERROR", { stage: "write", error: errorMessage(error) });
+}
 
 async function withSessionLock<T>(tenantId: string, connectionId: string, fn: () => Promise<T>) {
   const key = `${tenantId}:${connectionId}`;
@@ -455,10 +503,49 @@ export async function listCustomEmojiCatalogViaUserSession(
   options: { query?: string | null; tab?: string | null } = {},
 ): Promise<CustomEmojiCatalog> {
   const started = Date.now();
+  const query = options.query?.trim() ?? "";
+  const tab = query ? "search" : (options.tab ?? "recent");
+  const cacheKey = catalogCacheKey(tenantId, connectionId, tab, query);
+  const cached = await readCatalogCache(cacheKey);
+  if (cached) {
+    console.info("CUSTOM_EMOJI_CATALOG_CACHE_HIT", {
+      connection_id: connectionId,
+      tab,
+      query: Boolean(query),
+      stale: cached.stale,
+      ms: Date.now() - started,
+    });
+    if (cached.stale) {
+      void refreshCustomEmojiCatalogCache(tenantId, connectionId, tab, query);
+    }
+    return cached.catalog;
+  }
+  console.info("CUSTOM_EMOJI_CATALOG_CACHE_MISS", { connection_id: connectionId, tab, query: Boolean(query) });
+  const catalog = await loadCustomEmojiCatalogFromTelegram(tenantId, connectionId, tab, query, started);
+  void writeCatalogCache({ tenantId, connectionId, tab, query, catalog });
+  return catalog;
+}
+
+async function refreshCustomEmojiCatalogCache(tenantId: string, connectionId: string, tab: string, query: string) {
+  const started = Date.now();
+  try {
+    const catalog = await loadCustomEmojiCatalogFromTelegram(tenantId, connectionId, tab, query, started);
+    await writeCatalogCache({ tenantId, connectionId, tab, query, catalog });
+    console.info("CUSTOM_EMOJI_CATALOG_REFRESH_MS", { connection_id: connectionId, tab, query: Boolean(query), ms: Date.now() - started });
+  } catch (error) {
+    console.warn("CUSTOM_EMOJI_CATALOG_REFRESH_FAILED", { connection_id: connectionId, tab, query: Boolean(query), error: errorMessage(error) });
+  }
+}
+
+async function loadCustomEmojiCatalogFromTelegram(
+  tenantId: string,
+  connectionId: string,
+  tab: string,
+  query: string,
+  started = Date.now(),
+): Promise<CustomEmojiCatalog> {
   return withAuthorizedUserClient(tenantId, connectionId, async (client) => {
     const me = (await client.getMe()) as Api.User & { premium?: boolean };
-    const query = options.query?.trim() ?? "";
-    const tab = query ? "search" : (options.tab ?? "recent");
     const catalog: CustomEmojiCatalog = {
       sessionPremium: me.premium === true,
       previewConnectionId: connectionId,

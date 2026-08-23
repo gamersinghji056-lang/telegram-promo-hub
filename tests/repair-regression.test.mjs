@@ -480,3 +480,19 @@ test("custom emoji previews use persistent cache before Telegram downloads", () 
   assert(telegram.includes(".from(\"custom_emoji_preview_cache\")"));
   assert(telegram.includes("CUSTOM_EMOJI_CACHE_HIT"));
 });
+
+test("custom emoji catalog uses persistent stale while revalidate cache", () => {
+  const telegram = read("src/lib/telegram-user-session.server.ts");
+  const migration = read("supabase/migrations/20260823093000_custom_emoji_catalog_cache.sql");
+  assert(migration.includes("CREATE TABLE IF NOT EXISTS public.custom_emoji_catalog_cache"));
+  assert(migration.includes("catalog jsonb NOT NULL"));
+  assert(migration.includes("stale_at"));
+  assert(migration.includes("expires_at"));
+  assert(telegram.includes("catalogCacheKey"));
+  assert(telegram.includes("readCatalogCache"));
+  assert(telegram.includes("writeCatalogCache"));
+  assert(telegram.includes("refreshCustomEmojiCatalogCache"));
+  assert(telegram.includes("CUSTOM_EMOJI_CATALOG_CACHE_HIT"));
+  assert(telegram.includes("CUSTOM_EMOJI_CATALOG_CACHE_MISS"));
+  assert(telegram.includes("CUSTOM_EMOJI_CATALOG_REFRESH_MS"));
+});
