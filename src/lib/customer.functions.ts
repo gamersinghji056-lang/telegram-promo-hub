@@ -450,7 +450,7 @@ export const createCampaign = createServerFn({ method: "POST" })
         message: {
           text?: string;
           entities?: {
-            type: "custom_emoji" | "bold" | "italic" | "underline" | "strikethrough" | "spoiler" | "text_link";
+            type: "custom_emoji" | "bold" | "italic" | "underline" | "strikethrough" | "spoiler" | "text_url";
             offset: number;
             length: number;
             document_id?: string;
@@ -500,7 +500,7 @@ export const updateCampaign = createServerFn({ method: "POST" })
         message: {
           text?: string;
           entities?: {
-            type: "custom_emoji" | "bold" | "italic" | "underline" | "strikethrough" | "spoiler" | "text_link";
+            type: "custom_emoji" | "bold" | "italic" | "underline" | "strikethrough" | "spoiler" | "text_url";
             offset: number;
             length: number;
             document_id?: string;

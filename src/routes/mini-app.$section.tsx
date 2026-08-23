@@ -3438,6 +3438,7 @@ function MessageForm(props: any) {
   const [emojiPackErrors, setEmojiPackErrors] = useState<Record<string, string>>({});
   const [selectedEmojiIds, setSelectedEmojiIds] = useState<Record<string, boolean>>({});
   const emojiRequestRef = useRef(0);
+  const emojiCatalogCacheRef = useRef<Record<string, any>>({});
   const pickerTabRef = useRef(pickerTab);
   const selectedEmojiPackRef = useRef<string | null>(selectedEmojiPack);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -3450,6 +3451,9 @@ function MessageForm(props: any) {
   function packKeyFor(tab: string) {
     return `${tab}Packs`;
   }
+  function emojiCatalogCacheKey(tab: string) {
+    return `${props.connectionId || "auto"}:${tab}:${tab === "search" ? emojiSearch.trim().toLowerCase() : ""}`;
+  }
   function tabItems(catalog: any, tab: string, packId?: string | null) {
     if (tab === "categories") return [];
     const packs = catalog?.[packKeyFor(tab)] ?? [];
@@ -3461,6 +3465,19 @@ function MessageForm(props: any) {
   }
   async function loadEmojiCatalog(nextTab = pickerTab) {
     const requestId = ++emojiRequestRef.current;
+    const cachedCatalog = emojiCatalogCacheRef.current[emojiCatalogCacheKey(nextTab)];
+    if (cachedCatalog) {
+      const packs = cachedCatalog?.[packKeyFor(nextTab)] ?? [];
+      const packId = packs[0]?.id ?? null;
+      selectedEmojiPackRef.current = packId;
+      setSelectedEmojiPack(packId);
+      setEmojiCatalog(cachedCatalog);
+      setEmojiLoading(false);
+      setEmojiError("");
+      setEmojiVisibleCount(emojiPageSize);
+      void hydrateEmojiPreviews(cachedCatalog, nextTab, emojiPageSize, requestId, packId, true);
+      return;
+    }
     setEmojiLoading(true);
     setEmojiError("");
     setEmojiVisibleCount(emojiPageSize);
@@ -3474,6 +3491,7 @@ function MessageForm(props: any) {
       const packId = packs[0]?.id ?? null;
       selectedEmojiPackRef.current = packId;
       setSelectedEmojiPack(packId);
+      emojiCatalogCacheRef.current[emojiCatalogCacheKey(nextTab)] = result;
       setEmojiCatalog(result);
       setEmojiLoading(false);
       void hydrateEmojiPreviews(result, nextTab, emojiPageSize, requestId, packId, true);
@@ -3514,6 +3532,7 @@ function MessageForm(props: any) {
       if (requestId !== emojiRequestRef.current || nextTab !== pickerTabRef.current || packId !== selectedEmojiPackRef.current) return result;
       const byId = new Map((response?.previews ?? []).map((preview: any) => [String(preview.document_id), preview]));
       const nextCatalog = ids.reduce((catalog: any, id: string) => mergePreview(catalog, nextTab, id, byId.get(id) ?? null), result);
+      emojiCatalogCacheRef.current[emojiCatalogCacheKey(nextTab)] = nextCatalog;
       setEmojiCatalog(nextCatalog);
       if (prefetch) {
         window.setTimeout(() => {
@@ -3589,14 +3608,14 @@ function MessageForm(props: any) {
       node?.setSelectionRange(start + fallback.length, start + fallback.length);
     });
   }
-  function applyEntity(type: "bold" | "italic" | "underline" | "strikethrough" | "spoiler" | "text_link") {
+  function applyEntity(type: "bold" | "italic" | "underline" | "strikethrough" | "spoiler" | "text_url") {
     const node = textareaRef.current;
     if (!node) return;
     const start = node.selectionStart;
     const end = node.selectionEnd;
     if (start === end) return;
     const entity: any = { type, offset: utf16Offset(props.message ?? "", start), length: utf16Length((props.message ?? "").slice(start, end)) };
-    if (type === "text_link") {
+    if (type === "text_url") {
       const url = prompt("Link URL");
       if (!url) return;
       entity.url = url;
@@ -3638,7 +3657,7 @@ function MessageForm(props: any) {
           ["underline", "U"],
           ["strikethrough", "S"],
           ["spoiler", "Spoiler"],
-          ["text_link", "Link"],
+          ["text_url", "Link"],
         ].map(([type, label]) => (
           <Button key={type} type="button" size="sm" variant="secondary" onClick={() => applyEntity(type as any)}>
             {label}

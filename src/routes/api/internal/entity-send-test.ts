@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { sendViaUserSession } from "@/lib/telegram-user-session.server";
+import { sendAndRefetchViaUserSession } from "@/lib/telegram-user-session.server";
 import { utf16Length, utf16Offset, type CanonicalMessageEntity } from "@/lib/message-entities";
 
 function authorized(request: Request) {
@@ -42,17 +42,19 @@ export const Route = createFileRoute("/api/internal/entity-send-test")({
           entity("underline", text, "UNDERLINE"),
           entity("strikethrough", text, "STRIKE"),
           entity("spoiler", text, "SPOILER"),
-          entity("text_link", text, "LINK", { url: "https://t.me/" }),
+          entity("text_url", text, "LINK", { url: "https://t.me/" }),
           entity("custom_emoji", text, fallback, {
             document_id: String(body.documentId),
             fallback,
             premium_required: true,
           }),
         ];
-        await sendViaUserSession(body.tenantId, body.connectionId, "me", { text, entities });
+        const result = await sendAndRefetchViaUserSession(body.tenantId, body.connectionId, "me", { text, entities });
         return Response.json({
           ok: true,
           sent_to: "self_saved_messages",
+          sent: result.sent,
+          refetched: result.refetched,
           entities: entities.map((row) => ({
             type: row.type,
             offset: row.offset,

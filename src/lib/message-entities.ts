@@ -1,5 +1,5 @@
 export type CanonicalMessageEntity = {
-  type: "custom_emoji" | "bold" | "italic" | "underline" | "strikethrough" | "spoiler" | "text_link";
+  type: "custom_emoji" | "bold" | "italic" | "underline" | "strikethrough" | "spoiler" | "text_url";
   offset: number;
   length: number;
   document_id?: string;
@@ -22,6 +22,14 @@ function clampInteger(value: unknown, min = 0) {
   return Math.max(min, Math.trunc(parsed));
 }
 
+function normalizeEntityType(type: string): CanonicalMessageEntity["type"] | null {
+  if (type === "text_link") return "text_url";
+  if (["custom_emoji", "bold", "italic", "underline", "strikethrough", "spoiler", "text_url"].includes(type)) {
+    return type as CanonicalMessageEntity["type"];
+  }
+  return null;
+}
+
 export function normalizeMessageEntities(entities: unknown, text = ""): CanonicalMessageEntity[] {
   const textLength = utf16Length(text);
   if (!Array.isArray(entities)) return [];
@@ -29,8 +37,8 @@ export function normalizeMessageEntities(entities: unknown, text = ""): Canonica
     .map((entity): CanonicalMessageEntity | null => {
       if (!entity || typeof entity !== "object") return null;
       const row = entity as Record<string, unknown>;
-      const type = String(row["type"] ?? "");
-      if (!["custom_emoji", "bold", "italic", "underline", "strikethrough", "spoiler", "text_link"].includes(type)) return null;
+      const type = normalizeEntityType(String(row["type"] ?? ""));
+      if (!type) return null;
       const offset = clampInteger(row["offset"]);
       const length = clampInteger(row["length"]);
       if (!length || offset >= textLength) return null;
@@ -46,7 +54,7 @@ export function normalizeMessageEntities(entities: unknown, text = ""): Canonica
         next.fallback = typeof row["fallback"] === "string" ? row["fallback"] : undefined;
         next.premium_required = row["premium_required"] === true;
       }
-      if (type === "text_link") {
+      if (type === "text_url") {
         if (!row["url"]) return null;
         next.url = String(row["url"]);
       }

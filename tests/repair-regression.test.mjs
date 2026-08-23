@@ -464,7 +464,7 @@ test("campaign message entities are canonical from composer through worker send"
   assert(telegram.includes("MessageEntityCustomEmoji"));
   assert(telegram.includes("TELEGRAM_SEND_ENTITIES"));
   assert(diagnostic.includes("CAMPAIGN_WORKER_KEY"));
-  assert(diagnostic.includes("sendViaUserSession"));
+  assert(diagnostic.includes("sendAndRefetchViaUserSession"));
   assert(diagnostic.includes('"me"'));
   assert(diagnostic.includes("WPAY entity test"));
 });
@@ -527,7 +527,7 @@ test("controlled telegram diagnostics preserve canonical entities and returned T
   assert(adminData.includes('"underline"'));
   assert(adminData.includes('"strikethrough"'));
   assert(adminData.includes('"spoiler"'));
-  assert(adminData.includes('"text_link"'));
+  assert(adminData.includes('"text_url"'));
   assert(adminData.includes('"custom_emoji"'));
   assert(adminData.includes("customEmojiDocumentId"));
   assert(adminData.includes("utf16Length"));
@@ -538,4 +538,32 @@ test("controlled telegram diagnostics preserve canonical entities and returned T
   assert(telegram.includes("MessageEntityCustomEmoji"));
   assert(telegram.includes("document_id"));
   assert(worker.includes("sentEntities"));
+});
+
+test("canonical entities use text_url, preserve legacy text_link and keep 64-bit custom emoji ids lossless", () => {
+  const entities = read("src/lib/message-entities.ts");
+  const telegram = read("src/lib/telegram-user-session.server.ts");
+  const route = read("src/routes/mini-app.$section.tsx");
+  const diagnostic = read("src/routes/api/internal/entity-send-test.ts");
+  assert(entities.includes('type === "text_link") return "text_url"'));
+  assert(entities.includes('"text_url"'));
+  assert(!telegram.includes("Number(entity.document_id)"));
+  assert(!telegram.includes("parseInt(entity.document_id"));
+  assert(telegram.includes("bigInt(String(entity.document_id))"));
+  assert(telegram.includes("new Api.MessageEntityTextUrl"));
+  assert(telegram.includes('type: "text_url"'));
+  assert(route.includes('["text_url", "Link"]'));
+  assert(diagnostic.includes("sendAndRefetchViaUserSession"));
+  assert(diagnostic.includes("refetched"));
+});
+
+test("custom emoji picker uses Mini App lifetime cache and visible-only TGS playback", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  const player = read("src/components/tgs-player.tsx");
+  assert(route.includes("emojiCatalogCacheRef"));
+  assert(route.includes("emojiCatalogCacheKey"));
+  assert(route.includes("cachedCatalog"));
+  assert(player.includes("IntersectionObserver"));
+  assert(player.includes("if (!visible) return"));
+  assert(player.includes("animation?.destroy()"));
 });

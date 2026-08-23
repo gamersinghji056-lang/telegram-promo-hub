@@ -161,6 +161,11 @@ export type TelegramSendResult = {
   entities: TelegramSentEntitySummary[];
 };
 
+export type TelegramVerifiedSendResult = {
+  sent: TelegramSendResult;
+  refetched: TelegramSendResult | null;
+};
+
 function catalogCacheKey(tenantId: string, connectionId: string, tab: string, query: string) {
   return [tenantId, connectionId, tab, query.trim().toLowerCase()].join(":");
 }
@@ -246,7 +251,7 @@ function buildFormattingEntities(message: MessagePayload) {
     if (entity.type === "underline") return new Api.MessageEntityUnderline(base);
     if (entity.type === "strikethrough") return new Api.MessageEntityStrike(base);
     if (entity.type === "spoiler") return new Api.MessageEntitySpoiler(base);
-    if (entity.type === "text_link" && entity.url) return new Api.MessageEntityTextUrl({ ...base, url: entity.url });
+    if (entity.type === "text_url" && entity.url) return new Api.MessageEntityTextUrl({ ...base, url: entity.url });
     return null;
   }).filter(Boolean) as Api.TypeMessageEntity[];
 }
@@ -281,7 +286,7 @@ function sentEntitySummary(entity: Api.TypeMessageEntity): TelegramSentEntitySum
   if (entity instanceof Api.MessageEntityUnderline) return { type: "underline", ...base };
   if (entity instanceof Api.MessageEntityStrike) return { type: "strikethrough", ...base };
   if (entity instanceof Api.MessageEntitySpoiler) return { type: "spoiler", ...base };
-  if (entity instanceof Api.MessageEntityTextUrl) return { type: "text_link", ...base, has_url: Boolean(value.url) };
+  if (entity instanceof Api.MessageEntityTextUrl) return { type: "text_url", ...base, has_url: Boolean(value.url) };
   const named = entity as unknown as { className?: string; constructor?: { name?: string } };
   return { type: named.className ?? named.constructor?.name ?? "MessageEntity", ...base };
 }
@@ -298,6 +303,23 @@ function summarizeSentMessage(sent: unknown): TelegramSendResult {
     date: dateValue ? new Date(Number(dateValue) * 1000).toISOString() : null,
     entities,
   };
+}
+
+async function refetchSentMessage(client: TelegramClient, target: string | number, sent: TelegramSendResult) {
+  if (!sent.messageId) return null;
+  const messages = await client.getMessages(target, { ids: sent.messageId });
+  const refetched = Array.isArray(messages) ? messages[0] : null;
+  return refetched ? summarizeSentMessage(refetched) : null;
+}
+
+function logReturnedEntities(scope: string, tenantId: string, connectionId: string, result: TelegramSendResult) {
+  console.info("TELEGRAM_SEND_RETURNED_ENTITIES", {
+    scope,
+    tenant_id: tenantId,
+    connection_id: connectionId,
+    message_id: result.messageId,
+    entities: result.entities,
+  });
 }
 
 function customEmojiAttribute(doc: Api.TypeDocument) {
@@ -2077,7 +2099,9 @@ export async function sendViaUserSession(
         .update({ last_used_at: new Date().toISOString(), updated_at: new Date().toISOString() })
         .eq("id", connectionId)
         .eq("tenant_id", tenantId);
-      return summarizeSentMessage(sent);
+      const result = summarizeSentMessage(sent);
+      logReturnedEntities("direct_target", tenantId, connectionId, result);
+      return result;
     } catch (error) {
       const classified = classifyTelegramError(error);
       await recordSessionHealthEvidence({
@@ -2138,7 +2162,9 @@ export async function sendGroupViaUserSession(
         .update({ last_used_at: new Date().toISOString(), updated_at: new Date().toISOString() })
         .eq("id", connectionId)
         .eq("tenant_id", tenantId);
-      return summarizeSentMessage(sent);
+      const result = summarizeSentMessage(sent);
+      logReturnedEntities("group", tenantId, connectionId, result);
+      return result;
     } catch (error) {
       const classified = classifyTelegramError(error);
       await recordSessionHealthEvidence({
@@ -2191,7 +2217,9 @@ export async function sendDirectViaUserSession(
         .update({ last_used_at: new Date().toISOString(), updated_at: new Date().toISOString() })
         .eq("id", connectionId)
         .eq("tenant_id", tenantId);
-      return summarizeSentMessage(sent);
+      const result = summarizeSentMessage(sent);
+      logReturnedEntities("dm", tenantId, connectionId, result);
+      return result;
     } catch (error) {
       const classified = classifyTelegramError(error);
       await recordSessionHealthEvidence({
@@ -2212,5 +2240,35 @@ export async function sendDirectViaUserSession(
       });
       throw error;
     }
+  });
+}
+
+export async function sendAndRefetchViaUserSession(
+  tenantId: string,
+  connectionId: string,
+  target: string | number,
+  message: MessagePayload,
+): Promise<TelegramVerifiedSendResult> {
+  return withAuthorizedUserClient(tenantId, connectionId, async (client) => {
+    await validateCustomEmojiEntities(client, message);
+    const text = sendText(message);
+    logOutgoingEntities("verified_direct_target", tenantId, connectionId, message);
+    const sentMessage = await client.sendMessage(target, {
+      ...(text ? { message: text } : {}),
+      ...(message.media_url ? { file: message.media_url } : {}),
+      ...(message.entities?.length ? { formattingEntities: buildFormattingEntities(message) } : {}),
+      linkPreview: true,
+    });
+    const sent = summarizeSentMessage(sentMessage);
+    logReturnedEntities("verified_direct_target", tenantId, connectionId, sent);
+    const refetched = await refetchSentMessage(client, target, sent);
+    if (refetched) logReturnedEntities("verified_refetch", tenantId, connectionId, refetched);
+    await recordSessionHealthEvidence({ tenantId, connectionId, evidence: "SEND_OK", reason: "Verified message sent successfully" });
+    await db()
+      .from("telegram_connections")
+      .update({ last_used_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .eq("id", connectionId)
+      .eq("tenant_id", tenantId);
+    return { sent, refetched };
   });
 }

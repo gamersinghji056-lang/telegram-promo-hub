@@ -1183,7 +1183,7 @@ function diagnosticMessage(documentId: string, fallback: string, premiumRequired
   parts.push(" ");
   appendEntity(parts, entities, "spoiler", "Spoiler");
   parts.push(" ");
-  appendEntity(parts, entities, "text_link", "Text URL", { url: "https://telegram.org" });
+  appendEntity(parts, entities, "text_url", "Text URL", { url: "https://telegram.org" });
   parts.push(" Custom emoji: ");
   appendEntity(parts, entities, "custom_emoji", fallback || "*", {
     document_id: documentId,

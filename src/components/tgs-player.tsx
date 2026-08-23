@@ -27,8 +27,25 @@ function parseTgs(src: string) {
 export function TgsPlayer({ src, fallback = "⭐", className = "" }: TgsPlayerProps) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [failed, setFailed] = useState(false);
+  const [visible, setVisible] = useState(false);
 
   useEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setVisible(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => setVisible(entry?.isIntersecting === true),
+      { rootMargin: "96px" },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!visible) return;
     let cancelled = false;
     let animation: { destroy: () => void } | null = null;
     setFailed(false);
@@ -53,7 +70,7 @@ export function TgsPlayer({ src, fallback = "⭐", className = "" }: TgsPlayerPr
       cancelled = true;
       animation?.destroy();
     };
-  }, [src]);
+  }, [src, visible]);
 
   if (failed) return <span className={className}>{fallback}</span>;
   return <div ref={ref} className={className} aria-label={fallback} />;
