@@ -301,6 +301,14 @@ export const registerTelegramWebhook = createServerFn({ method: "POST" })
     return admin.adminRegisterWebhook(context.userId);
   });
 
+export const runTelegramDiagnostic = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((i: { targetType: "DM" | "GROUP" }) => i)
+  .handler(async ({ context, data }) => {
+    await admin.assertSuperAdmin(context.userId);
+    return admin.adminRunTelegramDiagnostic(context.userId, data.targetType);
+  });
+
 export const getLogs = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((i: { kind: "system" | "admin"; search?: string }) => i)

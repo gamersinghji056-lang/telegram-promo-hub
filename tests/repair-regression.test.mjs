@@ -496,3 +496,46 @@ test("custom emoji catalog uses persistent stale while revalidate cache", () => 
   assert(telegram.includes("CUSTOM_EMOJI_CATALOG_CACHE_MISS"));
   assert(telegram.includes("CUSTOM_EMOJI_CATALOG_REFRESH_MS"));
 });
+
+test("admin telegram diagnostics are super-admin server-only fixed-target tests", () => {
+  const adminFns = read("src/lib/admin.functions.ts");
+  const adminData = read("src/lib/admin-data.server.ts");
+  const adminRoute = read("src/routes/admin.$section.tsx");
+  const worker = read("src/lib/campaign-worker.server.ts");
+  assert(adminFns.includes("runTelegramDiagnostic"));
+  assert(adminFns.includes("await admin.assertSuperAdmin(context.userId)"));
+  assert(adminData.includes('process.env["TELEGRAM_TEST_DM_TARGET"]'));
+  assert(adminData.includes('process.env["TELEGRAM_TEST_GROUP_TARGET"]'));
+  assert(adminData.includes("TELEGRAM_DIAGNOSTIC_DM_SENT"));
+  assert(adminData.includes("TELEGRAM_DIAGNOSTIC_GROUP_SENT"));
+  assert(adminData.includes("listCustomEmojiCatalogViaUserSession"));
+  assert(adminRoute.includes("Telegram Diagnostics"));
+  assert(adminRoute.includes("TEST MODE"));
+  assert(adminRoute.includes("dmTargetConfigured"));
+  assert(!adminRoute.includes("TELEGRAM_TEST_DM_TARGET"));
+  assert(!adminRoute.includes("TELEGRAM_TEST_GROUP_TARGET"));
+  assert(worker.includes("sendDiagnosticCampaignMessage"));
+  assert(worker.includes("campaignMessage(campaign.id"));
+});
+
+test("controlled telegram diagnostics preserve canonical entities and returned Telegram metadata", () => {
+  const adminData = read("src/lib/admin-data.server.ts");
+  const worker = read("src/lib/campaign-worker.server.ts");
+  const telegram = read("src/lib/telegram-user-session.server.ts");
+  assert(adminData.includes('"bold"'));
+  assert(adminData.includes('"italic"'));
+  assert(adminData.includes('"underline"'));
+  assert(adminData.includes('"strikethrough"'));
+  assert(adminData.includes('"spoiler"'));
+  assert(adminData.includes('"text_link"'));
+  assert(adminData.includes('"custom_emoji"'));
+  assert(adminData.includes("customEmojiDocumentId"));
+  assert(adminData.includes("utf16Length"));
+  assert(worker.includes("TELEGRAM_DIAGNOSTIC_ENTITY_RELOAD"));
+  assert(worker.includes("sendDirectViaUserSession"));
+  assert(worker.includes("sendGroupViaUserSession"));
+  assert(telegram.includes("summarizeSentMessage"));
+  assert(telegram.includes("MessageEntityCustomEmoji"));
+  assert(telegram.includes("document_id"));
+  assert(worker.includes("sentEntities"));
+});

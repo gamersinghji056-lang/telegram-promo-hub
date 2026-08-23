@@ -32,6 +32,7 @@ import {
   registerTelegramWebhook,
   resetCustomerPassword,
   resetUsage,
+  runTelegramDiagnostic,
   savePlan,
   saveAdminPreferenceSettings,
   saveQuotaOverride,
@@ -1366,10 +1367,13 @@ function AdminTable({ rows, columns, render }: { rows: AnyData[]; columns: strin
 
 function TelegramHealth({ data, reload }: { data: any; reload: () => Promise<void> }) {
   const tg = data?.telegram ?? {};
+  const diagnostics = data?.telegramDiagnostics ?? {};
   const healthy = tg.webhook_status === "HEALTHY";
   const [result, setResult] = useState("");
   const [miniAppUrl, setMiniAppUrl] = useState(String(tg.mini_app_url ?? ""));
   const [savingUrl, setSavingUrl] = useState(false);
+  const [diagnosticBusy, setDiagnosticBusy] = useState("");
+  const [diagnosticResult, setDiagnosticResult] = useState<any>(null);
   async function act(kind: "bot" | "check" | "register") {
     setResult("Working…");
     const response =
@@ -1393,6 +1397,21 @@ function TelegramHealth({ data, reload }: { data: any; reload: () => Promise<voi
       setResult(e instanceof Error ? e.message : "Could not save Mini App URL.");
     } finally {
       setSavingUrl(false);
+    }
+  }
+  async function runDiagnostic(targetType: "DM" | "GROUP") {
+    setDiagnosticBusy(targetType);
+    setDiagnosticResult(null);
+    setResult("");
+    try {
+      const response = await runTelegramDiagnostic({ data: { targetType } });
+      setDiagnosticResult(response);
+      setResult(`${targetType} TEST MODE diagnostic sent.`);
+      await reload();
+    } catch (e) {
+      setResult(e instanceof Error ? e.message : "Telegram diagnostic failed.");
+    } finally {
+      setDiagnosticBusy("");
     }
   }
   return (
@@ -1478,6 +1497,88 @@ function TelegramHealth({ data, reload }: { data: any; reload: () => Promise<voi
         <p className="mt-4 text-xs text-muted-foreground">
           Must point to the existing /mini-app route.
         </p>
+      </section>
+      <section className="border border-border bg-card p-5 xl:col-span-2">
+        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border pb-4">
+          <div>
+            <p className="text-xs font-semibold uppercase text-warning">TEST MODE</p>
+            <h2 className="mt-1 text-xl font-semibold">Telegram Diagnostics</h2>
+            <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
+              Sends a fixed entity-verification campaign message through the production user-session send path.
+              Targets are read only from server environment variables and are never displayed here.
+            </p>
+          </div>
+          <Button variant="secondary" size="sm" onClick={reload}>
+            <RefreshCw />
+            Refresh
+          </Button>
+        </div>
+        <div className="mt-5 grid gap-4 lg:grid-cols-2">
+          {[
+            { type: "DM" as const, title: "Test DM", configured: Boolean(diagnostics.dmTargetConfigured) },
+            { type: "GROUP" as const, title: "Test Private Group", configured: Boolean(diagnostics.groupTargetConfigured) },
+          ].map((item) => (
+            <div key={item.type} className="border border-border bg-background p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="font-semibold">{item.title}</h3>
+                  <p className={`mt-1 text-sm ${item.configured ? "text-success" : "text-warning"}`}>
+                    {item.configured ? "Server target configured" : "Server target missing"}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  disabled={!item.configured || diagnosticBusy === item.type}
+                  onClick={() => runDiagnostic(item.type)}
+                >
+                  <Send />
+                  {diagnosticBusy === item.type ? "Sending..." : item.title}
+                </Button>
+              </div>
+              <p className="mt-3 text-xs text-muted-foreground">
+                Requires a healthy real Telegram Premium linked session and one real custom emoji document.
+              </p>
+            </div>
+          ))}
+        </div>
+        <div className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
+          <p className="border border-border bg-background p-3">
+            <span className="text-muted-foreground">Premium sessions:</span> {diagnostics.premiumSessions ?? 0}
+          </p>
+          <p className="border border-border bg-background p-3">
+            <span className="text-muted-foreground">Usable sessions:</span> {diagnostics.usableSessions ?? 0}
+          </p>
+          <p className="border border-border bg-background p-3">
+            <span className="text-muted-foreground">Targets:</span> DM {diagnostics.dmTargetConfigured ? "ready" : "missing"} / Group {diagnostics.groupTargetConfigured ? "ready" : "missing"}
+          </p>
+        </div>
+        {diagnosticResult ? (
+          <div className="mt-5 border border-border bg-background p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h3 className="font-semibold">{diagnosticResult.targetType} result</h3>
+              <span className={diagnosticResult.ok ? "text-success" : "text-destructive"}>
+                {diagnosticResult.ok ? "Success" : "Failed"}
+              </span>
+            </div>
+            <dl className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div><dt className="text-xs uppercase text-muted-foreground">Message ID</dt><dd>{diagnosticResult.messageId ?? "Not returned"}</dd></div>
+              <div><dt className="text-xs uppercase text-muted-foreground">Target type</dt><dd>{diagnosticResult.targetType}</dd></div>
+              <div><dt className="text-xs uppercase text-muted-foreground">Sender session</dt><dd className="break-all">{diagnosticResult.senderSession?.label ?? diagnosticResult.senderSession?.id}</dd></div>
+              <div><dt className="text-xs uppercase text-muted-foreground">Premium</dt><dd>{diagnosticResult.senderSession?.telegramPremium ? "YES" : "NO"}</dd></div>
+              <div><dt className="text-xs uppercase text-muted-foreground">Timestamp</dt><dd>{diagnosticResult.timestamp ? new Date(diagnosticResult.timestamp).toLocaleString() : "Unknown"}</dd></div>
+              <div className="sm:col-span-2"><dt className="text-xs uppercase text-muted-foreground">Custom Emoji Document ID</dt><dd className="break-all">{diagnosticResult.customEmojiDocumentId ?? "None"}</dd></div>
+              <div><dt className="text-xs uppercase text-muted-foreground">Returned entities</dt><dd>{diagnosticResult.verifiedReturnedEntities ? "Verified from Telegram response" : "Not fully returned by API"}</dd></div>
+            </dl>
+            <div className="mt-4 grid gap-3 lg:grid-cols-2">
+              <p className="break-words text-xs text-muted-foreground">
+                Requested entity types: {(diagnosticResult.entityTypesSent ?? []).join(", ") || "None"}
+              </p>
+              <p className="break-words text-xs text-muted-foreground">
+                Telegram returned entity types: {(diagnosticResult.returnedEntityTypes ?? []).join(", ") || "None"}
+              </p>
+            </div>
+          </div>
+        ) : null}
       </section>
     </div>
   );

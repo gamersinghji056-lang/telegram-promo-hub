@@ -147,6 +147,20 @@ export type CustomEmojiPreview = {
   fallback: string;
 };
 
+export type TelegramSentEntitySummary = {
+  type: string;
+  offset?: number;
+  length?: number;
+  document_id?: string;
+  has_url?: boolean;
+};
+
+export type TelegramSendResult = {
+  messageId: number | null;
+  date: string | null;
+  entities: TelegramSentEntitySummary[];
+};
+
 function catalogCacheKey(tenantId: string, connectionId: string, tab: string, query: string) {
   return [tenantId, connectionId, tab, query.trim().toLowerCase()].join(":");
 }
@@ -246,6 +260,44 @@ function logOutgoingEntities(scope: string, tenantId: string, connectionId: stri
     text_utf16_length: (message.text ?? "").length,
     entities: entityDiagnostics(entities),
   });
+}
+
+function sentEntitySummary(entity: Api.TypeMessageEntity): TelegramSentEntitySummary {
+  const value = entity as Api.TypeMessageEntity & {
+    offset?: number;
+    length?: number;
+    documentId?: { toString?: () => string } | string | number;
+    url?: string;
+  };
+  const base = {
+    offset: typeof value.offset === "number" ? value.offset : undefined,
+    length: typeof value.length === "number" ? value.length : undefined,
+  };
+  if (entity instanceof Api.MessageEntityCustomEmoji) {
+    return { type: "custom_emoji", ...base, document_id: String(value.documentId) };
+  }
+  if (entity instanceof Api.MessageEntityBold) return { type: "bold", ...base };
+  if (entity instanceof Api.MessageEntityItalic) return { type: "italic", ...base };
+  if (entity instanceof Api.MessageEntityUnderline) return { type: "underline", ...base };
+  if (entity instanceof Api.MessageEntityStrike) return { type: "strikethrough", ...base };
+  if (entity instanceof Api.MessageEntitySpoiler) return { type: "spoiler", ...base };
+  if (entity instanceof Api.MessageEntityTextUrl) return { type: "text_link", ...base, has_url: Boolean(value.url) };
+  const named = entity as unknown as { className?: string; constructor?: { name?: string } };
+  return { type: named.className ?? named.constructor?.name ?? "MessageEntity", ...base };
+}
+
+function summarizeSentMessage(sent: unknown): TelegramSendResult {
+  const message = sent instanceof Api.Message ? sent : null;
+  const raw = sent as { id?: number; date?: number; entities?: Api.TypeMessageEntity[] } | null;
+  const id = message?.id ?? (typeof raw?.id === "number" ? raw.id : null);
+  const dateValue = message?.date ?? (typeof raw?.date === "number" ? raw.date : null);
+  const entities = (message?.entities ?? (Array.isArray(raw?.entities) ? raw?.entities : []) ?? [])
+    .map((entity) => sentEntitySummary(entity));
+  return {
+    messageId: id,
+    date: dateValue ? new Date(Number(dateValue) * 1000).toISOString() : null,
+    entities,
+  };
 }
 
 function customEmojiAttribute(doc: Api.TypeDocument) {
@@ -2007,13 +2059,13 @@ export async function sendViaUserSession(
   connectionId: string,
   target: string | number,
   message: MessagePayload,
-) {
+): Promise<TelegramSendResult> {
   return withAuthorizedUserClient(tenantId, connectionId, async (client) => {
     try {
       await validateCustomEmojiEntities(client, message);
       const text = sendText(message);
       logOutgoingEntities("direct_target", tenantId, connectionId, message);
-      await client.sendMessage(target, {
+      const sent = await client.sendMessage(target, {
         ...(text ? { message: text } : {}),
         ...(message.media_url ? { file: message.media_url } : {}),
         ...(message.entities?.length ? { formattingEntities: buildFormattingEntities(message) } : {}),
@@ -2025,6 +2077,7 @@ export async function sendViaUserSession(
         .update({ last_used_at: new Date().toISOString(), updated_at: new Date().toISOString() })
         .eq("id", connectionId)
         .eq("tenant_id", tenantId);
+      return summarizeSentMessage(sent);
     } catch (error) {
       const classified = classifyTelegramError(error);
       await recordSessionHealthEvidence({
@@ -2058,7 +2111,7 @@ export async function sendGroupViaUserSession(
     entityType?: string | null;
   },
   message: MessagePayload,
-) {
+): Promise<TelegramSendResult> {
   return withAuthorizedUserClient(tenantId, connectionId, async (client) => {
     try {
       const entity = await resolveSendEntity(client, {
@@ -2073,7 +2126,7 @@ export async function sendGroupViaUserSession(
       await validateCustomEmojiEntities(client, message);
       const text = sendText(message);
       logOutgoingEntities("group", tenantId, connectionId, message);
-      await client.sendMessage(entity, {
+      const sent = await client.sendMessage(entity, {
         ...(text ? { message: text } : {}),
         ...(message.media_url ? { file: message.media_url } : {}),
         ...(message.entities?.length ? { formattingEntities: buildFormattingEntities(message) } : {}),
@@ -2085,6 +2138,7 @@ export async function sendGroupViaUserSession(
         .update({ last_used_at: new Date().toISOString(), updated_at: new Date().toISOString() })
         .eq("id", connectionId)
         .eq("tenant_id", tenantId);
+      return summarizeSentMessage(sent);
     } catch (error) {
       const classified = classifyTelegramError(error);
       await recordSessionHealthEvidence({
@@ -2111,13 +2165,13 @@ export async function sendGroupViaUserSession(
 export async function sendDirectViaUserSession(
   tenantId: string,
   connectionId: string,
-  target: { telegramUserId: number; username?: string | null; accessHash?: string | null },
+  target: { telegramUserId?: number | null; username?: string | null; accessHash?: string | null },
   message: MessagePayload,
-) {
+): Promise<TelegramSendResult> {
   return withAuthorizedUserClient(tenantId, connectionId, async (client) => {
     try {
       const entity = await resolveSendEntity(client, {
-        id: target.telegramUserId,
+        id: target.telegramUserId ?? null,
         username: target.username ?? null,
         accessHash: target.accessHash ?? null,
         entityType: "USER",
@@ -2125,7 +2179,7 @@ export async function sendDirectViaUserSession(
       await validateCustomEmojiEntities(client, message);
       const text = sendText(message);
       logOutgoingEntities("dm", tenantId, connectionId, message);
-      await client.sendMessage(entity, {
+      const sent = await client.sendMessage(entity, {
         ...(text ? { message: text } : {}),
         ...(message.media_url ? { file: message.media_url } : {}),
         ...(message.entities?.length ? { formattingEntities: buildFormattingEntities(message) } : {}),
@@ -2137,6 +2191,7 @@ export async function sendDirectViaUserSession(
         .update({ last_used_at: new Date().toISOString(), updated_at: new Date().toISOString() })
         .eq("id", connectionId)
         .eq("tenant_id", tenantId);
+      return summarizeSentMessage(sent);
     } catch (error) {
       const classified = classifyTelegramError(error);
       await recordSessionHealthEvidence({

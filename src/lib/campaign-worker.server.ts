@@ -1,9 +1,9 @@
 import { db, logSystem } from "./db.server";
 import { assertUsageQuota, incrementMonthlyUsage } from "./entitlements.server";
 import type { MessagePayload } from "./telegram.server";
-import { sendDirectViaUserSession, sendGroupViaUserSession } from "./telegram-user-session.server";
+import { sendDirectViaUserSession, sendGroupViaUserSession, type TelegramSendResult } from "./telegram-user-session.server";
 import { classifyTelegramError as classifyRpcError } from "./telegram-errors.server";
-import { normalizeMessageEntities } from "./message-entities";
+import { entityDiagnostics, normalizeMessageEntities } from "./message-entities";
 
 const DEFAULT_BATCH_LIMIT = 10;
 const DEFAULT_SEND_DELAY_MS = 2_000;
@@ -17,6 +17,20 @@ type JobRow = {
   job_type: "GROUP" | "DM";
   target_id: string;
   attempts: number;
+};
+
+export type DiagnosticTargetType = "DM" | "GROUP";
+
+export type DiagnosticCampaignSendResult = {
+  campaignId: string;
+  targetType: DiagnosticTargetType;
+  messageId: number | null;
+  timestamp: string;
+  senderSession: string;
+  senderPremium: boolean | null;
+  entityTypesSent: string[];
+  customEmojiDocumentId: string | null;
+  sentEntities: TelegramSendResult["entities"];
 };
 
 function sendDelayMs() {
@@ -112,6 +126,26 @@ async function campaignMessage(campaignId: string, tenantId: string) {
     ),
   };
   return campaign;
+}
+
+function parseDiagnosticTarget(type: DiagnosticTargetType, raw: string) {
+  const value = raw.trim();
+  if (!value) throw new Error(`${type} test target is not configured.`);
+  const tme = value.match(/(?:https?:\/\/)?t\.me\/([A-Za-z0-9_]+)/i)?.[1];
+  const username = tme ?? value.match(/^@?([A-Za-z][A-Za-z0-9_]{4,})$/)?.[1] ?? null;
+  if (username) {
+    return type === "GROUP"
+      ? { username, telegramGroupId: null, accessHash: null, entityType: null }
+      : { username, telegramUserId: null, accessHash: null };
+  }
+  if (/^-?\d+$/.test(value)) {
+    const numeric = Number(value);
+    if (!Number.isSafeInteger(numeric)) throw new Error(`${type} test target id is not a safe integer.`);
+    return type === "GROUP"
+      ? { username: null, telegramGroupId: Math.abs(numeric), accessHash: null, entityType: "CHAT" }
+      : { username: null, telegramUserId: numeric, accessHash: null };
+  }
+  throw new Error(`${type} test target must be a Telegram username/link or numeric Telegram id.`);
 }
 
 function campaignDelayMs(campaign: { min_delay_seconds?: number | null; max_delay_seconds?: number | null }) {
@@ -630,4 +664,108 @@ export async function processCampaignJobs(limit = DEFAULT_BATCH_LIMIT) {
     details: { requested: batchLimit, sent, failed, skipped },
   });
   return { processed: jobs?.length ?? 0, sent, failed, skipped };
+}
+
+export async function sendDiagnosticCampaignMessage(input: {
+  tenantId: string;
+  connectionId: string;
+  targetType: DiagnosticTargetType;
+  target: string;
+  message: MessagePayload;
+  senderPremium: boolean | null;
+}) {
+  const normalizedMessage = {
+    ...input.message,
+    entities: normalizeMessageEntities(input.message.entities ?? [], input.message.text ?? ""),
+  };
+  const { data: campaign, error } = await db()
+    .from("campaigns")
+    .insert({
+      tenant_id: input.tenantId,
+      name: `TEST MODE Telegram diagnostics ${input.targetType} ${new Date().toISOString()}`,
+      type: input.targetType === "GROUP" ? "GROUP" : "DM",
+      status: "RUNNING",
+      connection_id: input.connectionId,
+      message: normalizedMessage,
+      message_entities: normalizedMessage.entities,
+      total_targets: 1,
+      started_at: new Date().toISOString(),
+      min_delay_seconds: 1,
+      max_delay_seconds: 1,
+      cycle_delay_minutes: 20,
+    })
+    .select("id")
+    .single();
+  if (error || !campaign) throw new Error(error?.message ?? "Could not create diagnostic campaign record.");
+
+  const job: JobRow = {
+    id: `diagnostic-${input.targetType.toLowerCase()}`,
+    tenant_id: input.tenantId,
+    campaign_id: campaign.id as string,
+    connection_id: input.connectionId,
+    job_type: input.targetType,
+    target_id: `diagnostic-${input.targetType.toLowerCase()}`,
+    attempts: 0,
+  };
+  const timestamp = new Date().toISOString();
+  try {
+    const reloaded = await campaignMessage(campaign.id as string, input.tenantId);
+    const diagnostics = entityDiagnostics(reloaded.message.entities ?? []);
+    console.info("TELEGRAM_DIAGNOSTIC_ENTITY_RELOAD", {
+      tenant_id: input.tenantId,
+      campaign_id: campaign.id,
+      target_type: input.targetType,
+      entities: diagnostics,
+    });
+    await verifyConnection(input.tenantId, input.connectionId);
+    const parsed = parseDiagnosticTarget(input.targetType, input.target);
+    const sent = input.targetType === "GROUP"
+      ? await sendGroupViaUserSession(input.tenantId, input.connectionId, parsed, reloaded.message)
+      : await sendDirectViaUserSession(input.tenantId, input.connectionId, parsed, reloaded.message);
+    await db()
+      .from("campaigns")
+      .update({
+        status: "COMPLETED",
+        completed_count: 1,
+        completed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", campaign.id)
+      .eq("tenant_id", input.tenantId);
+    await logCampaign(job, "INFO", "TEST MODE diagnostic message sent.", {
+      target_type: input.targetType,
+      message_id: sent.messageId,
+      entity_types: diagnostics.map((entity) => entity.type),
+      custom_emoji_document_id: diagnostics.find((entity) => entity.type === "custom_emoji")?.document_id ?? null,
+      returned_entity_types: sent.entities.map((entity) => entity.type),
+    });
+    return {
+      campaignId: campaign.id as string,
+      targetType: input.targetType,
+      messageId: sent.messageId,
+      timestamp,
+      senderSession: input.connectionId,
+      senderPremium: input.senderPremium,
+      entityTypesSent: diagnostics.map((entity) => entity.type),
+      customEmojiDocumentId: diagnostics.find((entity) => entity.type === "custom_emoji")?.document_id ?? null,
+      sentEntities: sent.entities,
+    } satisfies DiagnosticCampaignSendResult;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Telegram diagnostic send failed.";
+    await db()
+      .from("campaigns")
+      .update({
+        status: "COMPLETED_WITH_ERRORS",
+        failed_count: 1,
+        completed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", campaign.id)
+      .eq("tenant_id", input.tenantId);
+    await logCampaign(job, "ERROR", "TEST MODE diagnostic message failed.", {
+      target_type: input.targetType,
+      error: message,
+    });
+    throw error;
+  }
 }

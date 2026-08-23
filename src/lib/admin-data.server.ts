@@ -7,11 +7,16 @@ import {
   syncBotIdentity,
   telegramSettings,
 } from "./telegram.server";
+import type { MessagePayload } from "./telegram.server";
+import { sendDiagnosticCampaignMessage, type DiagnosticTargetType } from "./campaign-worker.server";
 import {
   PLAN_LIMIT_KEYS,
   ensureDefaultPlans,
   tenantUsageDashboard,
 } from "./entitlements.server";
+import { entityDiagnostics, normalizeMessageEntities, utf16Length } from "./message-entities";
+import { sessionUsable } from "./telegram-session-health.server";
+import { listCustomEmojiCatalogViaUserSession } from "./telegram-user-session.server";
 import {
   OFFICIAL_PLAN_CODES,
   TRON_MAINNET_USDT_CONTRACT,
@@ -859,10 +864,33 @@ export type PlatformSettings = {
   telegram: Awaited<ReturnType<typeof telegramSettings>>;
   discovery: { provider_url?: string; provider_key?: string };
   monitor?: Awaited<ReturnType<typeof tronMonitorHealth>>;
+  telegramDiagnostics?: Awaited<ReturnType<typeof adminTelegramDiagnosticsStatus>>;
 };
 
+export async function adminTelegramDiagnosticsStatus() {
+  const [{ count: premiumSessions }, { count: usableSessions }] = await Promise.all([
+    db()
+      .from("telegram_connections")
+      .select("id", { count: "exact", head: true })
+      .eq("telegram_premium", true)
+      .not("encrypted_session", "is", null),
+    db()
+      .from("telegram_connections")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "CONNECTED")
+      .not("encrypted_session", "is", null),
+  ]);
+  return {
+    testMode: true,
+    dmTargetConfigured: Boolean(process.env["TELEGRAM_TEST_DM_TARGET"]?.trim()),
+    groupTargetConfigured: Boolean(process.env["TELEGRAM_TEST_GROUP_TARGET"]?.trim()),
+    premiumSessions: premiumSessions ?? 0,
+    usableSessions: usableSessions ?? 0,
+  };
+}
+
 export async function adminSettings(): Promise<PlatformSettings> {
-  const [general, registration, payments, notifications, telegram, discovery, monitor] = await Promise.all([
+  const [general, registration, payments, notifications, telegram, discovery, monitor, telegramDiagnostics] = await Promise.all([
     getSetting<PlatformSettings["general"]>("general"),
     getSetting<PlatformSettings["registration"]>("registration"),
     getSetting<PlatformSettings["payments"]>("payments").then((settings) => normalizePaymentSettings(settings)),
@@ -870,8 +898,9 @@ export async function adminSettings(): Promise<PlatformSettings> {
     telegramSettings(),
     getSetting<PlatformSettings["discovery"]>("discovery"),
     tronMonitorHealth(),
+    adminTelegramDiagnosticsStatus(),
   ]);
-  return { general, registration, payments, notifications, telegram, discovery, monitor };
+  return { general, registration, payments, notifications, telegram, discovery, monitor, telegramDiagnostics };
 }
 
 export async function adminRegistration() {
@@ -1127,6 +1156,138 @@ export async function adminSaveQuotaOverride(
     details: { fields: input.fields, reason: input.reason ?? null },
   });
   return { ok: true };
+}
+
+function appendEntity(
+  parts: string[],
+  entities: NonNullable<MessagePayload["entities"]>,
+  type: NonNullable<MessagePayload["entities"]>[number]["type"],
+  text: string,
+  extra: Partial<NonNullable<MessagePayload["entities"]>[number]> = {},
+) {
+  const offset = utf16Length(parts.join(""));
+  parts.push(text);
+  entities.push({ type, offset, length: utf16Length(text), ...extra } as NonNullable<MessagePayload["entities"]>[number]);
+}
+
+function diagnosticMessage(documentId: string, fallback: string, premiumRequired: boolean): MessagePayload {
+  const parts: string[] = ["WPAY TEST MODE entity verification: "];
+  const entities: NonNullable<MessagePayload["entities"]> = [];
+  appendEntity(parts, entities, "bold", "Bold");
+  parts.push(" ");
+  appendEntity(parts, entities, "italic", "Italic");
+  parts.push(" ");
+  appendEntity(parts, entities, "underline", "Underline");
+  parts.push(" ");
+  appendEntity(parts, entities, "strikethrough", "Strikethrough");
+  parts.push(" ");
+  appendEntity(parts, entities, "spoiler", "Spoiler");
+  parts.push(" ");
+  appendEntity(parts, entities, "text_link", "Text URL", { url: "https://telegram.org" });
+  parts.push(" Custom emoji: ");
+  appendEntity(parts, entities, "custom_emoji", fallback || "*", {
+    document_id: documentId,
+    fallback: fallback || "*",
+    premium_required: premiumRequired,
+  });
+  parts.push(" UTF-16 check: 😀 中文 Русский فارسی");
+  const text = parts.join("");
+  return {
+    text,
+    entities: normalizeMessageEntities(entities, text),
+  };
+}
+
+async function diagnosticPremiumSession() {
+  const { data } = await db()
+    .from("telegram_connections")
+    .select("id, tenant_id, label, account_name, username, status, health, health_score, encrypted_session, telegram_premium, telegram_premium_checked_at, session_error_code, cooldown_until, restriction_status")
+    .not("encrypted_session", "is", null)
+    .eq("telegram_premium", true)
+    .order("health_score", { ascending: false, nullsFirst: false })
+    .order("last_used_at", { ascending: true, nullsFirst: true })
+    .limit(20);
+  const usable = (data ?? []).find((row) => sessionUsable(row as Record<string, unknown>));
+  if (!usable) throw new Error("No healthy Telegram Premium session is available for diagnostics.");
+  return usable as {
+    id: string;
+    tenant_id: string;
+    label?: string | null;
+    account_name?: string | null;
+    username?: string | null;
+    telegram_premium?: boolean | null;
+  };
+}
+
+async function diagnosticCustomEmoji(tenantId: string, connectionId: string) {
+  const installed = await listCustomEmojiCatalogViaUserSession(tenantId, connectionId, { tab: "installed" });
+  const item =
+    installed.installed.find((emoji) => emoji.premium_required === true) ??
+    installed.installed[0] ??
+    installed.recent[0];
+  if (item) return item;
+  const featured = await listCustomEmojiCatalogViaUserSession(tenantId, connectionId, { tab: "featured" });
+  const fallback =
+    featured.featured.find((emoji) => emoji.premium_required === true) ??
+    featured.featured[0];
+  if (!fallback) throw new Error("No real Telegram custom emoji document was available from the Premium session.");
+  return fallback;
+}
+
+export async function adminRunTelegramDiagnostic(adminId: string, targetType: DiagnosticTargetType) {
+  const rawTarget = targetType === "DM"
+    ? process.env["TELEGRAM_TEST_DM_TARGET"]?.trim()
+    : process.env["TELEGRAM_TEST_GROUP_TARGET"]?.trim();
+  if (!rawTarget) {
+    throw new Error(`${targetType === "DM" ? "TELEGRAM_TEST_DM_TARGET" : "TELEGRAM_TEST_GROUP_TARGET"} must be configured before TEST MODE diagnostics can send.`);
+  }
+  const session = await diagnosticPremiumSession();
+  const emoji = await diagnosticCustomEmoji(session.tenant_id, session.id);
+  const message = diagnosticMessage(emoji.document_id, emoji.fallback || "*", emoji.premium_required === true);
+  const sent = await sendDiagnosticCampaignMessage({
+    tenantId: session.tenant_id,
+    connectionId: session.id,
+    targetType,
+    target: rawTarget,
+    message,
+    senderPremium: session.telegram_premium === true,
+  });
+  const requestedEntities = entityDiagnostics(message.entities ?? []);
+  const returnedTypes = new Set(sent.sentEntities.map((entity) => entity.type));
+  await logAdmin({
+    admin_user_id: adminId,
+    action: targetType === "DM" ? "TELEGRAM_DIAGNOSTIC_DM_SENT" : "TELEGRAM_DIAGNOSTIC_GROUP_SENT",
+    resource: "telegram_diagnostics",
+    details: {
+      test_mode: true,
+      target_type: targetType,
+      campaign_id: sent.campaignId,
+      message_id: sent.messageId,
+      connection_id: session.id,
+      telegram_premium: session.telegram_premium === true,
+      entity_types: requestedEntities.map((entity) => entity.type),
+      returned_entity_types: sent.sentEntities.map((entity) => entity.type),
+      custom_emoji_document_id: emoji.document_id,
+    },
+  });
+  return {
+    ok: true,
+    testMode: true,
+    targetType,
+    messageId: sent.messageId,
+    senderSession: {
+      id: session.id,
+      label: session.label ?? session.account_name ?? (session.username ? `@${session.username}` : "Premium session"),
+      telegramPremium: session.telegram_premium === true,
+    },
+    entityTypesSent: requestedEntities.map((entity) => entity.type),
+    sentEntities: sent.sentEntities,
+    returnedEntityTypes: sent.sentEntities.map((entity) => entity.type),
+    verifiedReturnedEntities: requestedEntities.every((entity) => returnedTypes.has(entity.type)),
+    customEmojiDocumentId: emoji.document_id,
+    customEmojiReturned: sent.sentEntities.some((entity) => entity.type === "custom_emoji" && entity.document_id === emoji.document_id),
+    timestamp: sent.timestamp,
+  };
 }
 
 export async function adminNotifications() {
