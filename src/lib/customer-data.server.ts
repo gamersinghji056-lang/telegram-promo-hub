@@ -10,6 +10,7 @@ import {
   disconnectUserSession,
   discoverAudienceViaUserSession,
   importGroupsFromFolderViaUserSession,
+  createShareableFolderLinkViaUserSession,
   customEmojiPreviewViaUserSession,
   customEmojiPreviewsViaUserSession,
   joinGroupViaUserSession,
@@ -20,6 +21,7 @@ import {
   startUserSessionLogin,
   testGroupSendableViaUserSession,
   verifyGroupWritableViaUserSession,
+  revokeShareableFolderLinkViaUserSession,
 } from "./telegram-user-session.server";
 import {
   bestTenantSession,
@@ -1263,6 +1265,109 @@ export async function listGroups(ctx: AuthContext, status?: string) {
   return rows;
 }
 
+export async function approvedGroupFolderLinks(ctx: AuthContext) {
+  const { data } = await untypedDb()
+    .from("telegram_folder_links")
+    .select("*")
+    .eq("tenant_id", ctx.tenantId)
+    .eq("customer_id", ctx.customerId)
+    .order("created_at", { ascending: false })
+    .limit(20);
+  return data ?? [];
+}
+
+export async function createApprovedGroupFolderLink(ctx: AuthContext, groupIds: string[]) {
+  const ids = [...new Set(groupIds)].filter(Boolean);
+  if (!ids.length) throw new Error("Select at least one approved group.");
+  const client = db();
+  const connection = await defaultHealthyConnection(ctx);
+  const { data: groups, error } = await client
+    .from("discovered_groups")
+    .select("id, title, username, member_count, telegram_group_id, access_hash, entity_type, status")
+    .eq("tenant_id", ctx.tenantId)
+    .in("id", ids)
+    .in("status", ["APPROVED", "JOINED"]);
+  if (error) throw new Error(error.message);
+  const rows = groups ?? [];
+  if (rows.length !== ids.length) throw new Error("Only your own approved groups can be exported.");
+  const title = `WPAY Approved Groups ${new Date().toISOString().slice(0, 10)}`;
+  const result = await createShareableFolderLinkViaUserSession(ctx.tenantId, connection.id as string, {
+    title,
+    groups: rows.map((group) => ({
+      username: group.username as string | null,
+      telegram_group_id: group.telegram_group_id as number | null,
+      access_hash: group.access_hash as string | null,
+      entity_type: group.entity_type as string | null,
+    })),
+  });
+  const includedGroups = rows.map((group) => ({
+    id: group.id,
+    title: group.title,
+    username: group.username,
+    member_count: group.member_count,
+    status: group.status,
+  }));
+  const { data: link, error: insertError } = await untypedDb()
+    .from("telegram_folder_links")
+    .insert({
+      tenant_id: ctx.tenantId,
+      customer_id: ctx.customerId,
+      connection_id: connection.id,
+      title: result.title || title,
+      url: result.url,
+      slug: result.slug,
+      filter_id: result.filterId,
+      selected_group_ids: ids,
+      included_groups: includedGroups,
+      created_at: new Date().toISOString(),
+    })
+    .select("*")
+    .single();
+  if (insertError || !link) throw new Error(insertError?.message ?? "Could not save Telegram folder link.");
+  await clientConnectionUsed(ctx.tenantId, connection.id as string);
+  await logSystem({
+    tenant_id: ctx.tenantId,
+    customer_id: ctx.customerId,
+    action: "TELEGRAM_FOLDER_LINK_CREATED",
+    resource: result.url,
+    details: { group_count: rows.length, connection_id: connection.id },
+  });
+  return link;
+}
+
+export async function revokeApprovedGroupFolderLink(ctx: AuthContext, linkId: string) {
+  const client = untypedDb();
+  const { data: link } = await client
+    .from("telegram_folder_links")
+    .select("*")
+    .eq("id", linkId)
+    .eq("tenant_id", ctx.tenantId)
+    .eq("customer_id", ctx.customerId)
+    .is("revoked_at", null)
+    .maybeSingle();
+  if (!link) throw new Error("Folder link not found.");
+  await revokeShareableFolderLinkViaUserSession(ctx.tenantId, String(link.connection_id), {
+    filterId: Number(link.filter_id),
+    slug: String(link.slug ?? ""),
+  });
+  const { data, error } = await client
+    .from("telegram_folder_links")
+    .update({ revoked_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq("id", linkId)
+    .eq("tenant_id", ctx.tenantId)
+    .eq("customer_id", ctx.customerId)
+    .select("*")
+    .single();
+  if (error) throw new Error(error.message);
+  await logSystem({
+    tenant_id: ctx.tenantId,
+    customer_id: ctx.customerId,
+    action: "TELEGRAM_FOLDER_LINK_REVOKED",
+    resource: String(link.url ?? linkId),
+  });
+  return data;
+}
+
 export async function groupDetail(ctx: AuthContext, groupId: string) {
   const client = db();
   const { data: group } = await client
@@ -1559,10 +1664,15 @@ export type AudienceFilter =
   | "ACTIVE_30_DAYS"
   | "RECENTLY_ONLINE";
 
+export type AudienceUsernameFilter = "ALL" | "WITH_USERNAME" | "WITHOUT_USERNAME";
+export type AudienceActivityFilter = "ALL" | "ACTIVE_RECENTLY" | "AROUND_MONTH" | "LONG_TIME_AGO";
+
 type AudienceQueryOptions = {
   groupIds?: string[];
   onlyNew?: boolean;
   filter?: AudienceFilter;
+  usernameFilter?: AudienceUsernameFilter;
+  activityFilter?: AudienceActivityFilter;
   excludeInactive?: boolean;
   page?: number;
   pageSize?: number;
@@ -1586,6 +1696,8 @@ function normalizeAudienceOptions(
     groupIds: options.groupIds ?? [],
     onlyNew: options.onlyNew ?? true,
     filter: options.filter ?? "ALL_ELIGIBLE",
+    usernameFilter: options.usernameFilter ?? "ALL",
+    activityFilter: options.activityFilter ?? "ALL",
     excludeInactive: options.excludeInactive ?? true,
     page: Math.max(1, Number(options.page ?? 1)),
     pageSize: Math.max(25, Math.min(100, Number(options.pageSize ?? 100))),
@@ -1595,6 +1707,12 @@ function normalizeAudienceOptions(
 // Supabase's fluent query builder is a thenable with result typing that changes at each chained method.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AudienceQueryBuilder = any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type UntypedSupabaseClient = { from: (table: string) => any };
+
+function untypedDb() {
+  return db() as unknown as UntypedSupabaseClient;
+}
 
 function applyAudienceFilters(
   query: AudienceQueryBuilder,
@@ -1610,7 +1728,26 @@ function applyAudienceFilters(
     );
   }
   if (options.filter === "RECENTLY_ONLINE") q = q.in("presence_status", RECENT_PRESENCE);
-  if (options.excludeInactive) {
+  if (options.usernameFilter === "WITH_USERNAME") q = q.eq("has_username", true);
+  if (options.usernameFilter === "WITHOUT_USERNAME") q = q.eq("has_username", false);
+  if (options.activityFilter !== "ALL") {
+    const fourDaysAgo = new Date(Date.now() - 4 * 86_400_000).toISOString();
+    const fourteenDaysAgo = new Date(Date.now() - 14 * 86_400_000).toISOString();
+    if (options.activityFilter === "ACTIVE_RECENTLY") {
+      q = q.or(
+        `last_seen_at.gte.${fourDaysAgo},and(last_seen_at.is.null,presence_status.in.(ONLINE,RECENTLY))`,
+      );
+    }
+    if (options.activityFilter === "AROUND_MONTH") {
+      q = q.or(
+        `and(last_seen_at.lt.${fourDaysAgo},last_seen_at.gte.${fourteenDaysAgo}),and(last_seen_at.is.null,presence_status.in.(WITHIN_WEEK,WITHIN_MONTH))`,
+      );
+    }
+    if (options.activityFilter === "LONG_TIME_AGO") {
+      q = q.or(`last_seen_at.lt.${fourteenDaysAgo},and(last_seen_at.is.null,presence_status.eq.LONG_AGO)`);
+    }
+  }
+  if (options.excludeInactive && options.activityFilter === "ALL") {
     q = q.neq("presence_status", "LONG_AGO");
   }
   return q;
@@ -1655,6 +1792,8 @@ export async function findAudience(
   showingTo: number;
   hasMore: boolean;
   filter: AudienceFilter;
+  usernameFilter: AudienceUsernameFilter;
+  activityFilter: AudienceActivityFilter;
   excludeInactive: boolean;
   users: AudienceUser[];
 }> {
@@ -1718,6 +1857,8 @@ export async function findAudience(
     showingTo: Math.min(to + 1, total),
     hasMore: to + 1 < total,
     filter: options.filter,
+    usernameFilter: options.usernameFilter,
+    activityFilter: options.activityFilter,
     excludeInactive: options.excludeInactive,
     users: rows,
   };
@@ -2753,6 +2894,13 @@ export async function createCampaign(
     group_ids: string[];
     group_category_id?: string | null;
     contact_ids: string[];
+    audience_filters?: {
+      usernameFilter?: AudienceUsernameFilter;
+      activityFilter?: AudienceActivityFilter;
+      filter?: AudienceFilter;
+      onlyNew?: boolean;
+      excludeInactive?: boolean;
+    } | null;
     scheduled_at?: string | null;
     start_now: boolean;
     exclude_previously_contacted?: boolean;
@@ -2985,20 +3133,22 @@ export async function createCampaign(
    * Existing DM logic remains unchanged.
    */
   if (input.contact_ids.length) {
-    let contactQuery = client
-      .from("audience_contacts")
-      .select("id, telegram_user_id")
-      .eq("tenant_id", ctx.tenantId)
-      .in("id", input.contact_ids)
-      .eq("eligibility", "OPTED_IN");
-
-    if (
-      input.exclude_previously_contacted !==
-      false
-    ) {
-      contactQuery =
-        contactQuery.eq("contact_count", 0);
-    }
+    const filterOptions = normalizeAudienceOptions({
+      groupIds: [],
+      onlyNew: input.audience_filters?.onlyNew ?? input.exclude_previously_contacted !== false,
+      filter: input.audience_filters?.filter ?? "ALL_ELIGIBLE",
+      usernameFilter: input.audience_filters?.usernameFilter ?? "ALL",
+      activityFilter: input.audience_filters?.activityFilter ?? "ALL",
+      excludeInactive: input.audience_filters?.excludeInactive ?? input.exclude_previously_contacted !== false,
+    });
+    const contactQuery = applyAudienceFilters(
+      client
+        .from("audience_contacts")
+        .select("id, telegram_user_id")
+        .eq("tenant_id", ctx.tenantId)
+        .in("id", input.contact_ids),
+      filterOptions,
+    );
 
     const { data: contacts } =
       await contactQuery;

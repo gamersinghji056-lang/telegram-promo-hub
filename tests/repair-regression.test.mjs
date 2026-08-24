@@ -609,3 +609,43 @@ test("DM and Group campaign composers share the same visual preview and canonica
   assert(route.includes("reconcileEntitiesAfterTextChange"));
   assert(route.includes("replaceTextAndShiftEntities"));
 });
+
+test("DM promotion audience filters are server-side and preserved through filtered selection", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  const funcs = read("src/lib/customer.functions.ts");
+  const data = read("src/lib/customer-data.server.ts");
+  assert(data.includes('AudienceUsernameFilter = "ALL" | "WITH_USERNAME" | "WITHOUT_USERNAME"'));
+  assert(data.includes('AudienceActivityFilter = "ALL" | "ACTIVE_RECENTLY" | "AROUND_MONTH" | "LONG_TIME_AGO"'));
+  assert(data.includes("last_seen_at.gte"));
+  assert(data.includes("presence_status.in.(ONLINE,RECENTLY)"));
+  assert(data.includes("presence_status.in.(WITHIN_WEEK,WITHIN_MONTH)"));
+  assert(data.includes("activityFilter: input.audience_filters?.activityFilter"));
+  assert(funcs.includes("usernameFilter?: \"ALL\" | \"WITH_USERNAME\" | \"WITHOUT_USERNAME\""));
+  assert(route.includes("Audience Filters"));
+  assert(route.includes("Matching Users"));
+  assert(route.includes("usernameFilter: result.usernameFilter"));
+  assert(route.includes("activityFilter: result.activityFilter"));
+  assert(route.includes("audience_filters"));
+});
+
+test("approved groups create real Telegram addlist links with stored management state", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  const funcs = read("src/lib/customer.functions.ts");
+  const data = read("src/lib/customer-data.server.ts");
+  const telegram = read("src/lib/telegram-user-session.server.ts");
+  const migration = read("supabase/migrations/20260825090000_approved_group_telegram_folder_links.sql");
+  assert(route.includes("CREATE SHAREABLE FOLDER LINK"));
+  assert(route.includes("CREATE TELEGRAM FOLDER LINK"));
+  assert(route.includes("Select All Eligible"));
+  assert(route.includes("View Included Groups"));
+  assert(route.includes("revokeApprovedGroupFolderLink"));
+  assert(funcs.includes("createApprovedGroupFolderLink"));
+  assert(data.includes("Only your own approved groups can be exported."));
+  assert(telegram.includes("Api.chatlists.ExportChatlistInvite"));
+  assert(telegram.includes("Api.chatlists.DeleteExportedInvite"));
+  assert(telegram.includes("Api.InputChatlistDialogFilter"));
+  assert(!telegram.includes("wpay/addlist"));
+  assert(migration.includes("CREATE TABLE IF NOT EXISTS public.telegram_folder_links"));
+  assert(migration.includes("revoked_at timestamptz"));
+  assert(migration.includes("ENABLE ROW LEVEL SECURITY"));
+});

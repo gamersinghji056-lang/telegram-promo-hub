@@ -51,6 +51,7 @@ import {
   approveGroup,
   checkConnection,
   controlCampaign,
+  createApprovedGroupFolderLink,
   createCampaign,
   deleteCampaign,
   deleteGroupCategory,
@@ -60,6 +61,7 @@ import {
   getAudienceDiscoveryState,
   getAnalytics,
   getAccountProfile,
+  getApprovedGroupFolderLinks,
   getBilling,
   getBulkJoinState,
   getCampaignDetail,
@@ -84,6 +86,7 @@ import {
   removeKeyword,
   removeConnection,
   removeGroup,
+  revokeApprovedGroupFolderLink,
   getInvoiceStatus,
   checkInvoicePaymentStatus,
   requestPayment,
@@ -319,6 +322,9 @@ function MiniAppSection() {
     addGroupByUsername: useServerFn(addGroupByUsername),
     addApprovedGroupByUsername: useServerFn(addApprovedGroupByUsername),
     importApprovedGroups: useServerFn(importApprovedGroups),
+    getApprovedGroupFolderLinks: useServerFn(getApprovedGroupFolderLinks),
+    createApprovedGroupFolderLink: useServerFn(createApprovedGroupFolderLink),
+    revokeApprovedGroupFolderLink: useServerFn(revokeApprovedGroupFolderLink),
     approveGroup: useServerFn(approveGroup),
     joinGroup: useServerFn(joinGroup),
     getBulkJoinState: useServerFn(getBulkJoinState),
@@ -413,6 +419,7 @@ function MiniAppSection() {
         connections: await connectionsFn({ data: { auth: a } }),
         groups: await groupsFn({ data: { auth: a, status: "APPROVED_ACTIVE" } }),
         bulkJoin: await bulkJoinStateFn({ data: { auth: a } }),
+        folderLinks: await actions.getApprovedGroupFolderLinks({ data: { auth: a } }),
       }),
       "groups-joined": async (a) => ({
         connections: await connectionsFn({ data: { auth: a } }),
@@ -1581,9 +1588,27 @@ function GroupFinder({ auth, data, actions, reload, setNotice, actionBusy, runAc
 }
 
 function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runAction, section }: any) {
-  const [modal, setModal] = useState<"" | "ADD" | "IMPORT">("");
+  const [modal, setModal] = useState<"" | "ADD" | "IMPORT" | "SHARE">("");
   const [username, setUsername] = useState("");
   const [folderLink, setFolderLink] = useState("");
+  const approvedGroups = data?.groups ?? [];
+  const [folderSelection, setFolderSelection] = useState<string[]>([]);
+  const [expandedLinkId, setExpandedLinkId] = useState("");
+  const selectFolderLimit = (limit: number) => {
+    let members = 0;
+    const ids: string[] = [];
+    for (const group of approvedGroups) {
+      const count = Number(group.member_count ?? 0);
+      if (count > 0 && members + count > limit) continue;
+      ids.push(group.id);
+      members += Math.max(count, 0);
+    }
+    setFolderSelection(ids);
+  };
+  const toggleFolderGroup = (id: string) =>
+    setFolderSelection((current) =>
+      current.includes(id) ? current.filter((value) => value !== id) : [...current, id],
+    );
   return (
     <div className="space-y-4">
       {section === "groups-approved" ? (
@@ -1598,7 +1623,77 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
             <Button variant="secondary" onClick={() => setModal("IMPORT")}>
               <FolderOpen className="mr-2 size-4" /> IMPORT GROUPS
             </Button>
+            <Button variant="secondary" onClick={() => setModal("SHARE")}>
+              <FolderOpen className="mr-2 size-4" /> CREATE SHAREABLE FOLDER LINK
+            </Button>
           </div>
+          {(data?.folderLinks ?? []).length ? (
+            <div className="space-y-2">
+              {(data.folderLinks ?? []).map((link: any) => (
+                <div key={link.id} className="border border-border bg-background p-3 text-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="font-semibold">{link.title ?? "Telegram Folder Link"}</p>
+                      <p className="text-xs text-muted-foreground">
+                        Created {new Date(link.created_at).toLocaleString()}
+                        {link.revoked_at ? ` | Revoked ${new Date(link.revoked_at).toLocaleString()}` : ""}
+                      </p>
+                    </div>
+                    <span className={link.revoked_at ? "text-muted-foreground" : "text-success"}>
+                      {link.revoked_at ? "REVOKED" : "ACTIVE"}
+                    </span>
+                  </div>
+                  <p className="mt-2 break-all text-xs text-muted-foreground">{link.url}</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Button type="button" size="sm" variant="secondary" onClick={() => void copyText(link.url)}>
+                      <Copy className="mr-2 size-4" /> Copy
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => {
+                        if (navigator.share) void navigator.share({ title: link.title, url: link.url });
+                        else void copyText(link.url);
+                      }}
+                    >
+                      Share
+                    </Button>
+                    <Button type="button" size="sm" variant="secondary" onClick={() => setExpandedLinkId(expandedLinkId === link.id ? "" : link.id)}>
+                      View Included Groups
+                    </Button>
+                    {!link.revoked_at ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        disabled={actionBusy === "revoke-folder-link"}
+                        onClick={() =>
+                          void runAction("revoke-folder-link", async () => {
+                            await actions.revokeApprovedGroupFolderLink({ data: { auth, id: link.id } });
+                            setNotice("Telegram folder link revoked.");
+                            await reload();
+                          })
+                        }
+                      >
+                        Revoke
+                      </Button>
+                    ) : null}
+                  </div>
+                  {expandedLinkId === link.id ? (
+                    <div className="mt-3 max-h-48 space-y-1 overflow-auto border-t border-border pt-3">
+                      {(link.included_groups ?? []).map((group: any) => (
+                        <p key={group.id} className="text-xs text-muted-foreground">
+                          {group.title ?? group.username ?? group.id} {group.username ? `@${group.username}` : ""}{" "}
+                          {group.member_count ? `| ${group.member_count} members` : ""}
+                        </p>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
         </section>
       ) : null}
       <GroupRows
@@ -1615,7 +1710,7 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
       {modal ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4">
           <form
-            className={panelClass("w-full max-w-sm space-y-3 shadow-lg")}
+            className={panelClass(`w-full ${modal === "SHARE" ? "max-w-2xl" : "max-w-sm"} space-y-3 shadow-lg`)}
             onSubmit={(e) => {
               e.preventDefault();
               if (modal === "ADD") {
@@ -1644,7 +1739,7 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
             }}
           >
             <div className="flex items-center justify-between">
-              <p className="font-semibold">{modal === "ADD" ? "Add Group" : "Import Groups"}</p>
+              <p className="font-semibold">{modal === "ADD" ? "Add Group" : modal === "IMPORT" ? "Import Groups" : "Create Telegram Folder Link"}</p>
               <button type="button" onClick={() => setModal("")} aria-label="Close">
                 <X className="size-4" />
               </button>
@@ -1656,28 +1751,81 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
                 onChange={(e) => setUsername(e.target.value)}
                 placeholder="@groupname or https://t.me/groupname"
               />
-            ) : (
+            ) : modal === "IMPORT" ? (
               <input
                 className={inputClass()}
                 value={folderLink}
                 onChange={(e) => setFolderLink(e.target.value)}
                 placeholder="https://t.me/addlist/..."
               />
+            ) : (
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-2">
+                  {[100, 500, 1000].map((limit) => (
+                    <Button key={limit} type="button" size="sm" variant="secondary" onClick={() => selectFolderLimit(limit)}>
+                      Up to {limit.toLocaleString()} members
+                    </Button>
+                  ))}
+                  <Button type="button" size="sm" variant="secondary" onClick={() => setFolderSelection(approvedGroups.map((g: any) => g.id))}>
+                    Select All Eligible
+                  </Button>
+                  <Button type="button" size="sm" variant="secondary" onClick={() => setFolderSelection([])}>
+                    Clear Selection
+                  </Button>
+                </div>
+                <p className="text-sm font-semibold">Selected Groups: {folderSelection.length}</p>
+                <div className="max-h-72 space-y-2 overflow-auto">
+                  {approvedGroups.map((group: any) => (
+                    <label key={group.id} className="flex gap-3 border border-border bg-background p-3 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={folderSelection.includes(group.id)}
+                        onChange={() => toggleFolderGroup(group.id)}
+                      />
+                      <span>
+                        <span className="block font-semibold">{group.title ?? group.username ?? group.id}</span>
+                        <span className="block text-xs text-muted-foreground">
+                          {group.username ? `@${group.username}` : "No public username"}
+                          {" | "}
+                          {group.member_count ? `${group.member_count} members` : "member count unknown"}
+                          {" | "}
+                          {group.username ? "public" : "private/unknown"}
+                        </span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
             )}
             <Button
               className="w-full"
-              type="submit"
+              type={modal === "SHARE" ? "button" : "submit"}
+              onClick={
+                modal === "SHARE"
+                  ? () =>
+                      void runAction("create-folder-link", async () => {
+                        await actions.createApprovedGroupFolderLink({ data: { auth, groupIds: folderSelection } });
+                        setNotice("Telegram shareable folder link created.");
+                        setFolderSelection([]);
+                        setModal("");
+                        await reload();
+                      })
+                  : undefined
+              }
               disabled={
-                (modal === "ADD" ? !username : !folderLink) ||
+                (modal === "ADD" ? !username : modal === "IMPORT" ? !folderLink : !folderSelection.length) ||
                 actionBusy === "add-approved-group" ||
-                actionBusy === "import-groups"
+                actionBusy === "import-groups" ||
+                actionBusy === "create-folder-link"
               }
             >
-              {actionBusy === "add-approved-group" || actionBusy === "import-groups"
+              {actionBusy === "add-approved-group" || actionBusy === "import-groups" || actionBusy === "create-folder-link"
                 ? "Saving..."
                 : modal === "ADD"
                   ? "ADD GROUP"
-                  : "IMPORT"}
+                  : modal === "IMPORT"
+                    ? "IMPORT"
+                    : "CREATE TELEGRAM FOLDER LINK"}
             </Button>
           </form>
         </div>
@@ -2703,8 +2851,10 @@ function CampaignsPage({ auth, data, actions, reload, setNotice, actionBusy, run
 
 function DMCampaign({ auth, data, actions, reload, setNotice, actionBusy, runAction }: any) {
   const [createMode, setCreateMode] = useState(false);
-  const audience = data?.audience ?? null;
+  const [audience, setAudience] = useState<any>(data?.audience ?? null);
   const [selected, setSelected] = useState<string[]>([]);
+  const [usernameFilter, setUsernameFilter] = useState<"ALL" | "WITH_USERNAME" | "WITHOUT_USERNAME">("ALL");
+  const [activityFilter, setActivityFilter] = useState<"ALL" | "ACTIVE_RECENTLY" | "AROUND_MONTH" | "LONG_TIME_AGO">("ALL");
   const [connectionId, setConnectionId] = useState("");
   const [message, setMessage] = useState("");
   const [messageEntities, setMessageEntities] = useState<any[]>([]);
@@ -2715,6 +2865,25 @@ function DMCampaign({ auth, data, actions, reload, setNotice, actionBusy, runAct
   const [name, setName] = useState("DM Promotion");
   const [minDelay, setMinDelay] = useState(30);
   const [maxDelay, setMaxDelay] = useState(60);
+  useEffect(() => {
+    setAudience(data?.audience ?? null);
+  }, [data?.audience]);
+  async function loadFilteredAudience(nextUsername = usernameFilter, nextActivity = activityFilter) {
+    await runAction("filter-dm-audience", async () => {
+      const response = await actions.findAudience({
+        data: {
+          auth,
+          groupIds: [],
+          onlyNew: true,
+          usernameFilter: nextUsername,
+          activityFilter: nextActivity,
+          excludeInactive: nextActivity === "ALL",
+        },
+      });
+      setAudience(response);
+      setSelected([]);
+    });
+  }
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -2735,6 +2904,13 @@ function DMCampaign({ auth, data, actions, reload, setNotice, actionBusy, runAct
           },
           group_ids: [],
           contact_ids: selected,
+          audience_filters: {
+            usernameFilter,
+            activityFilter,
+            filter: audience?.filter ?? "ALL_ELIGIBLE",
+            onlyNew: true,
+            excludeInactive: activityFilter === "ALL",
+          },
           start_now: true,
           exclude_previously_contacted: true,
           min_delay_seconds: minDelay,
@@ -2772,16 +2948,57 @@ function DMCampaign({ auth, data, actions, reload, setNotice, actionBusy, runAct
         BACK TO DM CAMPAIGNS
       </Button>
       {audience ? (
-        <AudienceSummary
-          result={audience}
-          selectable
-          selected={selected}
-          setSelected={setSelected}
-          auth={auth}
-          actions={actions}
-          actionBusy={actionBusy}
-          runAction={runAction}
-        />
+        <>
+          <section className={panelClass("space-y-3")}>
+            <p className="font-semibold">Audience Filters</p>
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="space-y-2">
+                <span className="text-xs font-semibold uppercase text-muted-foreground">Username</span>
+                <select
+                  className={inputClass()}
+                  value={usernameFilter}
+                  onChange={(e) => {
+                    const next = e.target.value as "ALL" | "WITH_USERNAME" | "WITHOUT_USERNAME";
+                    setUsernameFilter(next);
+                    void loadFilteredAudience(next, activityFilter);
+                  }}
+                >
+                  <option value="ALL">All</option>
+                  <option value="WITH_USERNAME">With Username</option>
+                  <option value="WITHOUT_USERNAME">Without Username</option>
+                </select>
+              </label>
+              <label className="space-y-2">
+                <span className="text-xs font-semibold uppercase text-muted-foreground">Activity</span>
+                <select
+                  className={inputClass()}
+                  value={activityFilter}
+                  onChange={(e) => {
+                    const next = e.target.value as "ALL" | "ACTIVE_RECENTLY" | "AROUND_MONTH" | "LONG_TIME_AGO";
+                    setActivityFilter(next);
+                    void loadFilteredAudience(usernameFilter, next);
+                  }}
+                >
+                  <option value="ALL">All</option>
+                  <option value="ACTIVE_RECENTLY">Active / Recently</option>
+                  <option value="AROUND_MONTH">Around a Month</option>
+                  <option value="LONG_TIME_AGO">Long Time Ago</option>
+                </select>
+              </label>
+            </div>
+            <p className="text-sm text-muted-foreground">Matching Users: {audience.totalFound ?? 0}</p>
+          </section>
+          <AudienceSummary
+            result={audience}
+            selectable
+            selected={selected}
+            setSelected={setSelected}
+            auth={auth}
+            actions={actions}
+            actionBusy={actionBusy}
+            runAction={runAction}
+          />
+        </>
       ) : (
         <Empty message="No saved audience yet. Use Find Users before creating a DM campaign." />
       )}
@@ -3308,6 +3525,8 @@ function AudienceSummary({ result, selectable, selected, setSelected, auth, acti
     groupIds: [],
     onlyNew: true,
     filter: result.filter ?? "ALL_ELIGIBLE",
+    usernameFilter: result.usernameFilter ?? "ALL",
+    activityFilter: result.activityFilter ?? "ALL",
     excludeInactive: result.excludeInactive ?? true,
   };
   const selectAll = async () => {
@@ -3391,15 +3610,19 @@ function AudienceSummary({ result, selectable, selected, setSelected, auth, acti
                   : [...selected, u.id],
               )
             }
-            className="flex w-full items-center justify-between border border-border bg-background p-3 text-left text-sm"
+            className="flex w-full items-center justify-between gap-3 border border-border bg-background p-3 text-left text-sm"
           >
-            <span>
-              {index + 1}. {u.username ? `@${u.username}` : (u.display_name ?? u.telegram_user_id)}
-              <span className="mt-1 block text-xs text-muted-foreground">
-                Presence: {presenceLabel(u.presence_status)}
-                {" | "}Source: {sourceGroupLabel(u)}
-                {u.recent_activity_at ? ` | Recent group activity ${new Date(u.recent_activity_at).toLocaleDateString()}` : ""}
-                {` | Messages observed ${u.messages_observed ?? 0}`}
+            <span className="flex min-w-0 items-start gap-3">
+              {selectable ? <input type="checkbox" readOnly checked={selected.includes(u.id)} /> : null}
+              <span className="min-w-0">
+                {index + 1}. {u.username ? `@${u.username}` : (u.display_name ?? u.telegram_user_id)}
+                <span className="mt-1 block text-xs text-muted-foreground">
+                  Presence: {presenceLabel(u.presence_status)}
+                  {u.last_seen_at ? ` | Last seen ${new Date(u.last_seen_at).toLocaleDateString()}` : ""}
+                  {" | "}Source: {sourceGroupLabel(u)}
+                  {u.recent_activity_at ? ` | Recent group activity ${new Date(u.recent_activity_at).toLocaleDateString()}` : ""}
+                  {` | Messages observed ${u.messages_observed ?? 0}`}
+                </span>
               </span>
             </span>
             <span className={statusTone(u.eligibility)}>

@@ -207,6 +207,24 @@ export const importApprovedGroups = createServerFn({ method: "POST" })
     jsonSafe(await data.importApprovedGroups(await resolveAuth(i.auth), i.folderLink)),
   );
 
+export const getApprovedGroupFolderLinks = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth) => i)
+  .handler(async ({ data: i }) =>
+    jsonSafe(await data.approvedGroupFolderLinks(await resolveAuth(i.auth))),
+  );
+
+export const createApprovedGroupFolderLink = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { groupIds: string[] }) => i)
+  .handler(async ({ data: i }) =>
+    jsonSafe(await data.createApprovedGroupFolderLink(await resolveAuth(i.auth), i.groupIds)),
+  );
+
+export const revokeApprovedGroupFolderLink = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { id: string }) => i)
+  .handler(async ({ data: i }) =>
+    jsonSafe(await data.revokeApprovedGroupFolderLink(await resolveAuth(i.auth), i.id)),
+  );
+
 export const getGroups = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { status?: string }) => i)
   .handler(async ({ data: i }) => data.listGroups(await resolveAuth(i.auth), i.status));
@@ -345,6 +363,8 @@ export const findAudience = createServerFn({ method: "POST" })
       groupIds?: string[];
       onlyNew?: boolean;
       filter?: "ALL_ELIGIBLE" | "ACTIVE_POSTERS" | "ACTIVE_30_DAYS" | "RECENTLY_ONLINE";
+      usernameFilter?: "ALL" | "WITH_USERNAME" | "WITHOUT_USERNAME";
+      activityFilter?: "ALL" | "ACTIVE_RECENTLY" | "AROUND_MONTH" | "LONG_TIME_AGO";
       excludeInactive?: boolean;
       page?: number;
       pageSize?: number;
@@ -355,6 +375,8 @@ export const findAudience = createServerFn({ method: "POST" })
       groupIds: i.groupIds ?? [],
       onlyNew: i.onlyNew ?? true,
       filter: i.filter,
+      usernameFilter: i.usernameFilter,
+      activityFilter: i.activityFilter,
       excludeInactive: i.excludeInactive,
       page: i.page,
       pageSize: i.pageSize,
@@ -367,6 +389,8 @@ export const selectAudienceIds = createServerFn({ method: "POST" })
       groupIds?: string[];
       onlyNew?: boolean;
       filter?: "ALL_ELIGIBLE" | "ACTIVE_POSTERS" | "ACTIVE_30_DAYS" | "RECENTLY_ONLINE";
+      usernameFilter?: "ALL" | "WITH_USERNAME" | "WITHOUT_USERNAME";
+      activityFilter?: "ALL" | "ACTIVE_RECENTLY" | "AROUND_MONTH" | "LONG_TIME_AGO";
       excludeInactive?: boolean;
       rangeFrom?: number | null;
       rangeTo?: number | null;
@@ -377,6 +401,8 @@ export const selectAudienceIds = createServerFn({ method: "POST" })
       groupIds: i.groupIds ?? [],
       onlyNew: i.onlyNew ?? true,
       filter: i.filter,
+      usernameFilter: i.usernameFilter,
+      activityFilter: i.activityFilter,
       excludeInactive: i.excludeInactive,
       rangeFrom: i.rangeFrom,
       rangeTo: i.rangeTo,
@@ -465,6 +491,13 @@ export const createCampaign = createServerFn({ method: "POST" })
         group_ids: string[];
         group_category_id?: string | null;
         contact_ids: string[];
+        audience_filters?: {
+          usernameFilter?: "ALL" | "WITH_USERNAME" | "WITHOUT_USERNAME";
+          activityFilter?: "ALL" | "ACTIVE_RECENTLY" | "AROUND_MONTH" | "LONG_TIME_AGO";
+          filter?: "ALL_ELIGIBLE" | "ACTIVE_POSTERS" | "ACTIVE_30_DAYS" | "RECENTLY_ONLINE";
+          onlyNew?: boolean;
+          excludeInactive?: boolean;
+        } | null;
         scheduled_at?: string | null;
         start_now: boolean;
         exclude_previously_contacted?: boolean;
