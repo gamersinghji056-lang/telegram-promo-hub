@@ -213,10 +213,19 @@ export const getApprovedGroupFolderLinks = createServerFn({ method: "POST" })
     jsonSafe(await data.approvedGroupFolderLinks(await resolveAuth(i.auth))),
   );
 
-export const createApprovedGroupFolderLink = createServerFn({ method: "POST" })
-  .inputValidator((i: Auth & { groupIds: string[] }) => i)
+export const getApprovedGroupFolderEligibility = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { connectionId?: string | null }) => i)
   .handler(async ({ data: i }) =>
-    jsonSafe(await data.createApprovedGroupFolderLink(await resolveAuth(i.auth), i.groupIds)),
+    jsonSafe(await data.approvedGroupFolderEligibility(await resolveAuth(i.auth), i.connectionId)),
+  );
+
+export const createApprovedGroupFolderLink = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { connectionId?: string | null; groupIds: string[] }) => i)
+  .handler(async ({ data: i }) =>
+    jsonSafe(await data.createApprovedGroupFolderLink(await resolveAuth(i.auth), {
+      connectionId: i.connectionId,
+      groupIds: i.groupIds,
+    })),
   );
 
 export const revokeApprovedGroupFolderLink = createServerFn({ method: "POST" })

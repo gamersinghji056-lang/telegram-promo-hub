@@ -9,6 +9,7 @@ import {
   completeUserSessionPassword,
   disconnectUserSession,
   discoverAudienceViaUserSession,
+  folderLinkEligibilityViaUserSession,
   importGroupsFromFolderViaUserSession,
   createShareableFolderLinkViaUserSession,
   customEmojiPreviewViaUserSession,
@@ -1276,46 +1277,128 @@ export async function approvedGroupFolderLinks(ctx: AuthContext) {
   return data ?? [];
 }
 
-export async function createApprovedGroupFolderLink(ctx: AuthContext, groupIds: string[]) {
-  const ids = [...new Set(groupIds)].filter(Boolean);
-  if (!ids.length) throw new Error("Select at least one approved group.");
-  const client = db();
-  const sessions = await eligibleTenantSessions(ctx.tenantId);
-  if (!sessions.length) throw new Error("Connect a usable Telegram session first.");
-  const { data: groups, error } = await client
+const CHATLIST_LIMIT_MESSAGE = "Telegram shared-folder limit reached for this account.";
+const EMPTY_EXPORT_MESSAGE = "No selected approved groups are exportable from this Telegram account.";
+
+async function approvedFolderGroups(ctx: AuthContext, ids?: string[]) {
+  let query = db()
     .from("discovered_groups")
     .select("id, title, username, member_count, telegram_group_id, access_hash, entity_type, status")
     .eq("tenant_id", ctx.tenantId)
-    .in("id", ids)
     .in("status", ["APPROVED", "JOINED"]);
+  if (ids?.length) query = query.in("id", ids);
+  const { data, error } = await query.order("title", { ascending: true, nullsFirst: false });
   if (error) throw new Error(error.message);
-  const rows = groups ?? [];
+  return data ?? [];
+}
+
+function reconnectRequired(row: Record<string, unknown>) {
+  return !sessionUsable(row) ||
+    String(row.health ?? "") === "RECONNECT_REQUIRED" ||
+    String(row.session_error_code ?? "") === "AUTH_KEY_UNREGISTERED";
+}
+
+export async function approvedGroupFolderEligibility(ctx: AuthContext, connectionId?: string | null) {
+  const groups = await approvedFolderGroups(ctx);
+  if (!connectionId) throw new Error("Select a connected Telegram session.");
+  const { data: connection } = await db()
+    .from("telegram_connections")
+    .select("*")
+    .eq("id", connectionId)
+    .eq("tenant_id", ctx.tenantId)
+    .maybeSingle();
+  if (!connection) throw new Error("Telegram session not found.");
+  if (reconnectRequired(connection as Record<string, unknown>)) {
+    return {
+      connectionId: String(connection.id),
+      folderExportStatus: "RECONNECT_REQUIRED",
+      folderExportMessage: "Reconnect session required",
+      eligibleCount: 0,
+      groups: groups.map((group) => ({
+        groupId: group.id,
+        exportable: false,
+        reason: "Reconnect session required",
+      })),
+    };
+  }
+  try {
+    const eligibility = await folderLinkEligibilityViaUserSession(ctx.tenantId, String(connection.id), groups.map((group) => ({
+      id: String(group.id),
+      username: group.username as string | null,
+      telegram_group_id: group.telegram_group_id as number | null,
+      access_hash: group.access_hash as string | null,
+      entity_type: group.entity_type as string | null,
+    })));
+    const eligibleCount = eligibility.filter((row) => row.exportable).length;
+    return {
+      connectionId: String(connection.id),
+      folderExportStatus: eligibleCount ? "READY" : "NO_ELIGIBLE_GROUPS",
+      folderExportMessage: eligibleCount ? null : EMPTY_EXPORT_MESSAGE,
+      eligibleCount,
+      groups: eligibility,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("CHATLISTS_TOO_MUCH")) {
+      return {
+        connectionId: String(connection.id),
+        folderExportStatus: "LIMIT_REACHED",
+        folderExportMessage: CHATLIST_LIMIT_MESSAGE,
+        eligibleCount: 0,
+        groups: groups.map((group) => ({
+          groupId: group.id,
+          exportable: false,
+          reason: "Not exportable by Telegram",
+        })),
+      };
+    }
+    throw error;
+  }
+}
+
+export async function createApprovedGroupFolderLink(
+  ctx: AuthContext,
+  input: string[] | { connectionId?: string | null; groupIds: string[] },
+) {
+  const groupIds = Array.isArray(input) ? input : input.groupIds;
+  const ids = [...new Set(groupIds)].filter(Boolean);
+  if (!ids.length) throw new Error("Select at least one approved group.");
+  const client = db();
+  const connectionId = Array.isArray(input) ? null : input.connectionId;
+  const connection = connectionId ? await requireConnection(ctx, connectionId) : await defaultHealthyConnection(ctx);
+  if (!sessionUsable(connection as Record<string, unknown>)) throw new Error("Reconnect session required");
+  const rows = await approvedFolderGroups(ctx, ids);
   if (rows.length !== ids.length) throw new Error("Only your own approved groups can be exported.");
+  const eligibility = await folderLinkEligibilityViaUserSession(ctx.tenantId, String(connection.id), rows.map((group) => ({
+    id: String(group.id),
+    username: group.username as string | null,
+    telegram_group_id: group.telegram_group_id as number | null,
+    access_hash: group.access_hash as string | null,
+    entity_type: group.entity_type as string | null,
+  })));
+  const exportableIds = new Set(eligibility.filter((row) => row.exportable).map((row) => row.groupId));
+  const exportRows = rows.filter((group) => exportableIds.has(String(group.id)));
+  if (!exportRows.length) throw new Error(EMPTY_EXPORT_MESSAGE);
+  if (exportRows.length !== rows.length) throw new Error(EMPTY_EXPORT_MESSAGE);
   const title = "WPAY Groups";
-  const exportGroups = rows.map((group) => ({
+  const exportGroups = exportRows.map((group) => ({
     username: group.username as string | null,
     telegram_group_id: group.telegram_group_id as number | null,
     access_hash: group.access_hash as string | null,
     entity_type: group.entity_type as string | null,
   }));
-  let connection = sessions[0];
-  let result: Awaited<ReturnType<typeof createShareableFolderLinkViaUserSession>> | null = null;
-  let lastLimitError: unknown = null;
-  for (const session of sessions) {
-    try {
-      result = await createShareableFolderLinkViaUserSession(ctx.tenantId, session.id as string, {
-        title,
-        groups: exportGroups,
-      });
-      connection = session;
-      break;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (!message.includes("CHATLISTS_TOO_MUCH")) throw error;
-      lastLimitError = error;
-    }
+  let result: Awaited<ReturnType<typeof createShareableFolderLinkViaUserSession>>;
+  try {
+    result = await createShareableFolderLinkViaUserSession(ctx.tenantId, String(connection.id), {
+      title,
+      groups: exportGroups,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("CHATLISTS_TOO_MUCH")) throw new Error(CHATLIST_LIMIT_MESSAGE);
+    if (message.includes("FILTER_INCLUDE_EMPTY")) throw new Error(EMPTY_EXPORT_MESSAGE);
+    throw error;
   }
-  if (!result) throw lastLimitError instanceof Error ? lastLimitError : new Error("Telegram folder link limit reached.");
   const includedGroups = rows.map((group) => ({
     id: group.id,
     title: group.title,

@@ -61,6 +61,7 @@ import {
   getAudienceDiscoveryState,
   getAnalytics,
   getAccountProfile,
+  getApprovedGroupFolderEligibility,
   getApprovedGroupFolderLinks,
   getBilling,
   getBulkJoinState,
@@ -322,6 +323,7 @@ function MiniAppSection() {
     addGroupByUsername: useServerFn(addGroupByUsername),
     addApprovedGroupByUsername: useServerFn(addApprovedGroupByUsername),
     importApprovedGroups: useServerFn(importApprovedGroups),
+    getApprovedGroupFolderEligibility: useServerFn(getApprovedGroupFolderEligibility),
     getApprovedGroupFolderLinks: useServerFn(getApprovedGroupFolderLinks),
     createApprovedGroupFolderLink: useServerFn(createApprovedGroupFolderLink),
     revokeApprovedGroupFolderLink: useServerFn(revokeApprovedGroupFolderLink),
@@ -1593,11 +1595,64 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
   const [folderLink, setFolderLink] = useState("");
   const approvedGroups = data?.groups ?? [];
   const [folderSelection, setFolderSelection] = useState<string[]>([]);
+  const folderConnections = data?.connections ?? [];
+  const [folderConnectionId, setFolderConnectionId] = useState("");
+  const [folderEligibility, setFolderEligibility] = useState<any>(null);
+  const [folderEligibilityLoading, setFolderEligibilityLoading] = useState(false);
+  const [folderEligibilityError, setFolderEligibilityError] = useState("");
   const [expandedLinkId, setExpandedLinkId] = useState("");
+  const selectedFolderConnection = folderConnections.find((connection: any) => connection.id === folderConnectionId) ?? null;
+  const folderReconnectRequired = selectedFolderConnection
+    ? selectedFolderConnection.status !== "CONNECTED" ||
+      !selectedFolderConnection.has_session ||
+      ["RECONNECT_REQUIRED", "INVALID_AUTH", "REQUIRES_ACTION"].includes(String(selectedFolderConnection.health ?? "")) ||
+      selectedFolderConnection.session_error_code === "AUTH_KEY_UNREGISTERED"
+    : true;
+  const folderEligibilityById = new Map<string, any>(
+    (folderEligibility?.groups ?? []).map((row: any) => [row.groupId, row]),
+  );
+  const eligibleApprovedGroups = approvedGroups.filter((group: any) => folderEligibilityById.get(group.id)?.exportable === true);
+  const folderStatusMessage =
+    folderEligibilityError ||
+    folderEligibility?.folderExportMessage ||
+    (folderReconnectRequired && selectedFolderConnection ? "Reconnect session required" : "");
+  const loadFolderEligibility = async (connectionId: string) => {
+    if (!connectionId) return;
+    setFolderEligibilityLoading(true);
+    setFolderEligibilityError("");
+    try {
+      const result = await actions.getApprovedGroupFolderEligibility({ data: { auth, connectionId } });
+      setFolderEligibility(result);
+      setFolderSelection((current) =>
+        current.filter((id) => (result.groups ?? []).some((row: any) => row.groupId === id && row.exportable)),
+      );
+    } catch (error) {
+      setFolderEligibility(null);
+      setFolderEligibilityError(error instanceof Error ? error.message : String(error));
+      setFolderSelection([]);
+    } finally {
+      setFolderEligibilityLoading(false);
+    }
+  };
+  useEffect(() => {
+    if (modal !== "SHARE") return;
+    const firstConnected = folderConnections.find((connection: any) =>
+      connection.status === "CONNECTED" &&
+      connection.has_session &&
+      !["RECONNECT_REQUIRED", "INVALID_AUTH", "REQUIRES_ACTION"].includes(String(connection.health ?? "")) &&
+      connection.session_error_code !== "AUTH_KEY_UNREGISTERED",
+    );
+    const nextId = folderConnectionId || firstConnected?.id || folderConnections[0]?.id || "";
+    if (nextId && nextId !== folderConnectionId) {
+      setFolderConnectionId(nextId);
+      return;
+    }
+    if (nextId) void loadFolderEligibility(nextId);
+  }, [modal, folderConnectionId, folderConnections.length, data?.connections]);
   const selectFolderLimit = (limit: number) => {
     let members = 0;
     const ids: string[] = [];
-    for (const group of approvedGroups) {
+    for (const group of eligibleApprovedGroups) {
       const count = Number(group.member_count ?? 0);
       if (count > 0 && members + count > limit) continue;
       ids.push(group.id);
@@ -1605,10 +1660,12 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
     }
     setFolderSelection(ids);
   };
-  const toggleFolderGroup = (id: string) =>
+  const toggleFolderGroup = (id: string) => {
+    if (folderEligibilityById.get(id)?.exportable !== true) return;
     setFolderSelection((current) =>
       current.includes(id) ? current.filter((value) => value !== id) : [...current, id],
     );
+  };
   return (
     <div className="space-y-4">
       {section === "groups-approved" ? (
@@ -1760,13 +1817,70 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
               />
             ) : (
               <div className="space-y-3">
+                <div className="space-y-2">
+                  <p className="text-sm font-semibold">Telegram Session</p>
+                  <div className="max-h-48 space-y-2 overflow-auto">
+                    {folderConnections.map((connection: any) => {
+                      const isSelected = connection.id === folderConnectionId;
+                      const reconnect = connection.status !== "CONNECTED" ||
+                        !connection.has_session ||
+                        ["RECONNECT_REQUIRED", "INVALID_AUTH", "REQUIRES_ACTION"].includes(String(connection.health ?? "")) ||
+                        connection.session_error_code === "AUTH_KEY_UNREGISTERED";
+                      const statusText = reconnect ? "Reconnect Required" : "Connected";
+                      const exportStatus = isSelected
+                        ? folderEligibilityLoading
+                          ? "Checking folder export..."
+                          : folderEligibility?.folderExportStatus === "LIMIT_REACHED"
+                            ? "Telegram shared-folder limit reached for this account."
+                            : folderEligibility?.folderExportStatus === "READY"
+                              ? "Folder export ready"
+                              : folderEligibility?.folderExportMessage ?? "No export status yet"
+                        : "Select to check folder export";
+                      return (
+                        <button
+                          key={connection.id}
+                          type="button"
+                          className={`w-full border p-3 text-left text-sm ${isSelected ? "border-primary bg-primary/5" : "border-border bg-background"}`}
+                          onClick={() => {
+                            setFolderConnectionId(connection.id);
+                            setFolderSelection([]);
+                          }}
+                        >
+                          <span className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="font-semibold">
+                              {connection.account_name ?? connection.username ?? connection.label ?? connection.phone_masked ?? "Telegram account"}
+                            </span>
+                            <span className={reconnect ? "text-destructive" : "text-success"}>{statusText}</span>
+                          </span>
+                          <span className="mt-1 block text-xs text-muted-foreground">
+                            {connection.username ? `@${connection.username}` : "Username pending"}
+                            {connection.telegram_premium ? " | Premium" : ""}
+                            {" | "}
+                            {exportStatus}
+                          </span>
+                          <span className="mt-1 block text-xs text-muted-foreground">
+                            Eligible approved groups: {isSelected && !folderEligibilityLoading ? Number(folderEligibility?.eligibleCount ?? 0) : "-"}
+                          </span>
+                        </button>
+                      );
+                    })}
+                    {!folderConnections.length ? (
+                      <p className="border border-border bg-background p-3 text-sm text-muted-foreground">Connect a Telegram session first.</p>
+                    ) : null}
+                  </div>
+                </div>
+                {folderStatusMessage ? (
+                  <p className={`text-sm font-semibold ${folderEligibility?.folderExportStatus === "LIMIT_REACHED" || folderReconnectRequired ? "text-destructive" : "text-muted-foreground"}`}>
+                    {folderStatusMessage}
+                  </p>
+                ) : null}
                 <div className="grid grid-cols-2 gap-2">
                   {[100, 500, 1000].map((limit) => (
-                    <Button key={limit} type="button" size="sm" variant="secondary" onClick={() => selectFolderLimit(limit)}>
+                    <Button key={limit} type="button" size="sm" variant="secondary" disabled={folderReconnectRequired || folderEligibilityLoading} onClick={() => selectFolderLimit(limit)}>
                       Up to {limit.toLocaleString()} members
                     </Button>
                   ))}
-                  <Button type="button" size="sm" variant="secondary" onClick={() => setFolderSelection(approvedGroups.map((g: any) => g.id))}>
+                  <Button type="button" size="sm" variant="secondary" disabled={folderReconnectRequired || folderEligibilityLoading} onClick={() => setFolderSelection(eligibleApprovedGroups.map((g: any) => g.id))}>
                     Select All Eligible
                   </Button>
                   <Button type="button" size="sm" variant="secondary" onClick={() => setFolderSelection([])}>
@@ -1775,25 +1889,36 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
                 </div>
                 <p className="text-sm font-semibold">Selected Groups: {folderSelection.length}</p>
                 <div className="max-h-72 space-y-2 overflow-auto">
-                  {approvedGroups.map((group: any) => (
-                    <label key={group.id} className="flex gap-3 border border-border bg-background p-3 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={folderSelection.includes(group.id)}
-                        onChange={() => toggleFolderGroup(group.id)}
-                      />
-                      <span>
-                        <span className="block font-semibold">{group.title ?? group.username ?? group.id}</span>
-                        <span className="block text-xs text-muted-foreground">
-                          {group.username ? `@${group.username}` : "No public username"}
-                          {" | "}
-                          {group.member_count ? `${group.member_count} members` : "member count unknown"}
-                          {" | "}
-                          {group.username ? "public" : "private/unknown"}
+                  {approvedGroups.map((group: any) => {
+                    const eligibility = folderEligibilityById.get(group.id) as any;
+                    const canExport = eligibility?.exportable === true && !folderReconnectRequired;
+                    const reason = folderReconnectRequired ? "Reconnect session required" : eligibility?.reason;
+                    return (
+                      <label key={group.id} className={`flex gap-3 border border-border bg-background p-3 text-sm ${canExport ? "" : "opacity-70"}`}>
+                        <input
+                          type="checkbox"
+                          disabled={!canExport}
+                          checked={folderSelection.includes(group.id)}
+                          onChange={() => toggleFolderGroup(group.id)}
+                        />
+                        <span>
+                          <span className="block font-semibold">{group.title ?? group.username ?? group.id}</span>
+                          <span className="block text-xs text-muted-foreground">
+                            {group.username ? `@${group.username}` : "No public username"}
+                            {" | "}
+                            {group.member_count ? `${group.member_count} members` : "member count unknown"}
+                            {" | "}
+                            {group.username ? "public" : "private/unknown"}
+                          </span>
+                          {!canExport ? (
+                            <span className="mt-1 block text-xs font-semibold text-destructive">
+                              {reason ?? (folderEligibilityLoading ? "Checking eligibility..." : "Not exportable by Telegram")}
+                            </span>
+                          ) : null}
                         </span>
-                      </span>
-                    </label>
-                  ))}
+                      </label>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -1804,7 +1929,13 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
                 modal === "SHARE"
                   ? () =>
                       void runAction("create-folder-link", async () => {
-                        await actions.createApprovedGroupFolderLink({ data: { auth, groupIds: folderSelection } });
+                        if (!eligibleApprovedGroups.length) {
+                          setNotice("No selected approved groups are exportable from this Telegram account.");
+                          return;
+                        }
+                        await actions.createApprovedGroupFolderLink({
+                          data: { auth, connectionId: folderConnectionId, groupIds: folderSelection },
+                        });
                         setNotice("Telegram shareable folder link created.");
                         setFolderSelection([]);
                         setModal("");
@@ -1813,7 +1944,16 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
                   : undefined
               }
               disabled={
-                (modal === "ADD" ? !username : modal === "IMPORT" ? !folderLink : !folderSelection.length) ||
+                (modal === "ADD"
+                  ? !username
+                  : modal === "IMPORT"
+                    ? !folderLink
+                    : !folderSelection.length ||
+                      !folderConnectionId ||
+                      folderReconnectRequired ||
+                      folderEligibilityLoading ||
+                      folderEligibility?.folderExportStatus === "LIMIT_REACHED" ||
+                      !eligibleApprovedGroups.length) ||
                 actionBusy === "add-approved-group" ||
                 actionBusy === "import-groups" ||
                 actionBusy === "create-folder-link"

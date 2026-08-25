@@ -2054,6 +2054,105 @@ function chatlistSlug(url: string) {
   return url.match(/(?:t\.me\/addlist\/|addlist\/)([A-Za-z0-9_-]+)/)?.[1] ?? "";
 }
 
+export type FolderLinkCandidateGroup = {
+  id: string;
+  username?: string | null;
+  telegram_group_id?: number | null;
+  access_hash?: string | null;
+  entity_type?: string | null;
+};
+
+export type FolderLinkEligibilityResult = {
+  groupId: string;
+  exportable: boolean;
+  reason: string | null;
+};
+
+function entityId(value: unknown) {
+  if (!value || typeof value !== "object" || !("id" in value)) return null;
+  const id = (value as { id?: { toString?: () => string } | string | number }).id;
+  return id == null ? null : String(id);
+}
+
+function entityUsername(value: unknown) {
+  if (!value || typeof value !== "object" || !("username" in value)) return null;
+  const username = (value as { username?: string | null }).username;
+  return username ? username.replace(/^@/, "").toLowerCase() : null;
+}
+
+function isExportableChatEntity(value: unknown) {
+  if (value instanceof Api.Chat) return true;
+  if (value instanceof Api.Channel) {
+    const channel = value as Api.Channel & { left?: boolean; megagroup?: boolean; broadcast?: boolean };
+    if (channel.left) return false;
+    return channel.megagroup === true || channel.broadcast === true;
+  }
+  return false;
+}
+
+function folderEligibilityReason(error: unknown) {
+  const upper = errorMessage(error).toUpperCase();
+  if (
+    upper.includes("CHANNEL_PRIVATE") ||
+    upper.includes("USER_NOT_PARTICIPANT") ||
+    upper.includes("CHAT_ADMIN_REQUIRED") ||
+    upper.includes("INVITE") ||
+    upper.includes("USERNAME_NOT_OCCUPIED")
+  ) {
+    return "Private/inaccessible";
+  }
+  return "Not exportable by Telegram";
+}
+
+export async function folderLinkEligibilityViaUserSession(
+  tenantId: string,
+  connectionId: string,
+  groups: FolderLinkCandidateGroup[],
+): Promise<FolderLinkEligibilityResult[]> {
+  return withAuthorizedUserClient(tenantId, connectionId, async (client) => {
+    const dialogs = await client.getDialogs({ limit: 500 });
+    const joinedUsernames = new Set<string>();
+    const joinedIds = new Set<string>();
+    for (const dialog of dialogs) {
+      const entity = (dialog as { entity?: unknown }).entity;
+      const username = entityUsername(entity);
+      const id = entityId(entity);
+      if (username) joinedUsernames.add(username);
+      if (id) joinedIds.add(id);
+    }
+
+    const results: FolderLinkEligibilityResult[] = [];
+    for (const group of groups) {
+      const username = group.username?.replace(/^@/, "").toLowerCase() ?? null;
+      const id = group.telegram_group_id == null ? null : String(group.telegram_group_id);
+      const isJoined = Boolean((username && joinedUsernames.has(username)) || (id && joinedIds.has(id)));
+      if (!isJoined) {
+        results.push({ groupId: group.id, exportable: false, reason: "Not joined on this account" });
+        continue;
+      }
+
+      try {
+        const peer = await resolveSendEntity(client, {
+          id: group.telegram_group_id ?? null,
+          username: group.username ?? null,
+          accessHash: group.access_hash ?? null,
+          entityType: group.entity_type ?? null,
+        });
+        const entity = await client.getEntity(peer as Api.TypeEntityLike);
+        if (!isExportableChatEntity(entity)) {
+          results.push({ groupId: group.id, exportable: false, reason: "Not exportable by Telegram" });
+          continue;
+        }
+        await client.getInputEntity(entity as Api.TypeEntityLike);
+        results.push({ groupId: group.id, exportable: true, reason: null });
+      } catch (error) {
+        results.push({ groupId: group.id, exportable: false, reason: folderEligibilityReason(error) });
+      }
+    }
+    return results;
+  });
+}
+
 async function nextChatlistFilterId(client: TelegramClient) {
   const response = await client.invoke(new Api.messages.GetDialogFilters());
   const filters = response instanceof Api.messages.DialogFilters ? response.filters : [];
