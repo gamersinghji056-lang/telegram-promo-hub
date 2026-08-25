@@ -663,3 +663,84 @@ test("approved groups create real Telegram addlist links with stored management 
   assert(migration.includes("revoked_at timestamptz"));
   assert(migration.includes("ENABLE ROW LEVEL SECURITY"));
 });
+
+test("approved folder modal has back retry stale guard and eligible-only selection", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  assert(route.includes("BACK"));
+  assert(route.includes("Retry"));
+  assert(route.includes("folderEligibilityRequestRef"));
+  assert(route.includes("Loading folder eligibility..."));
+  assert(route.includes("No eligible approved groups for this Telegram account."));
+  assert(route.includes("eligibleApprovedGroups.map((g: any) => g.id)"));
+  assert(route.includes("for (const group of eligibleApprovedGroups)"));
+  assert(route.includes("setFolderEligibility(null)"));
+  assert(route.includes("Reconnect required"));
+  assert(!route.includes("Reconnect session required"));
+});
+
+test("Add Users page reuses audience filters and persists tracked job state", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  const funcs = read("src/lib/customer.functions.ts");
+  const data = read("src/lib/customer-data.server.ts");
+  const migration = read("supabase/migrations/20260825210000_add_users_jobs.sql");
+  const shell = read("src/components/mini-app-shell.tsx");
+  assert(shell.includes('"add-users", "Add Users"'));
+  assert(route.includes('"add-users"'));
+  assert(route.includes("function AddUsersPage"));
+  assert(route.includes("usernameFilter"));
+  assert(route.includes("activityFilter"));
+  assert(route.includes("selectAudienceIds"));
+  assert(route.includes("Matching count:"));
+  assert(route.includes("Select All matching"));
+  assert(route.includes("Select Telegram Session"));
+  assert(route.includes("Reconnect Required"));
+  assert(route.includes("CHECK DESTINATION"));
+  assert(route.includes("ADD USERS TO GROUP"));
+  assert(route.includes("ADD USERS TO CHANNEL"));
+  assert(route.includes("PENDING"));
+  assert(route.includes("PROCESSING"));
+  assert(route.includes("SUCCESSFUL"));
+  assert(route.includes("FAILED"));
+  assert(route.includes("Pause"));
+  assert(route.includes("Resume"));
+  assert(route.includes("Stop/Cancel"));
+  assert(route.includes("Recent Add Users Jobs"));
+  assert(funcs.includes("getAddUsersState"));
+  assert(funcs.includes("checkAddUsersDestination"));
+  assert(funcs.includes("startAddUsersJob"));
+  assert(funcs.includes("controlAddUsersJob"));
+  assert(data.includes("addUsersState"));
+  assert(data.includes("startAddUsersJob"));
+  assert(data.includes("controlAddUsersJob"));
+  assert(data.includes("processAddUsersJobs"));
+  assert(data.includes(".eq(\"tenant_id\", ctx.tenantId)"));
+  assert(data.includes(".eq(\"customer_id\", ctx.customerId)"));
+  assert(migration.includes("CREATE TABLE IF NOT EXISTS public.add_users_jobs"));
+  assert(migration.includes("CREATE TABLE IF NOT EXISTS public.add_users_job_results"));
+  assert(migration.includes("ENABLE ROW LEVEL SECURITY"));
+});
+
+test("Add Users MTProto flow detects destination permissions and handles invite errors safely", () => {
+  const telegram = read("src/lib/telegram-user-session.server.ts");
+  const worker = read("src/lib/background-workers.server.ts");
+  const i18n = read("src/lib/mini-i18n.ts");
+  assert(telegram.includes("checkAddUsersDestinationViaUserSession"));
+  assert(telegram.includes("addUserToDestinationViaUserSession"));
+  assert(telegram.includes("destinationType"));
+  assert(telegram.includes("Selected session must be joined/member of that destination."));
+  assert(telegram.includes("Selected session must be channel admin with invite users permission."));
+  assert(telegram.includes("Api.messages.AddChatUser"));
+  assert(telegram.includes("Api.channels.InviteToChannel"));
+  assert(telegram.includes("USER_PRIVACY_RESTRICTED"));
+  assert(telegram.includes("Privacy restricted"));
+  assert(telegram.includes("USER_ALREADY_PARTICIPANT"));
+  assert(telegram.includes("Already participant"));
+  assert(telegram.includes("FLOOD_WAIT"));
+  assert(telegram.includes("PEER_FLOOD"));
+  assert(telegram.includes("Session invalid"));
+  assert(worker.includes("processAddUsersJobs"));
+  assert(worker.includes("ADD_USERS_BATCH_LIMIT"));
+  for (const phrase of ["Add Users", "User Filters", "Select Telegram Session", "ADD USERS TO GROUP", "ADD USERS TO CHANNEL", "Recent Add Users Jobs"]) {
+    assert(i18n.includes(phrase), `missing Add Users i18n phrase ${phrase}`);
+  }
+});

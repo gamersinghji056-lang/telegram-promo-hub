@@ -4,6 +4,8 @@ import { callBot, botToken } from "./telegram.server";
 import { createHash, randomBytes } from "node:crypto";
 import { hashPassword, verifyPassword } from "./security.server";
 import {
+  addUserToDestinationViaUserSession,
+  checkAddUsersDestinationViaUserSession,
   checkUserSession,
   completeUserSessionCode,
   completeUserSessionPassword,
@@ -1312,12 +1314,12 @@ export async function approvedGroupFolderEligibility(ctx: AuthContext, connectio
     return {
       connectionId: String(connection.id),
       folderExportStatus: "RECONNECT_REQUIRED",
-      folderExportMessage: "Reconnect session required",
+      folderExportMessage: "Reconnect required",
       eligibleCount: 0,
       groups: groups.map((group) => ({
         groupId: group.id,
         exportable: false,
-        reason: "Reconnect session required",
+        reason: "Reconnect required",
       })),
     };
   }
@@ -1366,7 +1368,7 @@ export async function createApprovedGroupFolderLink(
   const client = db();
   const connectionId = Array.isArray(input) ? null : input.connectionId;
   const connection = connectionId ? await requireConnection(ctx, connectionId) : await defaultHealthyConnection(ctx);
-  if (!sessionUsable(connection as Record<string, unknown>)) throw new Error("Reconnect session required");
+  if (!sessionUsable(connection as Record<string, unknown>)) throw new Error("Reconnect required");
   const rows = await approvedFolderGroups(ctx, ids);
   if (rows.length !== ids.length) throw new Error("Only your own approved groups can be exported.");
   const eligibility = await folderLinkEligibilityViaUserSession(ctx.tenantId, String(connection.id), rows.map((group) => ({
@@ -1730,6 +1732,227 @@ export async function processBulkJoinJobs(limit = 2) {
         })
         .eq("tenant_id", ctx.tenantId);
     }
+  }
+  return { processed };
+}
+
+/* -------------------------------- add users -------------------------------------- */
+
+function addUsersStats(results: { status?: string | null }[]) {
+  return {
+    selected_count: results.length,
+    pending_count: results.filter((row) => row.status === "PENDING").length,
+    processing_count: results.filter((row) => row.status === "PROCESSING").length,
+    successful_count: results.filter((row) => row.status === "SUCCESSFUL").length,
+    failed_count: results.filter((row) => row.status === "FAILED").length,
+  };
+}
+
+function addUsersSchemaMissing(error?: { message?: string | null } | null) {
+  const message = String(error?.message ?? "").toLowerCase();
+  return message.includes("add_users_jobs") || message.includes("add_users_job_results") || message.includes("relation") && message.includes("does not exist");
+}
+
+async function syncAddUsersJobStats(jobId: string) {
+  const { data: results } = await untypedDb()
+    .from("add_users_job_results")
+    .select("status")
+    .eq("job_id", jobId);
+  const stats = addUsersStats(results ?? []);
+  const done = stats.pending_count === 0 && stats.processing_count === 0;
+  const patch: Record<string, unknown> = {
+    ...stats,
+    updated_at: new Date().toISOString(),
+  };
+  if (done) {
+    patch["status"] = "COMPLETED";
+    patch["completed_at"] = new Date().toISOString();
+  }
+  await untypedDb().from("add_users_jobs").update(patch).eq("id", jobId);
+  return stats;
+}
+
+export async function addUsersState(ctx: AuthContext, jobId?: string | null) {
+  let query = untypedDb()
+    .from("add_users_jobs")
+    .select("*")
+    .eq("tenant_id", ctx.tenantId)
+    .eq("customer_id", ctx.customerId)
+    .order("created_at", { ascending: false })
+    .limit(20);
+  if (jobId) query = query.eq("id", jobId);
+  const { data: jobs, error } = await query;
+  if (addUsersSchemaMissing(error)) return { jobs: [], job: null, results: [], migrationRequired: true };
+  if (error) throw new Error(error.message);
+  const selected = jobId ? (jobs ?? [])[0] : (jobs ?? []).find((job: { status?: string | null }) => ["PENDING", "RUNNING", "PAUSED", "COOLDOWN"].includes(String(job.status))) ?? (jobs ?? [])[0] ?? null;
+  const { data: results } = selected
+    ? await untypedDb()
+      .from("add_users_job_results")
+      .select("*")
+      .eq("tenant_id", ctx.tenantId)
+      .eq("customer_id", ctx.customerId)
+      .eq("job_id", selected.id)
+      .order("created_at", { ascending: true })
+    : { data: [] };
+  return { jobs: jobs ?? [], job: selected ?? null, results: results ?? [] };
+}
+
+export async function checkAddUsersDestination(ctx: AuthContext, input: { connectionId: string; destination: string }) {
+  const connection = await requireConnection(ctx, input.connectionId);
+  if (!sessionUsable(connection as Record<string, unknown>)) throw new Error("Reconnect required");
+  return checkAddUsersDestinationViaUserSession(ctx.tenantId, String(connection.id), input.destination);
+}
+
+export async function startAddUsersJob(
+  ctx: AuthContext,
+  input: { connectionId: string; destination: string; contactIds: string[] },
+) {
+  const ids = [...new Set(input.contactIds)].filter(Boolean);
+  if (!ids.length) throw new Error("Select at least one user.");
+  const connection = await requireConnection(ctx, input.connectionId);
+  if (!sessionUsable(connection as Record<string, unknown>)) throw new Error("Reconnect required");
+  const destination = await checkAddUsersDestinationViaUserSession(ctx.tenantId, String(connection.id), input.destination);
+  if (!destination.ok) throw new Error(destination.reason ?? "Destination unavailable");
+  const { data: contacts, error } = await db()
+    .from("audience_contacts")
+    .select("id, telegram_user_id, access_hash, username, display_name, eligibility, tenant_id")
+    .eq("tenant_id", ctx.tenantId)
+    .in("id", ids)
+    .eq("eligibility", "OPTED_IN");
+  if (error) throw new Error(error.message);
+  const rows = contacts ?? [];
+  if (rows.length !== ids.length) throw new Error("Only your own discovered users can be added.");
+  const { data: job, error: insertError } = await untypedDb()
+    .from("add_users_jobs")
+    .insert({
+      tenant_id: ctx.tenantId,
+      customer_id: ctx.customerId,
+      connection_id: connection.id,
+      destination_input: input.destination,
+      destination_title: destination.title,
+      destination_username: destination.username,
+      destination_type: destination.destinationType,
+      destination_peer_id: destination.peerId,
+      selected_count: rows.length,
+      pending_count: rows.length,
+      status: "RUNNING",
+      started_at: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+    })
+    .select("*")
+    .single();
+  if (insertError || !job) throw new Error(insertError?.message ?? "Could not create Add Users job.");
+  const resultRows = rows.map((contact) => ({
+    job_id: job.id,
+    tenant_id: ctx.tenantId,
+    customer_id: ctx.customerId,
+    contact_id: contact.id,
+    telegram_user_id: contact.telegram_user_id,
+    access_hash: contact.access_hash,
+    username: contact.username,
+    display_name: contact.display_name,
+    status: "PENDING",
+  }));
+  const { error: resultError } = await untypedDb().from("add_users_job_results").insert(resultRows);
+  if (resultError) throw new Error(resultError.message);
+  await notify(ctx.tenantId, "Add Users started", `${rows.length} user(s) queued.`, "INFO", "/mini-app/add-users");
+  return addUsersState(ctx, String(job.id));
+}
+
+export async function controlAddUsersJob(ctx: AuthContext, input: { id: string; action: "PAUSE" | "RESUME" | "CANCEL" }) {
+  const { data: job } = await untypedDb()
+    .from("add_users_jobs")
+    .select("*")
+    .eq("tenant_id", ctx.tenantId)
+    .eq("customer_id", ctx.customerId)
+    .eq("id", input.id)
+    .maybeSingle();
+  if (!job) throw new Error("Add Users job not found.");
+  const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (input.action === "PAUSE") patch["status"] = "PAUSED";
+  if (input.action === "RESUME") {
+    patch["status"] = "RUNNING";
+    patch["cooldown_until"] = null;
+  }
+  if (input.action === "CANCEL") {
+    patch["status"] = "CANCELLED";
+    patch["completed_at"] = new Date().toISOString();
+  }
+  await untypedDb()
+    .from("add_users_jobs")
+    .update(patch)
+    .eq("tenant_id", ctx.tenantId)
+    .eq("customer_id", ctx.customerId)
+    .eq("id", input.id);
+  return addUsersState(ctx, input.id);
+}
+
+export async function processAddUsersJobs(limit = 2) {
+  const now = new Date().toISOString();
+  const { data: jobs, error } = await untypedDb()
+    .from("add_users_jobs")
+    .select("*")
+    .in("status", ["PENDING", "RUNNING", "COOLDOWN"])
+    .or(`cooldown_until.is.null,cooldown_until.lte.${now}`)
+    .order("updated_at", { ascending: true })
+    .limit(Math.max(1, Math.min(limit, 5)));
+  if (addUsersSchemaMissing(error)) return { processed: 0 };
+  if (error) throw new Error(error.message);
+  let processed = 0;
+  for (const job of jobs ?? []) {
+    const { data: result } = await untypedDb()
+      .from("add_users_job_results")
+      .select("*")
+      .eq("job_id", job.id)
+      .eq("tenant_id", job.tenant_id)
+      .eq("status", "PENDING")
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (!result) {
+      await syncAddUsersJobStats(String(job.id));
+      continue;
+    }
+    await untypedDb()
+      .from("add_users_job_results")
+      .update({ status: "PROCESSING", attempted_at: now, updated_at: now })
+      .eq("id", result.id)
+      .eq("status", "PENDING");
+    const invite = await addUserToDestinationViaUserSession(String(job.tenant_id), String(job.connection_id), {
+      destination: String(job.destination_input),
+      contact: {
+        contactId: String(result.contact_id),
+        telegramUserId: result.telegram_user_id == null ? null : Number(result.telegram_user_id),
+        accessHash: result.access_hash ?? null,
+        username: result.username ?? null,
+        displayName: result.display_name ?? null,
+      },
+    });
+    if (invite.status === "COOLDOWN") {
+      const seconds = Math.max(60, Number(invite.cooldownSeconds ?? 3600));
+      const cooldownUntil = new Date(Date.now() + seconds * 1000).toISOString();
+      await untypedDb()
+        .from("add_users_job_results")
+        .update({ status: "FAILED", reason: invite.reason, completed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+        .eq("id", result.id);
+      await untypedDb()
+        .from("add_users_jobs")
+        .update({ status: "COOLDOWN", cooldown_until: cooldownUntil, last_error: invite.reason, updated_at: new Date().toISOString() })
+        .eq("id", job.id);
+    } else {
+      await untypedDb()
+        .from("add_users_job_results")
+        .update({
+          status: invite.status,
+          reason: invite.reason,
+          completed_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", result.id);
+      await syncAddUsersJobStats(String(job.id));
+    }
+    await clientConnectionUsed(String(job.tenant_id), String(job.connection_id));
+    processed += 1;
   }
   return { processed };
 }

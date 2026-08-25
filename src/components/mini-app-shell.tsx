@@ -25,6 +25,7 @@ const items = [
   ["group-create", "Group Promotion", Megaphone, "#f59f00"],
   ["campaigns", "Campaigns", MessageCircle, "#e8590c"],
   ["dm-audience", "Find Users", Users, "#7950f2"],
+  ["add-users", "Add Users", Users, "#0ca678"],
   ["group-categories", "Categories", Tags, "#12b886"],
   ["analytics", "Analytics", BarChart3, "#228be6"],
   ["billing", "Billing", CreditCard, "#40c057"],

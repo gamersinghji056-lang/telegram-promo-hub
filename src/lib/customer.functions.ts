@@ -436,6 +436,40 @@ export const pauseAudienceDiscovery = createServerFn({ method: "POST" })
   .inputValidator((i: Auth) => i)
   .handler(async ({ data: i }) => data.pauseAudienceDiscovery(await resolveAuth(i.auth)));
 
+export const getAddUsersState = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { jobId?: string | null }) => i)
+  .handler(async ({ data: i }) =>
+    jsonSafe(await data.addUsersState(await resolveAuth(i.auth), i.jobId)),
+  );
+
+export const checkAddUsersDestination = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { connectionId: string; destination: string }) => i)
+  .handler(async ({ data: i }) =>
+    jsonSafe(await data.checkAddUsersDestination(await resolveAuth(i.auth), {
+      connectionId: i.connectionId,
+      destination: i.destination,
+    })),
+  );
+
+export const startAddUsersJob = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { connectionId: string; destination: string; contactIds: string[] }) => i)
+  .handler(async ({ data: i }) =>
+    jsonSafe(await data.startAddUsersJob(await resolveAuth(i.auth), {
+      connectionId: i.connectionId,
+      destination: i.destination,
+      contactIds: i.contactIds,
+    })),
+  );
+
+export const controlAddUsersJob = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { id: string; action: "PAUSE" | "RESUME" | "CANCEL" }) => i)
+  .handler(async ({ data: i }) =>
+    jsonSafe(await data.controlAddUsersJob(await resolveAuth(i.auth), {
+      id: i.id,
+      action: i.action,
+    })),
+  );
+
 export const getContactHistory = createServerFn({ method: "POST" })
   .inputValidator((i: Auth) => i)
   .handler(async ({ data: i }) => data.contactHistory(await resolveAuth(i.auth)));

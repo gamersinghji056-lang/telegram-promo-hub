@@ -50,7 +50,9 @@ import {
   addKeyword,
   approveGroup,
   checkConnection,
+  checkAddUsersDestination,
   controlCampaign,
+  controlAddUsersJob,
   createApprovedGroupFolderLink,
   createCampaign,
   deleteCampaign,
@@ -61,6 +63,7 @@ import {
   getAudienceDiscoveryState,
   getAnalytics,
   getAccountProfile,
+  getAddUsersState,
   getApprovedGroupFolderEligibility,
   getApprovedGroupFolderLinks,
   getBilling,
@@ -108,6 +111,7 @@ import {
   testSessionHealth,
   resumeBulkJoin,
   selectAudienceIds,
+  startAddUsersJob,
   startAudienceDiscovery,
   startBulkJoin,
   startGroupDiscovery,
@@ -132,6 +136,7 @@ const valid = new Set([
   "groups-joined",
   "group-categories",
   "dm-audience",
+  "add-users",
   "dm-create",
   "dm-history",
   "campaigns",
@@ -151,6 +156,7 @@ const titles: Record<string, string> = {
   "groups-joined": "Joined Groups",
   "group-categories": "Group Categories",
   "dm-audience": "DM Audience",
+  "add-users": "Add Users",
   "dm-create": "DM Promotion",
   "dm-history": "DM History",
   campaigns: "Campaigns",
@@ -309,6 +315,10 @@ function MiniAppSection() {
     verifyConnectionCode: useServerFn(verifyConnectionCode),
     verifyConnectionPassword: useServerFn(verifyConnectionPassword),
     checkConnection: useServerFn(checkConnection),
+    checkAddUsersDestination: useServerFn(checkAddUsersDestination),
+    getAddUsersState: useServerFn(getAddUsersState),
+    startAddUsersJob: useServerFn(startAddUsersJob),
+    controlAddUsersJob: useServerFn(controlAddUsersJob),
     testSessionHealth: useServerFn(testSessionHealth),
     reconnectConnection: useServerFn(reconnectConnection),
     disconnectConnection: useServerFn(disconnectConnection),
@@ -430,6 +440,11 @@ function MiniAppSection() {
       "dm-audience": async (a) => ({
         groups: await groupsFn({ data: { auth: a, status: "APPROVED_ACTIVE" } }),
         discovery: await audienceDiscoveryFn({ data: { auth: a } }),
+      }),
+      "add-users": async (a) => ({
+        connections: await connectionsFn({ data: { auth: a } }),
+        audience: await audienceFn({ data: { auth: a, groupIds: [], onlyNew: true } }),
+        addUsers: await actions.getAddUsersState({ data: { auth: a } }),
       }),
       "dm-create": async (a) => ({
         connections: await connectionsFn({ data: { auth: a } }),
@@ -869,6 +884,7 @@ function CustomerContent(props: {
     return <GroupList {...props} />;
   if (section === "group-categories") return <GroupCategories {...props} />;
   if (section === "dm-audience") return <DMAudience {...props} />;
+  if (section === "add-users") return <AddUsersPage {...props} />;
   if (section === "dm-create") return <DMCampaign {...props} />;
   if (section === "campaigns") return <CampaignsPage {...props} />;
   if (section === "dm-history" || section === "group-history")
@@ -1600,6 +1616,7 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
   const [folderEligibility, setFolderEligibility] = useState<any>(null);
   const [folderEligibilityLoading, setFolderEligibilityLoading] = useState(false);
   const [folderEligibilityError, setFolderEligibilityError] = useState("");
+  const folderEligibilityRequestRef = useRef(0);
   const [expandedLinkId, setExpandedLinkId] = useState("");
   const selectedFolderConnection = folderConnections.find((connection: any) => connection.id === folderConnectionId) ?? null;
   const folderReconnectRequired = selectedFolderConnection
@@ -1615,23 +1632,27 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
   const folderStatusMessage =
     folderEligibilityError ||
     folderEligibility?.folderExportMessage ||
-    (folderReconnectRequired && selectedFolderConnection ? "Reconnect session required" : "");
+    (folderReconnectRequired && selectedFolderConnection ? "Reconnect required" : "");
   const loadFolderEligibility = async (connectionId: string) => {
     if (!connectionId) return;
+    const requestId = folderEligibilityRequestRef.current + 1;
+    folderEligibilityRequestRef.current = requestId;
     setFolderEligibilityLoading(true);
     setFolderEligibilityError("");
     try {
       const result = await actions.getApprovedGroupFolderEligibility({ data: { auth, connectionId } });
+      if (folderEligibilityRequestRef.current !== requestId || connectionId !== folderConnectionId) return;
       setFolderEligibility(result);
       setFolderSelection((current) =>
         current.filter((id) => (result.groups ?? []).some((row: any) => row.groupId === id && row.exportable)),
       );
     } catch (error) {
+      if (folderEligibilityRequestRef.current !== requestId || connectionId !== folderConnectionId) return;
       setFolderEligibility(null);
-      setFolderEligibilityError(error instanceof Error ? error.message : String(error));
+      setFolderEligibilityError(error instanceof Error ? error.message : "Could not load eligibility. Try again.");
       setFolderSelection([]);
     } finally {
-      setFolderEligibilityLoading(false);
+      if (folderEligibilityRequestRef.current === requestId) setFolderEligibilityLoading(false);
     }
   };
   useEffect(() => {
@@ -1795,9 +1816,16 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
               }
             }}
           >
-            <div className="flex items-center justify-between">
-              <p className="font-semibold">{modal === "ADD" ? "Add Group" : modal === "IMPORT" ? "Import Groups" : "Create Telegram Folder Link"}</p>
-              <button type="button" onClick={() => setModal("")} aria-label="Close">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                {modal === "SHARE" ? (
+                  <Button type="button" size="sm" variant="secondary" onClick={() => setModal("")}>
+                    BACK
+                  </Button>
+                ) : null}
+                <p className="font-semibold">{modal === "ADD" ? "Add Group" : modal === "IMPORT" ? "Import Groups" : "Create Telegram Folder Link"}</p>
+              </div>
+              <button type="button" onClick={() => setModal("")} aria-label="Close" className="text-muted-foreground hover:text-foreground">
                 <X className="size-4" />
               </button>
             </div>
@@ -1840,8 +1868,10 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
                         <button
                           key={connection.id}
                           type="button"
-                          className={`w-full border p-3 text-left text-sm ${isSelected ? "border-primary bg-primary/5" : "border-border bg-background"}`}
+                          className={`w-full border p-3 text-left text-sm transition-colors ${isSelected ? "border-primary bg-primary/10 shadow-sm" : "border-border bg-background hover:border-primary/40"} ${reconnect ? "opacity-75" : ""}`}
                           onClick={() => {
+                            setFolderEligibility(null);
+                            setFolderEligibilityError("");
                             setFolderConnectionId(connection.id);
                             setFolderSelection([]);
                           }}
@@ -1869,9 +1899,22 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
                     ) : null}
                   </div>
                 </div>
+                {folderEligibilityLoading ? (
+                  <p className="border border-primary/30 bg-primary/10 p-3 text-sm font-semibold text-primary">Loading folder eligibility...</p>
+                ) : null}
                 {folderStatusMessage ? (
-                  <p className={`text-sm font-semibold ${folderEligibility?.folderExportStatus === "LIMIT_REACHED" || folderReconnectRequired ? "text-destructive" : "text-muted-foreground"}`}>
-                    {folderStatusMessage}
+                  <div className={`border p-3 text-sm font-semibold ${folderEligibilityError || folderEligibility?.folderExportStatus === "LIMIT_REACHED" || folderReconnectRequired ? "border-destructive/40 bg-destructive/10 text-destructive" : "border-border bg-background text-muted-foreground"}`}>
+                    <p>{folderStatusMessage}</p>
+                    {folderEligibilityError ? (
+                      <Button type="button" size="sm" variant="secondary" className="mt-2" onClick={() => void loadFolderEligibility(folderConnectionId)}>
+                        Retry
+                      </Button>
+                    ) : null}
+                  </div>
+                ) : null}
+                {!folderEligibilityLoading && folderEligibility && !folderReconnectRequired && eligibleApprovedGroups.length === 0 ? (
+                  <p className="border border-border bg-background p-3 text-sm font-semibold text-muted-foreground">
+                    No eligible approved groups for this Telegram account.
                   </p>
                 ) : null}
                 <div className="grid grid-cols-2 gap-2">
@@ -1892,9 +1935,9 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
                   {approvedGroups.map((group: any) => {
                     const eligibility = folderEligibilityById.get(group.id) as any;
                     const canExport = eligibility?.exportable === true && !folderReconnectRequired;
-                    const reason = folderReconnectRequired ? "Reconnect session required" : eligibility?.reason;
+                    const reason = folderReconnectRequired ? "Reconnect required" : eligibility?.reason;
                     return (
-                      <label key={group.id} className={`flex gap-3 border border-border bg-background p-3 text-sm ${canExport ? "" : "opacity-70"}`}>
+                      <label key={group.id} className={`flex gap-3 border p-3 text-sm transition-colors ${folderSelection.includes(group.id) ? "border-primary bg-primary/10" : "border-border bg-background"} ${canExport ? "" : "opacity-65"}`}>
                         <input
                           type="checkbox"
                           disabled={!canExport}
@@ -2953,6 +2996,271 @@ function DMAudience({ auth, data, actions, reload, setNotice, actionBusy, runAct
               {actionBusy === "load-more-audience" ? "Loading..." : "LOAD MORE"}
             </Button>
           ) : null}
+      </section>
+    </div>
+  );
+}
+
+function AddUsersPage({ auth, data, actions, reload, setNotice, actionBusy, runAction }: any) {
+  const [audience, setAudience] = useState<any>(data?.audience ?? { users: [] });
+  const [selected, setSelected] = useState<string[]>([]);
+  const [usernameFilter, setUsernameFilter] = useState<"ALL" | "WITH_USERNAME" | "WITHOUT_USERNAME">("ALL");
+  const [activityFilter, setActivityFilter] = useState<"ALL" | "ACTIVE_RECENTLY" | "AROUND_MONTH" | "LONG_TIME_AGO">("ALL");
+  const [connectionId, setConnectionId] = useState("");
+  const [destination, setDestination] = useState("");
+  const [destinationCheck, setDestinationCheck] = useState<any>(null);
+  const [addUsers, setAddUsers] = useState<any>(data?.addUsers ?? { jobs: [], results: [] });
+  const connections = data?.connections ?? [];
+  const selectedConnection = connections.find((connection: any) => connection.id === connectionId);
+  const healthySession = selectedConnection &&
+    selectedConnection.status === "CONNECTED" &&
+    selectedConnection.has_session &&
+    !["RECONNECT_REQUIRED", "INVALID_AUTH", "REQUIRES_ACTION"].includes(String(selectedConnection.health ?? "")) &&
+    selectedConnection.session_error_code !== "AUTH_KEY_UNREGISTERED";
+  const currentJob = addUsers?.job;
+  const results = addUsers?.results ?? [];
+  useEffect(() => {
+    setAudience(data?.audience ?? { users: [] });
+    setAddUsers(data?.addUsers ?? { jobs: [], results: [] });
+  }, [data?.audience, data?.addUsers]);
+
+  async function loadFilteredAudience(nextUsername = usernameFilter, nextActivity = activityFilter) {
+    await runAction("filter-add-users", async () => {
+      const response = await actions.findAudience({
+        data: {
+          auth,
+          groupIds: [],
+          onlyNew: true,
+          usernameFilter: nextUsername,
+          activityFilter: nextActivity,
+          excludeInactive: nextActivity === "ALL",
+        },
+      });
+      setAudience(response);
+      setSelected([]);
+    });
+  }
+
+  async function selectAllMatching() {
+    await runAction("select-add-users", async () => {
+      const response = await actions.selectAudienceIds({
+        data: {
+          auth,
+          groupIds: [],
+          onlyNew: true,
+          usernameFilter,
+          activityFilter,
+          excludeInactive: activityFilter === "ALL",
+        },
+      });
+      setSelected(response.ids ?? []);
+    });
+  }
+
+  async function checkDestination() {
+    await runAction("check-add-users-destination", async () => {
+      const response = await actions.checkAddUsersDestination({ data: { auth, connectionId, destination } });
+      setDestinationCheck(response);
+    });
+  }
+
+  async function startJob() {
+    await runAction("start-add-users", async () => {
+      const response = await actions.startAddUsersJob({
+        data: { auth, connectionId, destination, contactIds: selected },
+      });
+      setAddUsers(response);
+      setNotice("Add Users job started.");
+      await reload();
+    });
+  }
+
+  async function controlJob(action: "PAUSE" | "RESUME" | "CANCEL") {
+    if (!currentJob?.id) return;
+    await runAction(`add-users-${action.toLowerCase()}`, async () => {
+      const response = await actions.controlAddUsersJob({ data: { auth, id: currentJob.id, action } });
+      setAddUsers(response);
+      setNotice(`Add Users job ${action.toLowerCase()}.`);
+      await reload();
+    });
+  }
+
+  async function openJob(id: string) {
+    await runAction("open-add-users-job", async () => {
+      const response = await actions.getAddUsersState({ data: { auth, jobId: id } });
+      setAddUsers(response);
+    });
+  }
+
+  const toggleUser = (id: string) =>
+    setSelected((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]);
+  const actionLabel = destinationCheck?.destinationType === "CHANNEL" ? "ADD USERS TO CHANNEL" : "ADD USERS TO GROUP";
+  const canStart = healthySession && selected.length > 0 && destinationCheck?.ok === true && !["RUNNING", "COOLDOWN"].includes(String(currentJob?.status ?? ""));
+  return (
+    <div className="space-y-4">
+      <section className={panelClass("space-y-3")}>
+        <div>
+          <p className="text-lg font-semibold">Add Users</p>
+          <p className="text-sm text-muted-foreground">Use already discovered Find Users records. No new discovery is started here.</p>
+        </div>
+        <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-5">
+          <Stat label="Selected" value={currentJob?.selected_count ?? selected.length} />
+          <Stat label="Pending" value={currentJob?.pending_count ?? 0} />
+          <Stat label="Processing" value={currentJob?.processing_count ?? 0} />
+          <Stat label="Successful" value={currentJob?.successful_count ?? 0} />
+          <Stat label="Failed" value={currentJob?.failed_count ?? 0} />
+        </div>
+        <p className="text-xs text-muted-foreground">PENDING | PROCESSING | SUCCESSFUL | FAILED</p>
+      </section>
+
+      <section className={panelClass("space-y-3")}>
+        <p className="font-semibold">User Filters</p>
+        <div className="flex flex-wrap gap-2">
+          {[
+            ["ALL", "All"],
+            ["WITH_USERNAME", "With Username"],
+            ["WITHOUT_USERNAME", "Without Username"],
+          ].map(([value, label]) => (
+            <Button key={value} type="button" size="sm" variant={usernameFilter === value ? "default" : "secondary"} onClick={() => { setUsernameFilter(value as any); void loadFilteredAudience(value as any, activityFilter); }}>
+              {label}
+            </Button>
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {[
+            ["ALL", "All"],
+            ["ACTIVE_RECENTLY", "Active / Recently"],
+            ["AROUND_MONTH", "Around a Month"],
+            ["LONG_TIME_AGO", "Long Time Ago"],
+          ].map(([value, label]) => (
+            <Button key={value} type="button" size="sm" variant={activityFilter === value ? "default" : "secondary"} onClick={() => { setActivityFilter(value as any); void loadFilteredAudience(usernameFilter, value as any); }}>
+              {label}
+            </Button>
+          ))}
+        </div>
+        <p className="text-sm font-semibold"><span>Matching count:</span> {audience?.totalFound ?? 0}</p>
+        <div className="grid grid-cols-3 gap-2">
+          <Button type="button" size="sm" variant="secondary" onClick={() => void selectAllMatching()}>Select All matching</Button>
+          <Button type="button" size="sm" variant="secondary" onClick={() => setSelected((audience.users ?? []).map((user: any) => user.id))}>Select visible</Button>
+          <Button type="button" size="sm" variant="secondary" onClick={() => setSelected([])}>Clear Selection</Button>
+        </div>
+      </section>
+
+      <section className={panelClass("space-y-3")}>
+        <p className="font-semibold">Select Telegram Session</p>
+        <div className="space-y-2">
+          {connections.map((connection: any) => {
+            const reconnect = connection.status !== "CONNECTED" ||
+              !connection.has_session ||
+              ["RECONNECT_REQUIRED", "INVALID_AUTH", "REQUIRES_ACTION"].includes(String(connection.health ?? "")) ||
+              connection.session_error_code === "AUTH_KEY_UNREGISTERED";
+            const selectedSession = connection.id === connectionId;
+            return (
+              <button
+                key={connection.id}
+                type="button"
+                className={`w-full border p-3 text-left text-sm transition-colors ${selectedSession ? "border-primary bg-primary/10" : "border-border bg-background"} ${reconnect ? "opacity-70" : ""}`}
+                onClick={() => {
+                  setConnectionId(connection.id);
+                  setDestinationCheck(null);
+                }}
+              >
+                <span className="flex items-center justify-between gap-2">
+                  <span className="font-semibold">{connection.account_name ?? connection.username ?? connection.label ?? "Telegram account"}</span>
+                  <span className={reconnect ? "text-destructive" : "text-success"}>{reconnect ? "Reconnect Required" : "Connected"}</span>
+                </span>
+                <span className="mt-1 block text-xs text-muted-foreground">
+                  Health {connection.health_score ?? "-"}% | {connection.health ?? "unknown"}{connection.telegram_premium ? " | Premium" : ""}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className={panelClass("space-y-3")}>
+        <p className="font-semibold">Destination</p>
+        <input className={inputClass()} value={destination} onChange={(e) => { setDestination(e.target.value); setDestinationCheck(null); }} placeholder="@groupname or https://t.me/channel" />
+        <Button type="button" className="w-full" variant="secondary" disabled={!healthySession || !destination || actionBusy === "check-add-users-destination"} onClick={() => void checkDestination()}>
+          {actionBusy === "check-add-users-destination" ? "Checking..." : "CHECK DESTINATION"}
+        </Button>
+        {destinationCheck ? (
+          <p className={`text-sm font-semibold ${destinationCheck.ok ? "text-success" : "text-destructive"}`}>
+            {destinationCheck.ok
+              ? `${destinationCheck.destinationType}: ${destinationCheck.title ?? destinationCheck.username ?? destination}`
+              : destinationCheck.reason}
+          </p>
+        ) : null}
+      </section>
+
+      <section className={panelClass("space-y-3")}>
+        <div className="max-h-[42vh] space-y-2 overflow-auto">
+          {(audience.users ?? []).map((user: any) => (
+            <label key={user.id} className={`flex gap-3 border p-3 text-sm ${selected.includes(user.id) ? "border-primary bg-primary/10" : "border-border bg-background"}`}>
+              <input type="checkbox" checked={selected.includes(user.id)} onChange={() => toggleUser(user.id)} />
+              <span>
+                <span className="font-semibold">{user.username ? `@${user.username}` : (user.display_name ?? user.telegram_user_id)}</span>
+                <span className="block text-xs text-muted-foreground">
+                  Presence: {presenceLabel(user.presence_status)} {user.last_seen_at ? `| Last seen ${new Date(user.last_seen_at).toLocaleDateString()}` : ""}
+                </span>
+              </span>
+            </label>
+          ))}
+          {!audience.users?.length ? <p className="text-sm text-muted-foreground">No matching users.</p> : null}
+        </div>
+      </section>
+
+      <section className="sticky bottom-[calc(var(--miniapp-bottom-nav-height,5rem)+0.5rem)] z-10 border border-border bg-card p-3 shadow-lg">
+        <Button type="button" className="w-full" disabled={!canStart || actionBusy === "start-add-users"} onClick={() => void startJob()}>
+          {actionBusy === "start-add-users" ? "Starting..." : actionLabel}
+        </Button>
+        {!healthySession && connectionId ? <p className="mt-2 text-xs font-semibold text-destructive">Reconnect required</p> : null}
+      </section>
+
+      {currentJob ? (
+        <section className={panelClass("space-y-3")}>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="font-semibold">Current Add Users Job</p>
+              <p className="text-xs text-muted-foreground">
+                {currentJob.destination_title ?? currentJob.destination_username ?? currentJob.destination_input} | {currentJob.status}
+              </p>
+              {currentJob.cooldown_until ? <p className="text-xs font-semibold text-warning">Paused until {new Date(currentJob.cooldown_until).toLocaleString()}</p> : null}
+              {currentJob.last_error ? <p className="text-xs font-semibold text-destructive">{currentJob.last_error}</p> : null}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" size="sm" variant="secondary" disabled={currentJob.status !== "RUNNING"} onClick={() => void controlJob("PAUSE")}>Pause</Button>
+              <Button type="button" size="sm" variant="secondary" disabled={!["PAUSED", "COOLDOWN"].includes(currentJob.status)} onClick={() => void controlJob("RESUME")}>Resume</Button>
+              <Button type="button" size="sm" variant="secondary" disabled={["COMPLETED", "CANCELLED"].includes(currentJob.status)} onClick={() => void controlJob("CANCEL")}>Stop/Cancel</Button>
+            </div>
+          </div>
+          <div className="max-h-72 space-y-2 overflow-auto">
+            {results.map((row: any) => (
+              <div key={row.id} className="border border-border bg-background p-3 text-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="font-semibold">{row.username ? `@${row.username}` : (row.display_name ?? row.telegram_user_id)}</p>
+                  <span className={row.status === "SUCCESSFUL" ? "text-success" : row.status === "FAILED" ? "text-destructive" : "text-warning"}>{row.status}</span>
+                </div>
+                {row.reason ? <p className="mt-1 text-xs text-destructive">{row.reason}</p> : null}
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      <section className={panelClass("space-y-3")}>
+        <p className="font-semibold">Recent Add Users Jobs</p>
+        <div className="space-y-2">
+          {(addUsers?.jobs ?? []).map((job: any) => (
+            <button key={job.id} type="button" className="w-full border border-border bg-background p-3 text-left text-sm" onClick={() => void openJob(job.id)}>
+              <span className="font-semibold">{job.destination_title ?? job.destination_username ?? job.destination_input}</span>
+              <span className="mt-1 block text-xs text-muted-foreground">
+                {job.destination_type} | Selected {job.selected_count} | Successful {job.successful_count} | Failed {job.failed_count} | Pending {job.pending_count} | {job.status} | Created {new Date(job.created_at).toLocaleString()}
+              </span>
+            </button>
+          ))}
+          {!addUsers?.jobs?.length ? <p className="text-sm text-muted-foreground">No Add Users jobs yet.</p> : null}
+        </div>
       </section>
     </div>
   );

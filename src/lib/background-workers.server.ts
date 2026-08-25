@@ -1,6 +1,7 @@
 import { processCampaignJobs } from "./campaign-worker.server";
 import {
   processAudienceDiscoveryJobs,
+  processAddUsersJobs,
   processBulkJoinJobs,
   processGroupDiscoveryJobs,
 } from "./customer-data.server";
@@ -37,6 +38,7 @@ export function startBackgroundWorkers() {
       await processGroupDiscoveryJobs(Number(process.env["GROUP_DISCOVERY_BATCH_LIMIT"] ?? 5));
       await processAudienceDiscoveryJobs(Number(process.env["AUDIENCE_DISCOVERY_BATCH_LIMIT"] ?? 2));
       await processBulkJoinJobs(Number(process.env["BULK_JOIN_BATCH_LIMIT"] ?? 2));
+      await processAddUsersJobs(Number(process.env["ADD_USERS_BATCH_LIMIT"] ?? 1));
     } catch (error) {
       console.error("Background worker failed", error instanceof Error ? error.message : error);
     } finally {

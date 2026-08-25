@@ -2246,6 +2246,184 @@ export async function revokeShareableFolderLinkViaUserSession(
   });
 }
 
+export type AddUsersDestinationCheck = {
+  ok: boolean;
+  destinationType: "GROUP" | "CHANNEL";
+  title: string | null;
+  username: string | null;
+  peerId: string | null;
+  reason: string | null;
+};
+
+export type AddUsersContactInput = {
+  contactId: string;
+  telegramUserId?: number | null;
+  accessHash?: string | null;
+  username?: string | null;
+  displayName?: string | null;
+};
+
+export type AddUsersInviteResult = {
+  contactId: string;
+  status: "SUCCESSFUL" | "FAILED" | "COOLDOWN";
+  reason: string | null;
+  cooldownSeconds?: number | null;
+};
+
+function cleanTelegramTarget(value: string) {
+  return value.trim()
+    .replace(/^https?:\/\/t\.me\//i, "")
+    .replace(/^t\.me\//i, "")
+    .replace(/^@/, "")
+    .split(/[/?#]/)[0] ?? "";
+}
+
+function destinationMeta(entity: unknown): AddUsersDestinationCheck {
+  if (entity instanceof Api.Channel) {
+    const channel = entity as Api.Channel & {
+      title?: string;
+      username?: string;
+      broadcast?: boolean;
+      megagroup?: boolean;
+      left?: boolean;
+      creator?: boolean;
+      adminRights?: { inviteUsers?: boolean } | null;
+    };
+    const destinationType = channel.broadcast && !channel.megagroup ? "CHANNEL" : "GROUP";
+    const canInvite = destinationType === "GROUP"
+      ? channel.left !== true
+      : channel.creator === true || channel.adminRights?.inviteUsers === true;
+    return {
+      ok: canInvite,
+      destinationType,
+      title: channel.title ?? null,
+      username: channel.username ?? null,
+      peerId: entityId(channel),
+      reason: canInvite
+        ? null
+        : destinationType === "GROUP"
+          ? "Selected session must be joined/member of that destination."
+          : "Selected session must be channel admin with invite users permission.",
+    };
+  }
+  if (entity instanceof Api.Chat) {
+    const chat = entity as Api.Chat & { title?: string; username?: string; left?: boolean; deactivated?: boolean };
+    const ok = chat.left !== true && chat.deactivated !== true;
+    return {
+      ok,
+      destinationType: "GROUP",
+      title: chat.title ?? null,
+      username: chat.username ?? null,
+      peerId: entityId(chat),
+      reason: ok ? null : "Selected session must be joined/member of that destination.",
+    };
+  }
+  return {
+    ok: false,
+    destinationType: "GROUP",
+    title: null,
+    username: null,
+    peerId: null,
+    reason: "Destination unavailable",
+  };
+}
+
+function inviteFailureReason(error: unknown) {
+  const message = errorMessage(error);
+  const upper = message.toUpperCase();
+  const flood = upper.match(/FLOOD_WAIT_?(\d+)/);
+  if (flood?.[1]) return { reason: `Flood wait ${flood[1]} seconds`, cooldownSeconds: Number(flood[1]) };
+  if (upper.includes("PEER_FLOOD")) return { reason: "Peer flood. Session paused by Telegram.", cooldownSeconds: 3600 };
+  if (upper.includes("USER_PRIVACY_RESTRICTED")) return { reason: "Privacy restricted", cooldownSeconds: null };
+  if (upper.includes("USER_ALREADY_PARTICIPANT") || upper.includes("ALREADY_PARTICIPANT")) return { reason: "Already participant", cooldownSeconds: null };
+  if (upper.includes("INPUT_USER_DEACTIVATED") || upper.includes("USER_DELETED") || upper.includes("USER_INVALID")) return { reason: "Invalid/deleted user", cooldownSeconds: null };
+  if (upper.includes("CHAT_ADMIN_REQUIRED") || upper.includes("RIGHT") || upper.includes("FORBIDDEN")) return { reason: "Insufficient rights", cooldownSeconds: null };
+  if (upper.includes("USER_NOT_MUTUAL") || upper.includes("USER_CHANNELS_TOO_MUCH") || upper.includes("USER_NOT_PARTICIPANT")) return { reason: "User not mutual/eligible", cooldownSeconds: null };
+  if (upper.includes("BANNED") || upper.includes("RESTRICTED")) return { reason: "Banned/restricted", cooldownSeconds: null };
+  if (upper.includes("CHANNEL_PRIVATE") || upper.includes("USERNAME_NOT_OCCUPIED") || upper.includes("INVITE")) return { reason: "Destination unavailable", cooldownSeconds: null };
+  if (invalidSessionError(error)) return { reason: "Session invalid", cooldownSeconds: null };
+  return { reason: message || "Not exportable by Telegram", cooldownSeconds: null };
+}
+
+async function inputUserForAdd(client: TelegramClient, contact: AddUsersContactInput) {
+  if (contact.telegramUserId && contact.accessHash) {
+    return new Api.InputUser({
+      userId: bigInt(String(contact.telegramUserId)),
+      accessHash: bigInt(String(contact.accessHash)),
+    });
+  }
+  if (contact.username) {
+    const entity = await client.getEntity(contact.username.replace(/^@/, ""));
+    if (entity instanceof Api.User && entity.accessHash) {
+      return new Api.InputUser({
+        userId: bigInt(String(entity.id)),
+        accessHash: bigInt(String(entity.accessHash)),
+      });
+    }
+  }
+  throw new Error("User not mutual/eligible");
+}
+
+export async function checkAddUsersDestinationViaUserSession(
+  tenantId: string,
+  connectionId: string,
+  destination: string,
+): Promise<AddUsersDestinationCheck> {
+  return withAuthorizedUserClient(tenantId, connectionId, async (client) => {
+    try {
+      const entity = await client.getEntity(cleanTelegramTarget(destination));
+      return destinationMeta(entity);
+    } catch (error) {
+      return {
+        ok: false,
+        destinationType: "GROUP",
+        title: null,
+        username: cleanTelegramTarget(destination) || null,
+        peerId: null,
+        reason: inviteFailureReason(error).reason,
+      };
+    }
+  });
+}
+
+export async function addUserToDestinationViaUserSession(
+  tenantId: string,
+  connectionId: string,
+  input: { destination: string; contact: AddUsersContactInput },
+): Promise<AddUsersInviteResult> {
+  return withAuthorizedUserClient(tenantId, connectionId, async (client) => {
+    try {
+      const entity = await client.getEntity(cleanTelegramTarget(input.destination));
+      const meta = destinationMeta(entity);
+      if (!meta.ok) return { contactId: input.contact.contactId, status: "FAILED", reason: meta.reason };
+      const user = await inputUserForAdd(client, input.contact);
+      if (entity instanceof Api.Chat) {
+        await client.invoke(new Api.messages.AddChatUser({
+          chatId: bigInt(String(entity.id)),
+          userId: user,
+          fwdLimit: 0,
+        }));
+      } else if (entity instanceof Api.Channel) {
+        await client.invoke(new Api.channels.InviteToChannel({
+          channel: entity,
+          users: [user],
+        }));
+      } else {
+        return { contactId: input.contact.contactId, status: "FAILED", reason: "Destination unavailable" };
+      }
+      return { contactId: input.contact.contactId, status: "SUCCESSFUL", reason: null };
+    } catch (error) {
+      const classified = inviteFailureReason(error);
+      return {
+        contactId: input.contact.contactId,
+        status: classified.cooldownSeconds ? "COOLDOWN" : "FAILED",
+        reason: classified.reason,
+        cooldownSeconds: classified.cooldownSeconds,
+      };
+    }
+  });
+}
+
 export async function joinGroupViaUserSession(
   tenantId: string,
   connectionId: string,
