@@ -25,26 +25,14 @@ CREATE INDEX IF NOT EXISTS idx_telegram_folder_links_active
 
 ALTER TABLE public.telegram_folder_links ENABLE ROW LEVEL SECURITY;
 
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_policies
-    WHERE schemaname = 'public'
-      AND tablename = 'telegram_folder_links'
-      AND policyname = 'Tenant members can read own Telegram folder links'
-  ) THEN
-    CREATE POLICY "Tenant members can read own Telegram folder links"
-      ON public.telegram_folder_links
-      FOR SELECT
-      TO authenticated
-      USING (
-        EXISTS (
-          SELECT 1
-          FROM public.tenant_members tm
-          WHERE tm.tenant_id = telegram_folder_links.tenant_id
-            AND tm.customer_id = (SELECT auth.uid())
-        )
-      );
-  END IF;
-END $$;
+DROP POLICY IF EXISTS telegram_folder_links_service_role_all
+  ON public.telegram_folder_links;
+
+CREATE POLICY telegram_folder_links_service_role_all
+  ON public.telegram_folder_links
+  FOR ALL
+  TO service_role
+  USING (true)
+  WITH CHECK (true);
+
+GRANT ALL ON public.telegram_folder_links TO service_role;

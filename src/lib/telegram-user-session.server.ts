@@ -2095,7 +2095,7 @@ export async function createShareableFolderLinkViaUserSession(
       inputPeers.push(await client.getInputEntity(peer));
     }
     const filterId = await nextChatlistFilterId(client);
-    const titleText = new Api.TextWithEntities({ text: input.title.trim() || "WPAY Approved Groups", entities: [] });
+    const titleText = new Api.TextWithEntities({ text: input.title.trim() || "WPAY Groups", entities: [] });
     const filter = new Api.DialogFilterChatlist({
       id: filterId,
       title: titleText,
@@ -2104,11 +2104,21 @@ export async function createShareableFolderLinkViaUserSession(
     });
     await client.invoke(new Api.messages.UpdateDialogFilter({ id: filterId, filter }));
     const chatlist = new Api.InputChatlistDialogFilter({ filterId });
-    const exported = await client.invoke(new Api.chatlists.ExportChatlistInvite({
-      chatlist,
-      title: input.title.trim() || "WPAY Approved Groups",
-      peers: exportPeers,
-    }));
+    let exported: Api.chatlists.TypeExportedChatlistInvite;
+    try {
+      exported = await client.invoke(new Api.chatlists.ExportChatlistInvite({
+        chatlist,
+        title: input.title.trim() || "WPAY Groups",
+        peers: exportPeers,
+      }));
+    } catch (error) {
+      try {
+        await client.invoke(new Api.messages.UpdateDialogFilter({ id: filterId }));
+      } catch {
+        /* Best-effort cleanup after Telegram rejects exported invite creation. */
+      }
+      throw error;
+    }
     const invite = exported instanceof Api.chatlists.ExportedChatlistInvite ? exported.invite : null;
     const url = invite && "url" in invite ? String(invite.url) : "";
     if (!url) throw new Error("Telegram did not return a shareable folder link.");

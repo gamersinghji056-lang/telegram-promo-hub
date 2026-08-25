@@ -1280,7 +1280,8 @@ export async function createApprovedGroupFolderLink(ctx: AuthContext, groupIds: 
   const ids = [...new Set(groupIds)].filter(Boolean);
   if (!ids.length) throw new Error("Select at least one approved group.");
   const client = db();
-  const connection = await defaultHealthyConnection(ctx);
+  const sessions = await eligibleTenantSessions(ctx.tenantId);
+  if (!sessions.length) throw new Error("Connect a usable Telegram session first.");
   const { data: groups, error } = await client
     .from("discovered_groups")
     .select("id, title, username, member_count, telegram_group_id, access_hash, entity_type, status")
@@ -1290,16 +1291,31 @@ export async function createApprovedGroupFolderLink(ctx: AuthContext, groupIds: 
   if (error) throw new Error(error.message);
   const rows = groups ?? [];
   if (rows.length !== ids.length) throw new Error("Only your own approved groups can be exported.");
-  const title = `WPAY Approved Groups ${new Date().toISOString().slice(0, 10)}`;
-  const result = await createShareableFolderLinkViaUserSession(ctx.tenantId, connection.id as string, {
-    title,
-    groups: rows.map((group) => ({
-      username: group.username as string | null,
-      telegram_group_id: group.telegram_group_id as number | null,
-      access_hash: group.access_hash as string | null,
-      entity_type: group.entity_type as string | null,
-    })),
-  });
+  const title = "WPAY Groups";
+  const exportGroups = rows.map((group) => ({
+    username: group.username as string | null,
+    telegram_group_id: group.telegram_group_id as number | null,
+    access_hash: group.access_hash as string | null,
+    entity_type: group.entity_type as string | null,
+  }));
+  let connection = sessions[0];
+  let result: Awaited<ReturnType<typeof createShareableFolderLinkViaUserSession>> | null = null;
+  let lastLimitError: unknown = null;
+  for (const session of sessions) {
+    try {
+      result = await createShareableFolderLinkViaUserSession(ctx.tenantId, session.id as string, {
+        title,
+        groups: exportGroups,
+      });
+      connection = session;
+      break;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes("CHATLISTS_TOO_MUCH")) throw error;
+      lastLimitError = error;
+    }
+  }
+  if (!result) throw lastLimitError instanceof Error ? lastLimitError : new Error("Telegram folder link limit reached.");
   const includedGroups = rows.map((group) => ({
     id: group.id,
     title: group.title,
