@@ -18,9 +18,11 @@ import { entityDiagnostics, normalizeMessageEntities, utf16Length } from "./mess
 import { sessionUsable } from "./telegram-session-health.server";
 import { listCustomEmojiCatalogViaUserSession } from "./telegram-user-session.server";
 import {
+  ADD_USERS_CREDITS_QUANTITY,
   OFFICIAL_PLAN_CODES,
   TRON_MAINNET_USDT_CONTRACT,
   activatePaidInvoice,
+  addUsersCreditBalance,
   grantPremiumEmoji,
   isValidTronAddress,
   normalizePaymentSettings,
@@ -279,7 +281,7 @@ export async function adminCustomerDetail(customerId: string) {
     .maybeSingle();
   if (!customer) throw new Error("Customer not found.");
   const tenantId = customer.tenant_id as string;
-  const [connections, groups, campaigns, transactions, invoices, logs, subscription, premiumEmoji, usage, adminLogs] = await Promise.all([
+  const [connections, groups, campaigns, transactions, invoices, logs, subscription, premiumEmoji, addUsersCredits, addUsersCreditHistory, usage, adminLogs] = await Promise.all([
     client.from("telegram_connections").select("*").eq("tenant_id", tenantId),
     client
       .from("discovered_groups")
@@ -318,6 +320,13 @@ export async function adminCustomerDetail(customerId: string) {
       .limit(1)
       .maybeSingle(),
     premiumEmojiEntitlement(tenantId),
+    addUsersCreditBalance(tenantId),
+    client
+      .from("add_users_credit_ledger")
+      .select("*")
+      .eq("tenant_id", tenantId)
+      .order("created_at", { ascending: false })
+      .limit(25),
     tenantUsageDashboard(tenantId),
     client
       .from("admin_logs")
@@ -336,9 +345,34 @@ export async function adminCustomerDetail(customerId: string) {
     logs: logs.data ?? [],
     subscription: subscription.data,
     premiumEmoji,
+    addUsersCredits,
+    addUsersCreditHistory: addUsersCreditHistory.data ?? [],
     usage,
     adminLogs: adminLogs.data ?? [],
   };
+}
+
+export async function adminAdjustAddUsersCredits(adminId: string, input: { customerId: string; amount: number; reason?: string | null }) {
+  const amount = Math.trunc(Number(input.amount ?? 0));
+  if (!Number.isFinite(amount) || amount === 0) throw new Error("Enter a non-zero credit adjustment.");
+  const reason = String(input.reason ?? "").trim();
+  if (!reason) throw new Error("Reason is required.");
+  const customer = await customerById(input.customerId);
+  const { error } = await db().rpc("grant_add_users_credits", {
+    p_tenant_id: customer.tenant_id,
+    p_amount: amount,
+    p_reason: reason,
+    p_admin_id: adminId,
+    p_invoice_id: null,
+  });
+  if (error) throw new Error(error.message);
+  await logAdmin({
+    admin_user_id: adminId,
+    action: amount > 0 ? "ADD_USERS_CREDITS_GRANTED" : "ADD_USERS_CREDITS_ADJUSTED",
+    resource: customer.email as string,
+    details: { amount, reason, unit: ADD_USERS_CREDITS_QUANTITY },
+  });
+  return { ok: true };
 }
 
 export async function adminSetCustomerStatus(

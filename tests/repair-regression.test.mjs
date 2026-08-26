@@ -635,12 +635,10 @@ test("approved groups create real Telegram addlist links with stored management 
   const telegram = read("src/lib/telegram-user-session.server.ts");
   const migration = read("supabase/migrations/20260825090000_approved_group_telegram_folder_links.sql");
   assert(route.includes("CREATE SHAREABLE FOLDER LINK"));
-  assert(route.includes("CREATE TELEGRAM FOLDER LINK"));
-  assert(route.includes("Select All Eligible"));
-  assert(route.includes("Eligible approved groups"));
-  assert(route.includes("Reconnect Required"));
-  assert(route.includes("Telegram shared-folder limit reached for this account."));
-  assert(route.includes("No selected approved groups are exportable from this Telegram account."));
+  assert(route.includes("CREATE SHAREABLE LINK"));
+  assert(route.includes("Select All"));
+  assert(route.includes("Using:"));
+  assert(route.includes("Reconnect required"));
   assert(route.includes("View Included Groups"));
   assert(route.includes("revokeApprovedGroupFolderLink"));
   assert(funcs.includes("getApprovedGroupFolderEligibility"));
@@ -664,18 +662,25 @@ test("approved groups create real Telegram addlist links with stored management 
   assert(migration.includes("ENABLE ROW LEVEL SECURITY"));
 });
 
-test("approved folder modal has back retry stale guard and eligible-only selection", () => {
+test("approved folder modal has compact scrollable create flow and backend validation", () => {
   const route = read("src/routes/mini-app.$section.tsx");
+  const data = read("src/lib/customer-data.server.ts");
   assert(route.includes("BACK"));
-  assert(route.includes("Retry"));
-  assert(route.includes("folderEligibilityRequestRef"));
-  assert(route.includes("Loading folder eligibility..."));
-  assert(route.includes("No eligible approved groups for this Telegram account."));
-  assert(route.includes("eligibleApprovedGroups.map((g: any) => g.id)"));
-  assert(route.includes("for (const group of eligibleApprovedGroups)"));
-  assert(route.includes("setFolderEligibility(null)"));
+  assert(route.includes("h-[92dvh]"));
+  assert(route.includes("overflow-y-auto"));
+  assert(route.includes("env(safe-area-inset-bottom)"));
+  assert(route.includes("healthyFolderConnections"));
+  assert(route.includes("Using: select connected account"));
+  assert(route.includes("setFolderSelection(approvedGroups.map((g: any) => g.id))"));
+  assert(route.includes("for (const group of approvedGroups)"));
+  assert(!route.includes("Loading folder eligibility..."));
+  assert(!route.includes("Checking eligibility..."));
   assert(route.includes("Reconnect required"));
-  assert(!route.includes("Reconnect session required"));
+  assert(data.includes("folderLinkEligibilityViaUserSession"));
+  assert(data.includes("Telegram shared-folder limit reached for this account."));
+  assert(data.includes("No selected approved groups are exportable from this Telegram account."));
+  const folderCreate = data.slice(data.indexOf("export async function createApprovedGroupFolderLink"), data.indexOf("export async function revokeApprovedGroupFolderLink"));
+  assert(!folderCreate.includes("assertEntitlement"));
 });
 
 test("Add Users page reuses audience filters and persists tracked job state", () => {
@@ -690,20 +695,20 @@ test("Add Users page reuses audience filters and persists tracked job state", ()
   assert(route.includes("usernameFilter"));
   assert(route.includes("activityFilter"));
   assert(route.includes("selectAudienceIds"));
-  assert(route.includes("Matching count:"));
-  assert(route.includes("Select All matching"));
-  assert(route.includes("Select Telegram Session"));
+  assert(route.includes("Matching Users"));
+  assert(route.includes("Select All Matching"));
+  assert(route.includes("Telegram Session"));
   assert(route.includes("Reconnect Required"));
-  assert(route.includes("CHECK DESTINATION"));
+  assert(route.includes("RESOLVE / CHECK"));
   assert(route.includes("ADD USERS TO GROUP"));
   assert(route.includes("ADD USERS TO CHANNEL"));
   assert(route.includes("PENDING"));
-  assert(route.includes("PROCESSING"));
+  assert(route.includes("Processing"));
   assert(route.includes("SUCCESSFUL"));
   assert(route.includes("FAILED"));
   assert(route.includes("Pause"));
   assert(route.includes("Resume"));
-  assert(route.includes("Stop/Cancel"));
+  assert(route.includes("Cancel"));
   assert(route.includes("Recent Add Users Jobs"));
   assert(funcs.includes("getAddUsersState"));
   assert(funcs.includes("checkAddUsersDestination"));
@@ -718,6 +723,35 @@ test("Add Users page reuses audience filters and persists tracked job state", ()
   assert(migration.includes("CREATE TABLE IF NOT EXISTS public.add_users_jobs"));
   assert(migration.includes("CREATE TABLE IF NOT EXISTS public.add_users_job_results"));
   assert(migration.includes("ENABLE ROW LEVEL SECURITY"));
+});
+
+test("Add Users credits are independent, success-only and invoice activated once", () => {
+  const migration = read("supabase/migrations/20260826120000_add_users_credit_wallet.sql");
+  const billing = read("src/lib/billing.server.ts");
+  const data = read("src/lib/customer-data.server.ts");
+  const route = read("src/routes/mini-app.$section.tsx");
+  const adminData = read("src/lib/admin-data.server.ts");
+  const adminRoute = read("src/routes/admin.$section.tsx");
+  assert(migration.includes("CREATE TABLE IF NOT EXISTS public.tenant_add_users_credits"));
+  assert(migration.includes("free_trial_used integer NOT NULL DEFAULT 0 CHECK (free_trial_used BETWEEN 0 AND 5)"));
+  assert(migration.includes("add_users_credit_ledger_result_unique"));
+  assert(migration.includes("add_users_credit_ledger_invoice_unique"));
+  assert(migration.includes("consume_add_users_credit"));
+  assert(migration.includes("grant_add_users_credits"));
+  assert(billing.includes("ADD_USERS_CREDITS_CODE"));
+  assert(billing.includes("ADD_USERS_CREDITS_PRICE_USD = 5"));
+  assert(billing.includes("ADD_USERS_CREDITS_QUANTITY = 1000"));
+  assert(billing.includes('paid.product_code === ADD_USERS_CREDITS_CODE.toUpperCase()'));
+  assert(data.includes("requireAddUsersCapacity(ctx.tenantId, ids.length)"));
+  assert(data.includes('invite.status === "SUCCESSFUL"'));
+  assert(data.includes("consumeSuccessfulAddUsersCredit"));
+  assert(data.includes("Add Users credits exhausted"));
+  assert(route.includes("ADD USERS CREDITS"));
+  assert(route.includes("BUY / TOP UP"));
+  assert(route.includes("Free trial remaining"));
+  assert(adminData.includes("adminAdjustAddUsersCredits"));
+  assert(adminRoute.includes("Grant Add Users Credits"));
+  assert(adminRoute.includes("Add Users Credit History"));
 });
 
 test("Add Users MTProto flow detects destination permissions and handles invite errors safely", () => {

@@ -4,6 +4,9 @@ import { db, getSetting, logAdmin, logSystem, notify } from "./db.server";
 export const OFFICIAL_PLAN_CODES = ["TEST", "PLUS", "PRO", "ENTERPRISE"] as const;
 export const PLAN_RANK: Record<string, number> = { TEST: 0, PLUS: 1, PRO: 2, ENTERPRISE: 3 };
 export const PREMIUM_EMOJI_CODE = "premium_emoji";
+export const ADD_USERS_CREDITS_CODE = "add_users_credits";
+export const ADD_USERS_CREDITS_PRICE_USD = 5;
+export const ADD_USERS_CREDITS_QUANTITY = 1000;
 export const TRON_MAINNET_USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 export const LEGACY_WRONG_TRON_USDT_CONTRACTS = ["TXLAQ63Xg1NAzckPwKHvzw7CSEmLMEqcdj"];
 const INVOICE_MINUTES = 10;
@@ -134,6 +137,34 @@ export async function premiumEmojiSettings() {
     enabled: addons.premium_emoji?.enabled !== false,
     price_usd: Number(addons.premium_emoji?.price_usd ?? 20),
     duration_days: Number(addons.premium_emoji?.duration_days ?? 30),
+  };
+}
+
+export async function addUsersCreditBalance(tenantId: string) {
+  const { data, error } = await db().rpc("add_users_credit_capacity", { p_tenant_id: tenantId });
+  if (error) {
+    const message = String(error.message ?? "").toLowerCase();
+    if (message.includes("add_users_credit") || message.includes("tenant_add_users_credits") || message.includes("does not exist")) {
+      return {
+        purchased_balance: 0,
+        free_trial_used: 0,
+        free_trial_remaining: 5,
+        available_capacity: 5,
+        successful_additions: 0,
+        credits_consumed: 0,
+        migrationRequired: true,
+      };
+    }
+    throw new Error(error.message);
+  }
+  const row = Array.isArray(data) ? data[0] : data;
+  return {
+    purchased_balance: Number(row?.purchased_balance ?? 0),
+    free_trial_used: Number(row?.free_trial_used ?? 0),
+    free_trial_remaining: Number(row?.free_trial_remaining ?? 5),
+    available_capacity: Number(row?.available_capacity ?? 5),
+    successful_additions: Number(row?.successful_additions ?? 0),
+    credits_consumed: Number(row?.credits_consumed ?? 0),
   };
 }
 
@@ -331,6 +362,17 @@ export async function activatePaidInvoice(invoiceId: string, actor: "BLOCKCHAIN"
       { onConflict: "tenant_id,addon_code" },
     );
     await notify(paid.tenant_id, "Premium Emoji activated", "WPAY Premium Emoji composer is active.", "SUCCESS", "/mini-app/billing");
+    console.info("ENTITLEMENT_ACTIVATED", { invoice_id: invoiceId, tenant_id: paid.tenant_id, product_type: "ADDON", product_code: paid.product_code });
+  } else if (paid.product_code === ADD_USERS_CREDITS_CODE.toUpperCase()) {
+    const { error } = await client.rpc("grant_add_users_credits", {
+      p_tenant_id: paid.tenant_id,
+      p_amount: ADD_USERS_CREDITS_QUANTITY,
+      p_reason: "Add Users credits invoice paid",
+      p_admin_id: actor === "ADMIN" ? adminId : null,
+      p_invoice_id: paid.id,
+    });
+    if (error) throw new Error(error.message);
+    await notify(paid.tenant_id, "Add Users credits added", "1,000 Add Users credits are ready.", "SUCCESS", "/mini-app/billing");
     console.info("ENTITLEMENT_ACTIVATED", { invoice_id: invoiceId, tenant_id: paid.tenant_id, product_type: "ADDON", product_code: paid.product_code });
   }
 

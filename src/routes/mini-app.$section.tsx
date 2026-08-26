@@ -94,6 +94,7 @@ import {
   getInvoiceStatus,
   checkInvoicePaymentStatus,
   requestPayment,
+  requestAddUsersCreditsPayment,
   requestPremiumEmojiPayment,
   runGroupDiscovery,
   pauseGroupDiscovery,
@@ -371,6 +372,7 @@ function MiniAppSection() {
     getCustomEmojiPreviews: useServerFn(getCustomEmojiPreviews),
     setPreferredPremiumEmojiSession: useServerFn(setPreferredPremiumEmojiSession),
     saveCustomerPreferenceSettings: useServerFn(saveCustomerPreferenceSettings),
+    requestAddUsersCreditsPayment: useServerFn(requestAddUsersCreditsPayment),
     logout: useServerFn(logoutCustomer),
   };
 
@@ -1613,67 +1615,29 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
   const [folderSelection, setFolderSelection] = useState<string[]>([]);
   const folderConnections = data?.connections ?? [];
   const [folderConnectionId, setFolderConnectionId] = useState("");
-  const [folderEligibility, setFolderEligibility] = useState<any>(null);
-  const [folderEligibilityLoading, setFolderEligibilityLoading] = useState(false);
-  const [folderEligibilityError, setFolderEligibilityError] = useState("");
-  const folderEligibilityRequestRef = useRef(0);
   const [expandedLinkId, setExpandedLinkId] = useState("");
   const selectedFolderConnection = folderConnections.find((connection: any) => connection.id === folderConnectionId) ?? null;
+  const healthyFolderConnections = folderConnections.filter((connection: any) =>
+    connection.status === "CONNECTED" &&
+    connection.has_session &&
+    !["RECONNECT_REQUIRED", "INVALID_AUTH", "REQUIRES_ACTION"].includes(String(connection.health ?? "")) &&
+    connection.session_error_code !== "AUTH_KEY_UNREGISTERED",
+  );
   const folderReconnectRequired = selectedFolderConnection
     ? selectedFolderConnection.status !== "CONNECTED" ||
       !selectedFolderConnection.has_session ||
       ["RECONNECT_REQUIRED", "INVALID_AUTH", "REQUIRES_ACTION"].includes(String(selectedFolderConnection.health ?? "")) ||
       selectedFolderConnection.session_error_code === "AUTH_KEY_UNREGISTERED"
     : true;
-  const folderEligibilityById = new Map<string, any>(
-    (folderEligibility?.groups ?? []).map((row: any) => [row.groupId, row]),
-  );
-  const eligibleApprovedGroups = approvedGroups.filter((group: any) => folderEligibilityById.get(group.id)?.exportable === true);
-  const folderStatusMessage =
-    folderEligibilityError ||
-    folderEligibility?.folderExportMessage ||
-    (folderReconnectRequired && selectedFolderConnection ? "Reconnect required" : "");
-  const loadFolderEligibility = async (connectionId: string) => {
-    if (!connectionId) return;
-    const requestId = folderEligibilityRequestRef.current + 1;
-    folderEligibilityRequestRef.current = requestId;
-    setFolderEligibilityLoading(true);
-    setFolderEligibilityError("");
-    try {
-      const result = await actions.getApprovedGroupFolderEligibility({ data: { auth, connectionId } });
-      if (folderEligibilityRequestRef.current !== requestId || connectionId !== folderConnectionId) return;
-      setFolderEligibility(result);
-      setFolderSelection((current) =>
-        current.filter((id) => (result.groups ?? []).some((row: any) => row.groupId === id && row.exportable)),
-      );
-    } catch (error) {
-      if (folderEligibilityRequestRef.current !== requestId || connectionId !== folderConnectionId) return;
-      setFolderEligibility(null);
-      setFolderEligibilityError(error instanceof Error ? error.message : "Could not load eligibility. Try again.");
-      setFolderSelection([]);
-    } finally {
-      if (folderEligibilityRequestRef.current === requestId) setFolderEligibilityLoading(false);
-    }
-  };
   useEffect(() => {
     if (modal !== "SHARE") return;
-    const firstConnected = folderConnections.find((connection: any) =>
-      connection.status === "CONNECTED" &&
-      connection.has_session &&
-      !["RECONNECT_REQUIRED", "INVALID_AUTH", "REQUIRES_ACTION"].includes(String(connection.health ?? "")) &&
-      connection.session_error_code !== "AUTH_KEY_UNREGISTERED",
-    );
-    const nextId = folderConnectionId || firstConnected?.id || folderConnections[0]?.id || "";
-    if (nextId && nextId !== folderConnectionId) {
-      setFolderConnectionId(nextId);
-      return;
-    }
-    if (nextId) void loadFolderEligibility(nextId);
+    const nextId = healthyFolderConnections.find((connection: any) => connection.id === folderConnectionId)?.id || healthyFolderConnections[0]?.id || "";
+    if (nextId !== folderConnectionId) setFolderConnectionId(nextId);
   }, [modal, folderConnectionId, folderConnections.length, data?.connections]);
   const selectFolderLimit = (limit: number) => {
     let members = 0;
     const ids: string[] = [];
-    for (const group of eligibleApprovedGroups) {
+    for (const group of approvedGroups) {
       const count = Number(group.member_count ?? 0);
       if (count > 0 && members + count > limit) continue;
       ids.push(group.id);
@@ -1682,7 +1646,6 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
     setFolderSelection(ids);
   };
   const toggleFolderGroup = (id: string) => {
-    if (folderEligibilityById.get(id)?.exportable !== true) return;
     setFolderSelection((current) =>
       current.includes(id) ? current.filter((value) => value !== id) : [...current, id],
     );
@@ -1695,13 +1658,13 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
             <p className="font-semibold">Total Approved Groups: {data?.groups?.length ?? 0}</p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => setModal("ADD")}>
+            <Button className="bg-cyan-500 text-slate-950 hover:bg-cyan-400" onClick={() => setModal("ADD")}>
               <Plus className="mr-2 size-4" /> ADD GROUP
             </Button>
-            <Button variant="secondary" onClick={() => setModal("IMPORT")}>
+            <Button className="border-cyan-400/40 bg-cyan-500/15 text-cyan-700 hover:bg-cyan-500/25 dark:text-cyan-200" variant="secondary" onClick={() => setModal("IMPORT")}>
               <FolderOpen className="mr-2 size-4" /> IMPORT GROUPS
             </Button>
-            <Button variant="secondary" onClick={() => setModal("SHARE")}>
+            <Button className="border-emerald-400/40 bg-emerald-500/15 text-emerald-700 hover:bg-emerald-500/25 dark:text-emerald-200" variant="secondary" onClick={() => setModal("SHARE")}>
               <FolderOpen className="mr-2 size-4" /> CREATE SHAREABLE FOLDER LINK
             </Button>
           </div>
@@ -1786,9 +1749,9 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
         runAction={runAction}
       />
       {modal ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-background/80 p-0 sm:items-center sm:p-4">
           <form
-            className={panelClass(`w-full ${modal === "SHARE" ? "max-w-2xl" : "max-w-sm"} space-y-3 shadow-lg`)}
+            className={panelClass(`flex w-full ${modal === "SHARE" ? "h-[92dvh] max-w-2xl pb-[calc(var(--miniapp-bottom-nav-height,5rem)+env(safe-area-inset-bottom))] sm:h-[86dvh] sm:pb-0" : "max-w-sm"} flex-col overflow-hidden shadow-lg`)}
             onSubmit={(e) => {
               e.preventDefault();
               if (modal === "ADD") {
@@ -1816,7 +1779,7 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
               }
             }}
           >
-            <div className="flex items-center justify-between gap-2">
+            <div className="sticky top-0 z-10 flex shrink-0 items-center justify-between gap-2 border-b border-border bg-card pb-3">
               <div className="flex items-center gap-2">
                 {modal === "SHARE" ? (
                   <Button type="button" size="sm" variant="secondary" onClick={() => setModal("")}>
@@ -1829,6 +1792,7 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
                 <X className="size-4" />
               </button>
             </div>
+            <div className={`${modal === "SHARE" ? "min-h-0 flex-1 overflow-y-auto py-3 pr-1" : "space-y-3 py-3"}`}>
             {modal === "ADD" ? (
               <input
                 className={inputClass()}
@@ -1845,102 +1809,57 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
               />
             ) : (
               <div className="space-y-3">
-                <div className="space-y-2">
-                  <p className="text-sm font-semibold">Telegram Session</p>
-                  <div className="max-h-48 space-y-2 overflow-auto">
+                <label className="block space-y-1">
+                  <span className="text-xs font-semibold uppercase text-muted-foreground">Telegram Session</span>
+                  <select
+                    className={inputClass()}
+                    value={folderConnectionId}
+                    onChange={(event) => {
+                      setFolderConnectionId(event.target.value);
+                      setFolderSelection([]);
+                    }}
+                  >
+                    <option value="">Using: select connected account</option>
                     {folderConnections.map((connection: any) => {
-                      const isSelected = connection.id === folderConnectionId;
                       const reconnect = connection.status !== "CONNECTED" ||
                         !connection.has_session ||
                         ["RECONNECT_REQUIRED", "INVALID_AUTH", "REQUIRES_ACTION"].includes(String(connection.health ?? "")) ||
                         connection.session_error_code === "AUTH_KEY_UNREGISTERED";
-                      const statusText = reconnect ? "Reconnect Required" : "Connected";
-                      const exportStatus = isSelected
-                        ? folderEligibilityLoading
-                          ? "Checking folder export..."
-                          : folderEligibility?.folderExportStatus === "LIMIT_REACHED"
-                            ? "Telegram shared-folder limit reached for this account."
-                            : folderEligibility?.folderExportStatus === "READY"
-                              ? "Folder export ready"
-                              : folderEligibility?.folderExportMessage ?? "No export status yet"
-                        : "Select to check folder export";
+                      const label = connection.username ? `@${connection.username}` : (connection.account_name ?? connection.label ?? "Telegram account");
                       return (
-                        <button
-                          key={connection.id}
-                          type="button"
-                          className={`w-full border p-3 text-left text-sm transition-colors ${isSelected ? "border-primary bg-primary/10 shadow-sm" : "border-border bg-background hover:border-primary/40"} ${reconnect ? "opacity-75" : ""}`}
-                          onClick={() => {
-                            setFolderEligibility(null);
-                            setFolderEligibilityError("");
-                            setFolderConnectionId(connection.id);
-                            setFolderSelection([]);
-                          }}
-                        >
-                          <span className="flex flex-wrap items-center justify-between gap-2">
-                            <span className="font-semibold">
-                              {connection.account_name ?? connection.username ?? connection.label ?? connection.phone_masked ?? "Telegram account"}
-                            </span>
-                            <span className={reconnect ? "text-destructive" : "text-success"}>{statusText}</span>
-                          </span>
-                          <span className="mt-1 block text-xs text-muted-foreground">
-                            {connection.username ? `@${connection.username}` : "Username pending"}
-                            {connection.telegram_premium ? " | Premium" : ""}
-                            {" | "}
-                            {exportStatus}
-                          </span>
-                          <span className="mt-1 block text-xs text-muted-foreground">
-                            Eligible approved groups: {isSelected && !folderEligibilityLoading ? Number(folderEligibility?.eligibleCount ?? 0) : "-"}
-                          </span>
-                        </button>
+                        <option key={connection.id} value={connection.id} disabled={reconnect}>
+                          Using: {label} - {reconnect ? "Reconnect required" : "Connected"}{connection.telegram_premium ? " - Premium" : ""}
+                        </option>
                       );
                     })}
-                    {!folderConnections.length ? (
-                      <p className="border border-border bg-background p-3 text-sm text-muted-foreground">Connect a Telegram session first.</p>
-                    ) : null}
-                  </div>
-                </div>
-                {folderEligibilityLoading ? (
-                  <p className="border border-primary/30 bg-primary/10 p-3 text-sm font-semibold text-primary">Loading folder eligibility...</p>
+                  </select>
+                </label>
+                {!healthyFolderConnections.length ? (
+                  <p className="border border-destructive/40 bg-destructive/10 p-3 text-sm font-semibold text-destructive">Reconnect a Telegram session before creating a shareable folder link.</p>
                 ) : null}
-                {folderStatusMessage ? (
-                  <div className={`border p-3 text-sm font-semibold ${folderEligibilityError || folderEligibility?.folderExportStatus === "LIMIT_REACHED" || folderReconnectRequired ? "border-destructive/40 bg-destructive/10 text-destructive" : "border-border bg-background text-muted-foreground"}`}>
-                    <p>{folderStatusMessage}</p>
-                    {folderEligibilityError ? (
-                      <Button type="button" size="sm" variant="secondary" className="mt-2" onClick={() => void loadFolderEligibility(folderConnectionId)}>
-                        Retry
-                      </Button>
-                    ) : null}
-                  </div>
+                {folderReconnectRequired && selectedFolderConnection ? (
+                  <p className="border border-destructive/40 bg-destructive/10 p-3 text-sm font-semibold text-destructive">Reconnect required</p>
                 ) : null}
-                {!folderEligibilityLoading && folderEligibility && !folderReconnectRequired && eligibleApprovedGroups.length === 0 ? (
-                  <p className="border border-border bg-background p-3 text-sm font-semibold text-muted-foreground">
-                    No eligible approved groups for this Telegram account.
-                  </p>
-                ) : null}
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                   {[100, 500, 1000].map((limit) => (
-                    <Button key={limit} type="button" size="sm" variant="secondary" disabled={folderReconnectRequired || folderEligibilityLoading} onClick={() => selectFolderLimit(limit)}>
-                      Up to {limit.toLocaleString()} members
+                    <Button key={limit} type="button" size="sm" variant="secondary" disabled={folderReconnectRequired || !approvedGroups.length} onClick={() => selectFolderLimit(limit)}>
+                      Up to {limit.toLocaleString()}
                     </Button>
                   ))}
-                  <Button type="button" size="sm" variant="secondary" disabled={folderReconnectRequired || folderEligibilityLoading} onClick={() => setFolderSelection(eligibleApprovedGroups.map((g: any) => g.id))}>
-                    Select All Eligible
+                  <Button type="button" size="sm" variant="secondary" disabled={folderReconnectRequired || !approvedGroups.length} onClick={() => setFolderSelection(approvedGroups.map((g: any) => g.id))}>
+                    Select All
                   </Button>
                   <Button type="button" size="sm" variant="secondary" onClick={() => setFolderSelection([])}>
                     Clear Selection
                   </Button>
                 </div>
                 <p className="text-sm font-semibold">Selected Groups: {folderSelection.length}</p>
-                <div className="max-h-72 space-y-2 overflow-auto">
+                <div className="space-y-2">
                   {approvedGroups.map((group: any) => {
-                    const eligibility = folderEligibilityById.get(group.id) as any;
-                    const canExport = eligibility?.exportable === true && !folderReconnectRequired;
-                    const reason = folderReconnectRequired ? "Reconnect required" : eligibility?.reason;
                     return (
-                      <label key={group.id} className={`flex gap-3 border p-3 text-sm transition-colors ${folderSelection.includes(group.id) ? "border-primary bg-primary/10" : "border-border bg-background"} ${canExport ? "" : "opacity-65"}`}>
+                      <label key={group.id} className={`flex gap-3 border p-3 text-sm transition-colors ${folderSelection.includes(group.id) ? "border-cyan-400 bg-cyan-500/10" : "border-border bg-background"}`}>
                         <input
                           type="checkbox"
-                          disabled={!canExport}
                           checked={folderSelection.includes(group.id)}
                           onChange={() => toggleFolderGroup(group.id)}
                         />
@@ -1953,36 +1872,33 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
                             {" | "}
                             {group.username ? "public" : "private/unknown"}
                           </span>
-                          {!canExport ? (
-                            <span className="mt-1 block text-xs font-semibold text-destructive">
-                              {reason ?? (folderEligibilityLoading ? "Checking eligibility..." : "Not exportable by Telegram")}
-                            </span>
-                          ) : null}
                         </span>
                       </label>
                     );
                   })}
+                  {!approvedGroups.length ? <p className="border border-border bg-background p-3 text-sm text-muted-foreground">No approved groups available.</p> : null}
                 </div>
               </div>
             )}
+            </div>
             <Button
-              className="w-full"
+              className={`${modal === "SHARE" ? "sticky bottom-0 z-10 mt-0 shrink-0 border-t border-border bg-cyan-500 text-slate-950 hover:bg-cyan-400" : "w-full"}`}
               type={modal === "SHARE" ? "button" : "submit"}
               onClick={
                 modal === "SHARE"
                   ? () =>
                       void runAction("create-folder-link", async () => {
-                        if (!eligibleApprovedGroups.length) {
-                          setNotice("No selected approved groups are exportable from this Telegram account.");
-                          return;
+                        try {
+                          await actions.createApprovedGroupFolderLink({
+                            data: { auth, connectionId: folderConnectionId, groupIds: folderSelection },
+                          });
+                          setNotice("Telegram shareable folder link created.");
+                          setFolderSelection([]);
+                          setModal("");
+                          await reload();
+                        } catch (error) {
+                          setNotice(error instanceof Error ? error.message : "Could not create Telegram folder link.");
                         }
-                        await actions.createApprovedGroupFolderLink({
-                          data: { auth, connectionId: folderConnectionId, groupIds: folderSelection },
-                        });
-                        setNotice("Telegram shareable folder link created.");
-                        setFolderSelection([]);
-                        setModal("");
-                        await reload();
                       })
                   : undefined
               }
@@ -1993,10 +1909,7 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
                     ? !folderLink
                     : !folderSelection.length ||
                       !folderConnectionId ||
-                      folderReconnectRequired ||
-                      folderEligibilityLoading ||
-                      folderEligibility?.folderExportStatus === "LIMIT_REACHED" ||
-                      !eligibleApprovedGroups.length) ||
+                      folderReconnectRequired) ||
                 actionBusy === "add-approved-group" ||
                 actionBusy === "import-groups" ||
                 actionBusy === "create-folder-link"
@@ -2008,7 +1921,7 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
                   ? "ADD GROUP"
                   : modal === "IMPORT"
                     ? "IMPORT"
-                    : "CREATE TELEGRAM FOLDER LINK"}
+                    : "CREATE SHAREABLE LINK"}
             </Button>
           </form>
         </div>
@@ -3001,7 +2914,7 @@ function DMAudience({ auth, data, actions, reload, setNotice, actionBusy, runAct
   );
 }
 
-function AddUsersPage({ auth, data, actions, reload, setNotice, actionBusy, runAction }: any) {
+function AddUsersPage({ auth, data, actions, reload, setNotice, actionBusy, runAction, appLanguage }: any) {
   const [audience, setAudience] = useState<any>(data?.audience ?? { users: [] });
   const [selected, setSelected] = useState<string[]>([]);
   const [usernameFilter, setUsernameFilter] = useState<"ALL" | "WITH_USERNAME" | "WITHOUT_USERNAME">("ALL");
@@ -3010,6 +2923,7 @@ function AddUsersPage({ auth, data, actions, reload, setNotice, actionBusy, runA
   const [destination, setDestination] = useState("");
   const [destinationCheck, setDestinationCheck] = useState<any>(null);
   const [addUsers, setAddUsers] = useState<any>(data?.addUsers ?? { jobs: [], results: [] });
+  const [resultTab, setResultTab] = useState<"ALL" | "PENDING" | "SUCCESSFUL" | "FAILED">("ALL");
   const connections = data?.connections ?? [];
   const selectedConnection = connections.find((connection: any) => connection.id === connectionId);
   const healthySession = selectedConnection &&
@@ -3019,6 +2933,9 @@ function AddUsersPage({ auth, data, actions, reload, setNotice, actionBusy, runA
     selectedConnection.session_error_code !== "AUTH_KEY_UNREGISTERED";
   const currentJob = addUsers?.job;
   const results = addUsers?.results ?? [];
+  const credits = addUsers?.credits ?? data?.billing?.addons?.addUsersCredits?.balance ?? {};
+  const t = (text: string) => miniT(appLanguage ?? "en", text);
+  const filteredResults = resultTab === "ALL" ? results : results.filter((row: any) => row.status === resultTab);
   useEffect(() => {
     setAudience(data?.audience ?? { users: [] });
     setAddUsers(data?.addUsers ?? { jobs: [], results: [] });
@@ -3070,7 +2987,7 @@ function AddUsersPage({ auth, data, actions, reload, setNotice, actionBusy, runA
         data: { auth, connectionId, destination, contactIds: selected },
       });
       setAddUsers(response);
-      setNotice("Add Users job started.");
+      setNotice(t("Add Users job started."));
       await reload();
     });
   }
@@ -3097,131 +3014,130 @@ function AddUsersPage({ auth, data, actions, reload, setNotice, actionBusy, runA
   const actionLabel = destinationCheck?.destinationType === "CHANNEL" ? "ADD USERS TO CHANNEL" : "ADD USERS TO GROUP";
   const canStart = healthySession && selected.length > 0 && destinationCheck?.ok === true && !["RUNNING", "COOLDOWN"].includes(String(currentJob?.status ?? ""));
   return (
-    <div className="space-y-4">
+    <div className="space-y-3 pb-28">
       <section className={panelClass("space-y-3")}>
-        <div>
-          <p className="text-lg font-semibold">Add Users</p>
-          <p className="text-sm text-muted-foreground">Use already discovered Find Users records. No new discovery is started here.</p>
-        </div>
-        <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-5">
-          <Stat label="Selected" value={currentJob?.selected_count ?? selected.length} />
-          <Stat label="Pending" value={currentJob?.pending_count ?? 0} />
-          <Stat label="Processing" value={currentJob?.processing_count ?? 0} />
-          <Stat label="Successful" value={currentJob?.successful_count ?? 0} />
-          <Stat label="Failed" value={currentJob?.failed_count ?? 0} />
-        </div>
-        <p className="text-xs text-muted-foreground">PENDING | PROCESSING | SUCCESSFUL | FAILED</p>
-      </section>
-
-      <section className={panelClass("space-y-3")}>
-        <p className="font-semibold">User Filters</p>
-        <div className="flex flex-wrap gap-2">
+        <p className="text-xs font-semibold uppercase text-muted-foreground">{t("Username")}</p>
+        <div className="grid grid-cols-3 gap-1 rounded-md border border-border bg-muted/40 p-1">
           {[
             ["ALL", "All"],
             ["WITH_USERNAME", "With Username"],
             ["WITHOUT_USERNAME", "Without Username"],
           ].map(([value, label]) => (
-            <Button key={value} type="button" size="sm" variant={usernameFilter === value ? "default" : "secondary"} onClick={() => { setUsernameFilter(value as any); void loadFilteredAudience(value as any, activityFilter); }}>
-              {label}
-            </Button>
+            <button key={value} type="button" className={`min-h-9 rounded px-2 text-xs font-semibold ${usernameFilter === value ? "bg-cyan-500 text-slate-950" : "text-muted-foreground"}`} onClick={() => { setUsernameFilter(value as any); void loadFilteredAudience(value as any, activityFilter); }}>
+              {t(String(label))}
+            </button>
           ))}
         </div>
-        <div className="flex flex-wrap gap-2">
+        <p className="pt-1 text-xs font-semibold uppercase text-muted-foreground">{t("Activity")}</p>
+        <div className="grid grid-cols-2 gap-1 rounded-md border border-border bg-muted/40 p-1 sm:grid-cols-4">
           {[
             ["ALL", "All"],
             ["ACTIVE_RECENTLY", "Active / Recently"],
             ["AROUND_MONTH", "Around a Month"],
             ["LONG_TIME_AGO", "Long Time Ago"],
           ].map(([value, label]) => (
-            <Button key={value} type="button" size="sm" variant={activityFilter === value ? "default" : "secondary"} onClick={() => { setActivityFilter(value as any); void loadFilteredAudience(usernameFilter, value as any); }}>
-              {label}
-            </Button>
+            <button key={value} type="button" className={`min-h-9 rounded px-2 text-xs font-semibold ${activityFilter === value ? "bg-cyan-500 text-slate-950" : "text-muted-foreground"}`} onClick={() => { setActivityFilter(value as any); void loadFilteredAudience(usernameFilter, value as any); }}>
+              {t(String(label))}
+            </button>
           ))}
         </div>
-        <p className="text-sm font-semibold"><span>Matching count:</span> {audience?.totalFound ?? 0}</p>
+        <p className="text-sm font-semibold">{t("Matching Users")}: {audience?.totalFound ?? 0}</p>
         <div className="grid grid-cols-3 gap-2">
-          <Button type="button" size="sm" variant="secondary" onClick={() => void selectAllMatching()}>Select All matching</Button>
-          <Button type="button" size="sm" variant="secondary" onClick={() => setSelected((audience.users ?? []).map((user: any) => user.id))}>Select visible</Button>
-          <Button type="button" size="sm" variant="secondary" onClick={() => setSelected([])}>Clear Selection</Button>
+          <Button type="button" size="sm" variant="secondary" onClick={() => void selectAllMatching()}>{t("Select All Matching")}</Button>
+          <Button type="button" size="sm" variant="secondary" onClick={() => setSelected((audience.users ?? []).map((user: any) => user.id))}>{t("Select Visible")}</Button>
+          <Button type="button" size="sm" variant="secondary" onClick={() => setSelected([])}>{t("Clear Selection")}</Button>
         </div>
       </section>
 
       <section className={panelClass("space-y-3")}>
-        <p className="font-semibold">Select Telegram Session</p>
-        <div className="space-y-2">
-          {connections.map((connection: any) => {
-            const reconnect = connection.status !== "CONNECTED" ||
-              !connection.has_session ||
-              ["RECONNECT_REQUIRED", "INVALID_AUTH", "REQUIRES_ACTION"].includes(String(connection.health ?? "")) ||
-              connection.session_error_code === "AUTH_KEY_UNREGISTERED";
-            const selectedSession = connection.id === connectionId;
-            return (
-              <button
-                key={connection.id}
-                type="button"
-                className={`w-full border p-3 text-left text-sm transition-colors ${selectedSession ? "border-primary bg-primary/10" : "border-border bg-background"} ${reconnect ? "opacity-70" : ""}`}
-                onClick={() => {
-                  setConnectionId(connection.id);
-                  setDestinationCheck(null);
-                }}
-              >
-                <span className="flex items-center justify-between gap-2">
-                  <span className="font-semibold">{connection.account_name ?? connection.username ?? connection.label ?? "Telegram account"}</span>
-                  <span className={reconnect ? "text-destructive" : "text-success"}>{reconnect ? "Reconnect Required" : "Connected"}</span>
-                </span>
-                <span className="mt-1 block text-xs text-muted-foreground">
-                  Health {connection.health_score ?? "-"}% | {connection.health ?? "unknown"}{connection.telegram_premium ? " | Premium" : ""}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </section>
-
-      <section className={panelClass("space-y-3")}>
-        <p className="font-semibold">Destination</p>
-        <input className={inputClass()} value={destination} onChange={(e) => { setDestination(e.target.value); setDestinationCheck(null); }} placeholder="@groupname or https://t.me/channel" />
-        <Button type="button" className="w-full" variant="secondary" disabled={!healthySession || !destination || actionBusy === "check-add-users-destination"} onClick={() => void checkDestination()}>
-          {actionBusy === "check-add-users-destination" ? "Checking..." : "CHECK DESTINATION"}
-        </Button>
-        {destinationCheck ? (
-          <p className={`text-sm font-semibold ${destinationCheck.ok ? "text-success" : "text-destructive"}`}>
-            {destinationCheck.ok
-              ? `${destinationCheck.destinationType}: ${destinationCheck.title ?? destinationCheck.username ?? destination}`
-              : destinationCheck.reason}
-          </p>
-        ) : null}
-      </section>
-
-      <section className={panelClass("space-y-3")}>
-        <div className="max-h-[42vh] space-y-2 overflow-auto">
+        <p className="text-sm font-semibold">{t("Selected")}: {selected.length}</p>
+        <div className="max-h-[44vh] space-y-2 overflow-y-auto pr-1">
           {(audience.users ?? []).map((user: any) => (
-            <label key={user.id} className={`flex gap-3 border p-3 text-sm ${selected.includes(user.id) ? "border-primary bg-primary/10" : "border-border bg-background"}`}>
+            <label key={user.id} className={`flex gap-3 border p-2.5 text-sm ${selected.includes(user.id) ? "border-cyan-400 bg-cyan-500/10" : "border-border bg-background"}`}>
               <input type="checkbox" checked={selected.includes(user.id)} onChange={() => toggleUser(user.id)} />
-              <span>
-                <span className="font-semibold">{user.username ? `@${user.username}` : (user.display_name ?? user.telegram_user_id)}</span>
+              <span className="min-w-0">
+                <span className="block truncate font-semibold">{user.username ? `@${user.username}` : (user.display_name ?? user.telegram_user_id)}</span>
                 <span className="block text-xs text-muted-foreground">
-                  Presence: {presenceLabel(user.presence_status)} {user.last_seen_at ? `| Last seen ${new Date(user.last_seen_at).toLocaleDateString()}` : ""}
+                  {presenceLabel(user.presence_status)}{user.last_seen_at ? ` | ${new Date(user.last_seen_at).toLocaleDateString()}` : ""}
                 </span>
               </span>
             </label>
           ))}
-          {!audience.users?.length ? <p className="text-sm text-muted-foreground">No matching users.</p> : null}
+          {!audience.users?.length ? <p className="text-sm text-muted-foreground">{t("No matching users.")}</p> : null}
+        </div>
+      </section>
+
+      <section className={panelClass("space-y-3")}>
+        <label className="block space-y-1">
+          <span className="text-xs font-semibold uppercase text-muted-foreground">{t("Telegram Session")}</span>
+          <select className={inputClass()} value={connectionId} onChange={(event) => { setConnectionId(event.target.value); setDestinationCheck(null); }}>
+            <option value="">{t("Select session")}</option>
+            {connections.map((connection: any) => {
+            const reconnect = connection.status !== "CONNECTED" ||
+              !connection.has_session ||
+              ["RECONNECT_REQUIRED", "INVALID_AUTH", "REQUIRES_ACTION"].includes(String(connection.health ?? "")) ||
+              connection.session_error_code === "AUTH_KEY_UNREGISTERED";
+            return (
+              <option key={connection.id} value={connection.id} disabled={reconnect}>
+                {connection.username ? `@${connection.username}` : (connection.account_name ?? connection.label ?? "Telegram account")} - {reconnect ? "Reconnect Required" : "Connected"} - Health {connection.health_score ?? "-"}%{connection.telegram_premium ? " - Premium" : ""}
+              </option>
+            );
+          })}
+          </select>
+        </label>
+        {!healthySession && connectionId ? <p className="text-xs font-semibold text-destructive">{t("Reconnect required")}</p> : null}
+      </section>
+
+      <section className={panelClass("space-y-3")}>
+        <p className="text-xs font-semibold uppercase text-muted-foreground">{t("Paste Group or Channel Link")}</p>
+        <input className={inputClass()} value={destination} onChange={(e) => { setDestination(e.target.value); setDestinationCheck(null); }} placeholder="@groupname or https://t.me/channel" />
+        <Button type="button" className="w-full border-cyan-400/40 bg-cyan-500/15 text-cyan-700 hover:bg-cyan-500/25 dark:text-cyan-200" variant="secondary" disabled={!healthySession || !destination || actionBusy === "check-add-users-destination"} onClick={() => void checkDestination()}>
+          {actionBusy === "check-add-users-destination" ? t("Checking...") : t("RESOLVE / CHECK")}
+        </Button>
+        {destinationCheck ? (
+          <div className={`border p-3 text-sm ${destinationCheck.ok ? "border-success/40 bg-success/10 text-success" : "border-destructive/40 bg-destructive/10 text-destructive"}`}>
+            <p className="font-semibold">{destinationCheck.ok ? (destinationCheck.title ?? destinationCheck.username ?? destination) : destinationCheck.reason}</p>
+            {destinationCheck.ok ? (
+              <p className="mt-1 text-xs">
+                {t("Type")}: {destinationCheck.destinationType === "CHANNEL" ? t("Channel") : t("Group")} | {t("Session access")}: {destinationCheck.destinationType === "CHANNEL" ? t("Admin + Invite permission") : t("Member")}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+      </section>
+
+      <section className={panelClass("space-y-3")}>
+        <p className="font-semibold">{t("Add Users Credits")}</p>
+        <div className="grid grid-cols-3 gap-2 text-xs">
+          <Stat label={t("Current balance")} value={credits.purchased_balance ?? 0} />
+          <Stat label={t("Free trial remaining")} value={credits.free_trial_remaining ?? 5} />
+          <Stat label={t("Available")} value={credits.available_capacity ?? 5} />
         </div>
       </section>
 
       <section className="sticky bottom-[calc(var(--miniapp-bottom-nav-height,5rem)+0.5rem)] z-10 border border-border bg-card p-3 shadow-lg">
         <Button type="button" className="w-full" disabled={!canStart || actionBusy === "start-add-users"} onClick={() => void startJob()}>
-          {actionBusy === "start-add-users" ? "Starting..." : actionLabel}
+          {actionBusy === "start-add-users" ? t("Starting...") : t(actionLabel)}
         </Button>
-        {!healthySession && connectionId ? <p className="mt-2 text-xs font-semibold text-destructive">Reconnect required</p> : null}
+        {currentJob?.last_error === "Add Users credits exhausted" ? (
+          <Button type="button" className="mt-2 w-full" variant="secondary" onClick={() => { window.location.href = "/mini-app/billing"; }}>
+            {t("TOP UP")}
+          </Button>
+        ) : null}
       </section>
 
       {currentJob ? (
         <section className={panelClass("space-y-3")}>
+          <div className="grid grid-cols-5 gap-1 text-xs">
+            <Stat label={t("Selected")} value={currentJob.selected_count ?? selected.length} />
+            <Stat label={t("Pending")} value={currentJob.pending_count ?? 0} />
+            <Stat label={t("Processing")} value={currentJob.processing_count ?? 0} />
+            <Stat label={t("Successful")} value={currentJob.successful_count ?? 0} />
+            <Stat label={t("Failed")} value={currentJob.failed_count ?? 0} />
+          </div>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <p className="font-semibold">Current Add Users Job</p>
+              <p className="font-semibold">{t("Current Add Users Job")}</p>
               <p className="text-xs text-muted-foreground">
                 {currentJob.destination_title ?? currentJob.destination_username ?? currentJob.destination_input} | {currentJob.status}
               </p>
@@ -3229,13 +3145,20 @@ function AddUsersPage({ auth, data, actions, reload, setNotice, actionBusy, runA
               {currentJob.last_error ? <p className="text-xs font-semibold text-destructive">{currentJob.last_error}</p> : null}
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button type="button" size="sm" variant="secondary" disabled={currentJob.status !== "RUNNING"} onClick={() => void controlJob("PAUSE")}>Pause</Button>
-              <Button type="button" size="sm" variant="secondary" disabled={!["PAUSED", "COOLDOWN"].includes(currentJob.status)} onClick={() => void controlJob("RESUME")}>Resume</Button>
-              <Button type="button" size="sm" variant="secondary" disabled={["COMPLETED", "CANCELLED"].includes(currentJob.status)} onClick={() => void controlJob("CANCEL")}>Stop/Cancel</Button>
+              <Button type="button" size="sm" variant="secondary" disabled={currentJob.status !== "RUNNING"} onClick={() => void controlJob("PAUSE")}>{t("Pause")}</Button>
+              <Button type="button" size="sm" variant="secondary" disabled={!["PAUSED", "COOLDOWN"].includes(currentJob.status)} onClick={() => void controlJob("RESUME")}>{t("Resume")}</Button>
+              <Button type="button" size="sm" variant="secondary" disabled={["COMPLETED", "CANCELLED"].includes(currentJob.status)} onClick={() => void controlJob("CANCEL")}>{t("Cancel")}</Button>
             </div>
           </div>
+          <div className="grid grid-cols-4 gap-1 rounded-md border border-border bg-muted/40 p-1">
+            {(["ALL", "PENDING", "SUCCESSFUL", "FAILED"] as const).map((tab) => (
+              <button key={tab} type="button" className={`min-h-8 rounded px-1 text-[11px] font-semibold ${resultTab === tab ? "bg-cyan-500 text-slate-950" : "text-muted-foreground"}`} onClick={() => setResultTab(tab)}>
+                {t(tab)}
+              </button>
+            ))}
+          </div>
           <div className="max-h-72 space-y-2 overflow-auto">
-            {results.map((row: any) => (
+            {filteredResults.map((row: any) => (
               <div key={row.id} className="border border-border bg-background p-3 text-sm">
                 <div className="flex items-center justify-between gap-2">
                   <p className="font-semibold">{row.username ? `@${row.username}` : (row.display_name ?? row.telegram_user_id)}</p>
@@ -3249,7 +3172,7 @@ function AddUsersPage({ auth, data, actions, reload, setNotice, actionBusy, runA
       ) : null}
 
       <section className={panelClass("space-y-3")}>
-        <p className="font-semibold">Recent Add Users Jobs</p>
+        <p className="font-semibold">{t("Recent Add Users Jobs")}</p>
         <div className="space-y-2">
           {(addUsers?.jobs ?? []).map((job: any) => (
             <button key={job.id} type="button" className="w-full border border-border bg-background p-3 text-left text-sm" onClick={() => void openJob(job.id)}>
@@ -3259,7 +3182,7 @@ function AddUsersPage({ auth, data, actions, reload, setNotice, actionBusy, runA
               </span>
             </button>
           ))}
-          {!addUsers?.jobs?.length ? <p className="text-sm text-muted-foreground">No Add Users jobs yet.</p> : null}
+          {!addUsers?.jobs?.length ? <p className="text-sm text-muted-foreground">{t("No Add Users jobs yet.")}</p> : null}
         </div>
       </section>
     </div>
@@ -4943,7 +4866,7 @@ function AnalyticsSection({
   );
 }
 
-function Billing({ auth, data, setNotice, actionBusy, runAction, reload, appLanguage }: any) {
+function Billing({ auth, data, actions, setNotice, actionBusy, runAction, reload, appLanguage }: any) {
   const language = appLanguage ?? localStorage.getItem("wpay-language") ?? "en";
   const usage = data?.usage ?? {};
   const currentPlan = usage.plan ?? data?.tenant?.plans ?? data?.subscription?.plans ?? {};
@@ -5021,7 +4944,17 @@ function Billing({ auth, data, setNotice, actionBusy, runAction, reload, appLang
       await createOrReplaceInvoice("Premium Emoji", (replace) => requestPremiumEmojiPayment({ data: { auth, replace } }));
     });
   };
+  const requestAddUsersCredits = async () => {
+    if (!paymentsEnabled) {
+      setNotice("Online payments are not available yet. Contact support to activate this add-on.");
+      return;
+    }
+    await runAction("billing-add-users-credits", async () => {
+      await createOrReplaceInvoice("Add Users Credits", (replace) => actions.requestAddUsersCreditsPayment({ data: { auth, replace } }));
+    });
+  };
   const history = [...(data?.invoices ?? []), ...(data?.transactions ?? []).filter((t: any) => !t.invoice_id)];
+  const addUsersCredits = data?.addons?.addUsersCredits?.balance ?? {};
   return (
     <div className="space-y-3">
       <section className="rounded-lg border border-cyan-400/20 bg-slate-950/70 p-4 shadow-sm">
@@ -5058,7 +4991,7 @@ function Billing({ auth, data, setNotice, actionBusy, runAction, reload, appLang
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-xs font-semibold uppercase text-emerald-300">Active Invoice</p>
-              <h2 className="mt-1 text-lg font-semibold text-white">{invoice.product_code === "PREMIUM_EMOJI" ? "Premium Emoji" : invoice.product_code}</h2>
+              <h2 className="mt-1 text-lg font-semibold text-white">{invoice.product_code === "PREMIUM_EMOJI" ? "Premium Emoji" : invoice.product_code === "ADD_USERS_CREDITS" ? "Add Users Credits" : invoice.product_code}</h2>
               <p className="mt-1 text-xs text-slate-400">Invoice ID: {invoice.invoice_number ?? invoice.id}</p>
             </div>
             <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${statusTone(invoice.status)}`}>{invoice.status}</span>
@@ -5127,6 +5060,26 @@ function Billing({ auth, data, setNotice, actionBusy, runAction, reload, appLang
           </div>
         </section>
       ) : null}
+      <section className={panelClass("space-y-3")}>
+        <div>
+          <p className="text-xs font-semibold uppercase text-primary">ADD USERS CREDITS</p>
+          <h2 className="mt-1 text-lg font-semibold">Add Users Credits</h2>
+        </div>
+        <div className="grid grid-cols-3 gap-2 text-xs">
+          <Stat label="Current balance" value={addUsersCredits.purchased_balance ?? 0} />
+          <Stat label="Free trial remaining" value={addUsersCredits.free_trial_remaining ?? 5} />
+          <Stat label="Successful additions" value={addUsersCredits.successful_additions ?? 0} />
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 border border-border bg-background p-3">
+          <div>
+            <p className="font-semibold">1,000 adds</p>
+            <p className="text-sm text-muted-foreground">$5 USDT</p>
+          </div>
+          <Button disabled={actionBusy === "billing-add-users-credits"} onClick={() => void requestAddUsersCredits()}>
+            {actionBusy === "billing-add-users-credits" ? "Creating..." : "BUY / TOP UP"}
+          </Button>
+        </div>
+      </section>
       <section className={panelClass("space-y-3")}>
         <div>
           <p className="text-xs font-semibold uppercase text-primary">Add-ons</p>

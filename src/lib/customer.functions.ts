@@ -626,6 +626,10 @@ export const requestPremiumEmojiPayment = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { replace?: boolean }) => i)
   .handler(async ({ data: i }) => data.requestPremiumEmojiPayment(await resolveAuth(i.auth), { replace: i.replace }));
 
+export const requestAddUsersCreditsPayment = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { replace?: boolean }) => i)
+  .handler(async ({ data: i }) => data.requestAddUsersCreditsPayment(await resolveAuth(i.auth), { replace: i.replace }));
+
 export const getInvoiceStatus = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { invoiceId: string }) => i)
   .handler(async ({ data: i }) => data.getInvoiceStatus(await resolveAuth(i.auth), i.invoiceId));

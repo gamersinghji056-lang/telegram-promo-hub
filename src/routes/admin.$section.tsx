@@ -9,6 +9,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { supabaseAuthHeaders, withAdminAuthTimeout } from "@/integrations/supabase/auth-attacher";
 import {
   adminMe,
+  adjustAddUsersCredits,
   auditAdminSecurityAction,
   checkBot,
   checkTelegramWebhook,
@@ -222,6 +223,7 @@ function CustomersAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promi
   const [plans, setPlans] = useState<any[]>([]);
   const [planModal, setPlanModal] = useState<{ action: "CHANGE" | "GRANT" | "EXTEND" | "UNLIMITED" } | null>(null);
   const [emojiModal, setEmojiModal] = useState<{ revoke?: boolean } | null>(null);
+  const [addUsersCreditModal, setAddUsersCreditModal] = useState<null | { mode: "GRANT" | "ADJUST" }>(null);
   const [passwordModal, setPasswordModal] = useState(false);
   const [deleteModal, setDeleteModal] = useState(false);
   const [confirmAction, setConfirmAction] = useState<null | { title: string; body: string; run: () => Promise<void> }>(null);
@@ -310,6 +312,14 @@ function CustomersAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promi
     } finally {
       setWorking("");
     }
+  }
+  async function submitAddUsersCredit(input: { amount: number; reason: string }) {
+    if (!detail?.customer?.id) return;
+    setWorking("add-users-credits");
+    await adjustAddUsersCredits({ data: { customerId: detail.customer.id, amount: input.amount, reason: input.reason } });
+    setWorking("");
+    setAddUsersCreditModal(null);
+    await refreshDetail();
   }
   return (
     <div className="space-y-4">
@@ -425,6 +435,13 @@ function CustomersAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promi
               {detail.premiumEmoji?.entitlement?.expires_at ? `Until ${new Date(detail.premiumEmoji.entitlement.expires_at).toLocaleDateString()}` : "No active expiry"}
             </p>
           </div>
+          <div className="border border-border bg-background p-3 text-sm">
+            <p className="text-xs uppercase text-muted-foreground">Add Users</p>
+            <p className="mt-1 font-semibold">{Number(detail.addUsersCredits?.purchased_balance ?? 0).toLocaleString()} credits</p>
+            <p className="text-xs text-muted-foreground">
+              Free used {detail.addUsersCredits?.free_trial_used ?? 0}/5 | Success {detail.addUsersCredits?.successful_additions ?? 0} | Consumed {detail.addUsersCredits?.credits_consumed ?? 0}
+            </p>
+          </div>
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
           <Button size="sm" onClick={() => setPlanModal({ action: "CHANGE" })}>Manage Plan</Button>
@@ -433,6 +450,8 @@ function CustomersAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promi
           <Button size="sm" variant="secondary" onClick={() => setPlanModal({ action: "UNLIMITED" })}>Grant Unlimited</Button>
           <Button size="sm" variant="secondary" onClick={() => setEmojiModal({})}>Grant Premium Emoji</Button>
           <Button size="sm" variant="secondary" onClick={() => setEmojiModal({ revoke: true })}>Revoke Premium Emoji</Button>
+          <Button size="sm" variant="secondary" onClick={() => setAddUsersCreditModal({ mode: "GRANT" })}>Grant Add Users Credits</Button>
+          <Button size="sm" variant="secondary" onClick={() => setAddUsersCreditModal({ mode: "ADJUST" })}>Adjust Add Users Credits</Button>
           <Button size="sm" variant="secondary" onClick={() => setConfirmAction({ title: "Force Logout", body: "End all customer app sessions now?", run: async () => { await forceLogoutCustomer({ data: { id: detail.customer.id } }); await refreshDetail(); } })}>Force Logout</Button>
           <Button size="sm" variant="secondary" onClick={() => setConfirmAction({ title: "Suspend Customer", body: "Suspend this customer and tenant?", run: async () => { await changeStatus(detail.customer.id, "SUSPENDED"); await refreshDetail(); } })}>Suspend</Button>
           <Button size="sm" onClick={() => setConfirmAction({ title: "Activate Customer", body: "Reactivate this customer and tenant?", run: async () => { await changeStatus(detail.customer.id, "ACTIVE"); await refreshDetail(); } })}>Activate</Button>
@@ -444,11 +463,13 @@ function CustomersAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promi
         <div className="mt-5 grid gap-4 lg:grid-cols-3">
           <DetailList title="Recent Transactions" rows={detail.transactions} fields={["status", "amount", "created_at"]} />
           <DetailList title="Recent Invoices" rows={detail.invoices} fields={["product_code", "status", "payable_amount", "tx_hash"]} />
+          <DetailList title="Add Users Credit History" rows={detail.addUsersCreditHistory} fields={["entry_type", "delta", "balance_after", "reason", "created_at"]} />
           <DetailList title="Recent Campaigns" rows={detail.campaigns} fields={["name", "status", "total_targets"]} />
           <DetailList title="Admin Notes/Actions" rows={detail.adminLogs} fields={["action", "resource", "created_at"]} />
         </div>
         {planModal ? <PlanManagementModal mode={planModal.action} customer={detail.customer} subscription={detail.subscription} plans={plans} working={working === "plan"} onClose={() => setPlanModal(null)} onSubmit={submitPlanManagement} /> : null}
         {emojiModal ? <PremiumEmojiModal revoke={emojiModal.revoke} working={working === "premium-emoji"} onClose={() => setEmojiModal(null)} onSubmit={submitPremiumEmoji} /> : null}
+        {addUsersCreditModal ? <AddUsersCreditModal mode={addUsersCreditModal.mode} working={working === "add-users-credits"} onClose={() => setAddUsersCreditModal(null)} onSubmit={submitAddUsersCredit} /> : null}
         {passwordModal ? <PasswordResetModal working={working === "reset-password"} onClose={() => setPasswordModal(false)} onSubmit={async (password: string) => {
           setWorking("reset-password");
           await resetCustomerPassword({ data: { id: detail.customer.id, password } });
@@ -524,6 +545,26 @@ function PremiumEmojiModal({ revoke, working, onClose, onSubmit }: any) {
         {duration === "CUSTOM" ? <label className="block text-sm">Custom Expiry<input className={adminInput()} type="date" value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)} /></label> : null}
         <label className="block text-sm">Reason<textarea className={adminInput()} value={reason} onChange={(e) => setReason(e.target.value)} required /></label>
         <div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={onClose}>Cancel</Button><Button type="submit" disabled={working || !reason.trim()}>{working ? "Saving..." : revoke ? "Revoke" : "Save"}</Button></div>
+      </form>
+    </ModalFrame>
+  );
+}
+
+function AddUsersCreditModal({ mode, working, onClose, onSubmit }: any) {
+  const [amount, setAmount] = useState(mode === "GRANT" ? "1000" : "");
+  const [reason, setReason] = useState(mode === "GRANT" ? "Admin granted Add Users credits" : "Admin adjusted Add Users credits");
+  return (
+    <ModalFrame title={mode === "GRANT" ? "Grant Add Users Credits" : "Adjust Add Users Credits"} onClose={onClose}>
+      <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); void onSubmit({ amount: Number(amount), reason }); }}>
+        <label className="block text-sm">
+          Credits
+          <input className={adminInput()} type="number" step={1} value={amount} onChange={(e) => setAmount(e.target.value)} placeholder={mode === "ADJUST" ? "Use negative number to deduct" : "1000"} />
+        </label>
+        <label className="block text-sm">Reason<textarea className={adminInput()} value={reason} onChange={(e) => setReason(e.target.value)} required /></label>
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button type="submit" disabled={working || !Number(amount) || !reason.trim()}>{working ? "Saving..." : "Submit"}</Button>
+        </div>
       </form>
     </ModalFrame>
   );

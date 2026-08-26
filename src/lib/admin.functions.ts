@@ -102,6 +102,14 @@ export const grantPremiumEmoji = createServerFn({ method: "POST" })
     return admin.adminGrantPremiumEmoji(context.userId, data);
   });
 
+export const adjustAddUsersCredits = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((i: { customerId: string; amount: number; reason?: string | null }) => i)
+  .handler(async ({ context, data }) => {
+    await admin.assertSuperAdmin(context.userId);
+    return admin.adminAdjustAddUsersCredits(context.userId, data);
+  });
+
 export const forceLogoutCustomer = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((i: { id: string }) => i)

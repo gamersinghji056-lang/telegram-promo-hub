@@ -39,8 +39,12 @@ import {
   tenantUsageDashboard,
 } from "./entitlements.server";
 import {
+  ADD_USERS_CREDITS_CODE,
+  ADD_USERS_CREDITS_PRICE_USD,
+  ADD_USERS_CREDITS_QUANTITY,
   PLAN_RANK,
   PREMIUM_EMOJI_CODE,
+  addUsersCreditBalance,
   activeInvoice,
   createInvoice,
   invoiceByIdForTenant,
@@ -1772,6 +1776,33 @@ async function syncAddUsersJobStats(jobId: string) {
   return stats;
 }
 
+async function addUsersCreditsForTenant(tenantId: string) {
+  return addUsersCreditBalance(tenantId);
+}
+
+async function requireAddUsersCapacity(tenantId: string, needed = 1) {
+  const credits = await addUsersCreditsForTenant(tenantId);
+  if (credits.migrationRequired) throw new Error("Add Users credits migration is required.");
+  if (Number(credits.available_capacity ?? 0) < needed) throw new Error("Add Users credits exhausted");
+  return credits;
+}
+
+async function consumeSuccessfulAddUsersCredit(job: Record<string, unknown>, resultId: string) {
+  const { data, error } = await db().rpc("consume_add_users_credit", {
+    p_tenant_id: job.tenant_id,
+    p_customer_id: job.customer_id,
+    p_job_id: job.id,
+    p_result_id: resultId,
+  });
+  if (error) throw new Error(error.message);
+  const row = Array.isArray(data) ? data[0] : data;
+  return {
+    ok: row?.ok !== false,
+    reason: row?.reason ? String(row.reason) : null,
+    availableCapacity: Number(row?.available_capacity ?? 0),
+  };
+}
+
 export async function addUsersState(ctx: AuthContext, jobId?: string | null) {
   let query = untypedDb()
     .from("add_users_jobs")
@@ -1794,7 +1825,7 @@ export async function addUsersState(ctx: AuthContext, jobId?: string | null) {
       .eq("job_id", selected.id)
       .order("created_at", { ascending: true })
     : { data: [] };
-  return { jobs: jobs ?? [], job: selected ?? null, results: results ?? [] };
+  return { jobs: jobs ?? [], job: selected ?? null, results: results ?? [], credits: await addUsersCreditsForTenant(ctx.tenantId) };
 }
 
 export async function checkAddUsersDestination(ctx: AuthContext, input: { connectionId: string; destination: string }) {
@@ -1813,6 +1844,7 @@ export async function startAddUsersJob(
   if (!sessionUsable(connection as Record<string, unknown>)) throw new Error("Reconnect required");
   const destination = await checkAddUsersDestinationViaUserSession(ctx.tenantId, String(connection.id), input.destination);
   if (!destination.ok) throw new Error(destination.reason ?? "Destination unavailable");
+  await requireAddUsersCapacity(ctx.tenantId, ids.length);
   const { data: contacts, error } = await db()
     .from("audience_contacts")
     .select("id, telegram_user_id, access_hash, username, display_name, eligibility, tenant_id")
@@ -1871,8 +1903,10 @@ export async function controlAddUsersJob(ctx: AuthContext, input: { id: string; 
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (input.action === "PAUSE") patch["status"] = "PAUSED";
   if (input.action === "RESUME") {
+    await requireAddUsersCapacity(ctx.tenantId, 1);
     patch["status"] = "RUNNING";
     patch["cooldown_until"] = null;
+    patch["last_error"] = null;
   }
   if (input.action === "CANCEL") {
     patch["status"] = "CANCELLED";
@@ -1913,6 +1947,14 @@ export async function processAddUsersJobs(limit = 2) {
       await syncAddUsersJobStats(String(job.id));
       continue;
     }
+    const credits = await addUsersCreditsForTenant(String(job.tenant_id));
+    if (Number(credits.available_capacity ?? 0) <= 0) {
+      await untypedDb()
+        .from("add_users_jobs")
+        .update({ status: "PAUSED", last_error: "Add Users credits exhausted", updated_at: new Date().toISOString() })
+        .eq("id", job.id);
+      continue;
+    }
     await untypedDb()
       .from("add_users_job_results")
       .update({ status: "PROCESSING", attempted_at: now, updated_at: now })
@@ -1940,11 +1982,22 @@ export async function processAddUsersJobs(limit = 2) {
         .update({ status: "COOLDOWN", cooldown_until: cooldownUntil, last_error: invite.reason, updated_at: new Date().toISOString() })
         .eq("id", job.id);
     } else {
+      let reason = invite.reason;
+      if (invite.status === "SUCCESSFUL") {
+        const charged = await consumeSuccessfulAddUsersCredit(job, String(result.id));
+        if (!charged.ok) {
+          reason = charged.reason ?? "Add Users credits exhausted";
+          await untypedDb()
+            .from("add_users_jobs")
+            .update({ status: "PAUSED", last_error: reason, updated_at: new Date().toISOString() })
+            .eq("id", job.id);
+        }
+      }
       await untypedDb()
         .from("add_users_job_results")
         .update({
           status: invite.status,
-          reason: invite.reason,
+          reason,
           completed_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         })
@@ -3947,7 +4000,7 @@ export async function analytics(ctx: AuthContext) {
 export async function billing(ctx: AuthContext) {
   const client = db();
   await ensureDefaultPlans();
-  const [tenant, plans, { data: subscription }, { data: transactions }, { data: invoices }, payments, usage, active, premiumEmoji, premiumEmojiProduct] =
+  const [tenant, plans, { data: subscription }, { data: transactions }, { data: invoices }, payments, usage, active, premiumEmoji, premiumEmojiProduct, addUsersCredits] =
     await Promise.all([
       tenantOverview(ctx),
       officialPlans(),
@@ -3977,6 +4030,7 @@ export async function billing(ctx: AuthContext) {
       activeInvoice(ctx.tenantId),
       premiumEmojiEntitlement(ctx.tenantId),
       premiumEmojiSettings(),
+      addUsersCreditsForTenant(ctx.tenantId),
     ]);
   const currentCode = String(usage.plan?.code ?? tenant?.plans?.code ?? "TEST").toUpperCase();
   const currentRank = usage.expired ? (PLAN_RANK.TEST ?? 0) : (PLAN_RANK[currentCode] ?? PLAN_RANK.TEST ?? 0);
@@ -4001,6 +4055,13 @@ export async function billing(ctx: AuthContext) {
         active: premiumEmoji.active,
         entitlement: premiumEmoji.entitlement,
       },
+      addUsersCredits: {
+        code: ADD_USERS_CREDITS_CODE,
+        name: "Add Users Credits",
+        unitCredits: ADD_USERS_CREDITS_QUANTITY,
+        priceUsd: ADD_USERS_CREDITS_PRICE_USD,
+        balance: addUsersCredits,
+      },
     },
     payments: {
       enabled: !!payments.payment_enabled && !!payments.wallet_address,
@@ -4008,6 +4069,16 @@ export async function billing(ctx: AuthContext) {
       wallet: payments.payment_enabled ? (payments.wallet_address ?? "") : "",
     },
   };
+}
+
+export async function requestAddUsersCreditsPayment(ctx: AuthContext, input: { replace?: boolean } = {}) {
+  return createInvoice({
+    tenantId: ctx.tenantId,
+    productType: "ADDON",
+    productCode: ADD_USERS_CREDITS_CODE,
+    basePrice: ADD_USERS_CREDITS_PRICE_USD,
+    replace: input.replace,
+  });
 }
 
 export async function requestPayment(ctx: AuthContext, input: string | { planId: string; replace?: boolean }) {
