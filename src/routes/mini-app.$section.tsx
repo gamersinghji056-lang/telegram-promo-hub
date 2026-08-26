@@ -225,7 +225,7 @@ function telegramLanguageHint() {
 }
 
 function inputClass(extra = "") {
-  return `w-full border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary ${extra}`;
+  return `w-full min-w-0 border border-border bg-background px-3 py-2 text-sm text-foreground caret-foreground opacity-100 outline-none placeholder:text-muted-foreground focus:border-primary disabled:cursor-not-allowed disabled:opacity-60 [-webkit-text-fill-color:currentColor] ${extra}`;
 }
 
 function panelClass(extra = "") {
@@ -1616,6 +1616,8 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
   const folderConnections = data?.connections ?? [];
   const [folderConnectionId, setFolderConnectionId] = useState("");
   const [expandedLinkId, setExpandedLinkId] = useState("");
+  const [folderResult, setFolderResult] = useState<any>(null);
+  const [folderError, setFolderError] = useState("");
   const selectedFolderConnection = folderConnections.find((connection: any) => connection.id === folderConnectionId) ?? null;
   const healthyFolderConnections = folderConnections.filter((connection: any) =>
     connection.status === "CONNECTED" &&
@@ -1629,6 +1631,12 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
       ["RECONNECT_REQUIRED", "INVALID_AUTH", "REQUIRES_ACTION"].includes(String(selectedFolderConnection.health ?? "")) ||
       selectedFolderConnection.session_error_code === "AUTH_KEY_UNREGISTERED"
     : true;
+  const activeFolderLinks = (data?.folderLinks ?? []).filter((link: any) => !link.revoked_at);
+  const latestFolderLink = folderResult ?? activeFolderLinks[0] ?? null;
+  const folderAccountLabel = (link: any) => {
+    const connection = folderConnections.find((item: any) => item.id === link?.connection_id);
+    return connection?.username ? `@${connection.username}` : (connection?.account_name ?? connection?.label ?? "Telegram account");
+  };
   useEffect(() => {
     if (modal !== "SHARE") return;
     const nextId = healthyFolderConnections.find((connection: any) => connection.id === folderConnectionId)?.id || healthyFolderConnections[0]?.id || "";
@@ -1661,8 +1669,8 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
             <Button className="bg-cyan-500 text-slate-950 hover:bg-cyan-400" onClick={() => setModal("ADD")}>
               <Plus className="mr-2 size-4" /> ADD GROUP
             </Button>
-            <Button className="border-cyan-400/40 bg-cyan-500/15 text-cyan-700 hover:bg-cyan-500/25 dark:text-cyan-200" variant="secondary" onClick={() => setModal("IMPORT")}>
-              <FolderOpen className="mr-2 size-4" /> IMPORT GROUPS
+            <Button className="bg-cyan-500 text-slate-950 hover:bg-cyan-400" onClick={() => setModal("IMPORT")}>
+              <Plus className="mr-2 size-4" /> IMPORT GROUPS
             </Button>
             <Button className="border-emerald-400/40 bg-emerald-500/15 text-emerald-700 hover:bg-emerald-500/25 dark:text-emerald-200" variant="secondary" onClick={() => setModal("SHARE")}>
               <FolderOpen className="mr-2 size-4" /> CREATE SHAREABLE FOLDER LINK
@@ -1792,7 +1800,7 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
                 <X className="size-4" />
               </button>
             </div>
-            <div className={`${modal === "SHARE" ? "min-h-0 flex-1 overflow-y-auto py-3 pr-1" : "space-y-3 py-3"}`}>
+            <div className={`${modal === "SHARE" ? "min-h-0 flex-1 overflow-y-auto py-3 pr-1 pb-[calc(5.5rem+env(safe-area-inset-bottom))]" : "space-y-3 py-3"}`}>
             {modal === "ADD" ? (
               <input
                 className={inputClass()}
@@ -1840,6 +1848,56 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
                 {folderReconnectRequired && selectedFolderConnection ? (
                   <p className="border border-destructive/40 bg-destructive/10 p-3 text-sm font-semibold text-destructive">Reconnect required</p>
                 ) : null}
+                {actionBusy === "create-folder-link" ? (
+                  <div className="border border-cyan-400/50 bg-cyan-500/10 p-3 text-sm text-cyan-800 dark:text-cyan-100" role="status" aria-live="polite">
+                    <p className="flex items-center gap-2 font-semibold"><RefreshCw className="size-4 animate-spin" /> Creating Telegram folder link…</p>
+                    <p className="mt-1 text-xs">Telegram is exporting the selected chats and the result will be saved here.</p>
+                  </div>
+                ) : null}
+                {folderError ? (
+                  <div className="border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive" role="alert">
+                    <p className="flex items-center gap-2 font-semibold"><AlertTriangle className="size-4 shrink-0" /> Folder link creation failed</p>
+                    <p className="mt-1 break-words text-xs">{folderError}</p>
+                  </div>
+                ) : null}
+                {latestFolderLink && !folderError ? (
+                  <div className="border border-success/50 bg-success/10 p-3 text-sm" aria-live="polite">
+                    <p className="flex items-center gap-2 font-semibold text-success"><CheckCircle2 className="size-4 shrink-0" /> Telegram folder link created</p>
+                    <p className="mt-2 text-xs font-semibold text-muted-foreground">Telegram folder link:</p>
+                    <a className="mt-1 block break-all font-semibold text-cyan-700 underline dark:text-cyan-200" href={latestFolderLink.url} target="_blank" rel="noreferrer">{latestFolderLink.url}</a>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Created {new Date(latestFolderLink.created_at).toLocaleString()} | Session {folderAccountLabel(latestFolderLink)} | {(latestFolderLink.included_groups ?? []).length} groups
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Button type="button" size="sm" variant="secondary" onClick={() => void copyText(latestFolderLink.url)}><Copy className="mr-1.5 size-3.5" /> COPY LINK</Button>
+                      <Button type="button" size="sm" variant="secondary" onClick={() => { if (navigator.share) void navigator.share({ title: latestFolderLink.title, url: latestFolderLink.url }); else void copyText(latestFolderLink.url); }}>SHARE</Button>
+                      <Button type="button" size="sm" variant="secondary" onClick={() => setExpandedLinkId(expandedLinkId === latestFolderLink.id ? "" : latestFolderLink.id)}>VIEW INCLUDED GROUPS</Button>
+                    </div>
+                    {expandedLinkId === latestFolderLink.id ? (
+                      <div className="mt-3 max-h-40 space-y-1 overflow-y-auto border-t border-success/30 pt-3">
+                        {(latestFolderLink.included_groups ?? []).map((group: any) => <p key={group.id} className="break-words text-xs text-muted-foreground">{group.title ?? group.username ?? group.id}{group.username ? ` | @${group.username}` : ""}</p>)}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+                {activeFolderLinks.length ? (
+                  <div className="space-y-2 border border-border bg-background p-3">
+                    <p className="font-semibold">Created Links</p>
+                    {activeFolderLinks.map((link: any) => (
+                      <div key={link.id} className="min-w-0 border-t border-border pt-2 first:border-t-0 first:pt-0">
+                        <p className="truncate text-xs font-semibold text-cyan-700 dark:text-cyan-200">{link.url}</p>
+                        <p className="text-[11px] text-muted-foreground">{new Date(link.created_at).toLocaleString()} | {(link.included_groups ?? []).length} groups</p>
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          <Button type="button" size="sm" variant="secondary" className="h-8 px-2 text-[11px]" onClick={() => void copyText(link.url)}>Copy</Button>
+                          <Button type="button" size="sm" variant="secondary" className="h-8 px-2 text-[11px]" onClick={() => { if (navigator.share) void navigator.share({ title: link.title, url: link.url }); else void copyText(link.url); }}>Share</Button>
+                          <Button type="button" size="sm" variant="secondary" className="h-8 px-2 text-[11px]" onClick={() => setExpandedLinkId(expandedLinkId === link.id ? "" : link.id)}>View groups</Button>
+                          <Button type="button" size="sm" variant="secondary" className="h-8 px-2 text-[11px]" disabled={actionBusy === "revoke-folder-link"} onClick={() => void runAction("revoke-folder-link", async () => { await actions.revokeApprovedGroupFolderLink({ data: { auth, id: link.id } }); setFolderResult(null); setExpandedLinkId(""); setNotice("Telegram folder link revoked."); await reload(); })}>Revoke</Button>
+                        </div>
+                        {expandedLinkId === link.id ? <div className="mt-2 max-h-36 space-y-1 overflow-y-auto">{(link.included_groups ?? []).map((group: any) => <p key={group.id} className="break-words text-[11px] text-muted-foreground">{group.title ?? group.username ?? group.id}{group.username ? ` | @${group.username}` : ""}</p>)}</div> : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                   {[100, 500, 1000].map((limit) => (
                     <Button key={limit} type="button" size="sm" variant="secondary" disabled={folderReconnectRequired || !approvedGroups.length} onClick={() => selectFolderLimit(limit)}>
@@ -1863,9 +1921,9 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
                           checked={folderSelection.includes(group.id)}
                           onChange={() => toggleFolderGroup(group.id)}
                         />
-                        <span>
-                          <span className="block font-semibold">{group.title ?? group.username ?? group.id}</span>
-                          <span className="block text-xs text-muted-foreground">
+                        <span className="min-w-0">
+                          <span className="block break-words font-semibold">{group.title ?? group.username ?? group.id}</span>
+                          <span className="block break-words text-xs text-muted-foreground">
                             {group.username ? `@${group.username}` : "No public username"}
                             {" | "}
                             {group.member_count ? `${group.member_count} members` : "member count unknown"}
@@ -1889,15 +1947,18 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
                   ? () =>
                       void runAction("create-folder-link", async () => {
                         try {
-                          await actions.createApprovedGroupFolderLink({
+                          setFolderError("");
+                          const created = await actions.createApprovedGroupFolderLink({
                             data: { auth, connectionId: folderConnectionId, groupIds: folderSelection },
                           });
+                          setFolderResult(created);
                           setNotice("Telegram shareable folder link created.");
                           setFolderSelection([]);
-                          setModal("");
                           await reload();
                         } catch (error) {
-                          setNotice(error instanceof Error ? error.message : "Could not create Telegram folder link.");
+                          const message = error instanceof Error ? error.message : "Could not create Telegram folder link.";
+                          setFolderError(message);
+                          setNotice(message);
                         }
                       })
                   : undefined
@@ -1916,7 +1977,7 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
               }
             >
               {actionBusy === "add-approved-group" || actionBusy === "import-groups" || actionBusy === "create-folder-link"
-                ? "Saving..."
+                ? modal === "SHARE" ? "CREATING TELEGRAM FOLDER LINK…" : "Saving..."
                 : modal === "ADD"
                   ? "ADD GROUP"
                   : modal === "IMPORT"
@@ -2923,7 +2984,7 @@ function AddUsersPage({ auth, data, actions, reload, setNotice, actionBusy, runA
   const [destination, setDestination] = useState("");
   const [destinationCheck, setDestinationCheck] = useState<any>(null);
   const [addUsers, setAddUsers] = useState<any>(data?.addUsers ?? { jobs: [], results: [] });
-  const [resultTab, setResultTab] = useState<"ALL" | "PENDING" | "SUCCESSFUL" | "FAILED">("ALL");
+  const [resultTab, setResultTab] = useState<"ALL" | "PENDING" | "PROCESSING" | "SUCCESSFUL" | "FAILED">("ALL");
   const connections = data?.connections ?? [];
   const selectedConnection = connections.find((connection: any) => connection.id === connectionId);
   const healthySession = selectedConnection &&
@@ -3014,16 +3075,17 @@ function AddUsersPage({ auth, data, actions, reload, setNotice, actionBusy, runA
   const actionLabel = destinationCheck?.destinationType === "CHANNEL" ? "ADD USERS TO CHANNEL" : "ADD USERS TO GROUP";
   const canStart = healthySession && selected.length > 0 && destinationCheck?.ok === true && !["RUNNING", "COOLDOWN"].includes(String(currentJob?.status ?? ""));
   return (
-    <div className="space-y-3 pb-28">
+    <div className="min-w-0 space-y-3 overflow-x-clip pb-[calc(var(--miniapp-bottom-nav-height,5rem)+env(safe-area-inset-bottom)+1rem)]">
       <section className={panelClass("space-y-3")}>
+        <p className="font-semibold">{t("User Filters")}</p>
         <p className="text-xs font-semibold uppercase text-muted-foreground">{t("Username")}</p>
-        <div className="grid grid-cols-3 gap-1 rounded-md border border-border bg-muted/40 p-1">
+        <div className="grid grid-cols-1 gap-1 rounded-md border border-border bg-muted/40 p-1 min-[360px]:grid-cols-3">
           {[
             ["ALL", "All"],
             ["WITH_USERNAME", "With Username"],
             ["WITHOUT_USERNAME", "Without Username"],
           ].map(([value, label]) => (
-            <button key={value} type="button" className={`min-h-9 rounded px-2 text-xs font-semibold ${usernameFilter === value ? "bg-cyan-500 text-slate-950" : "text-muted-foreground"}`} onClick={() => { setUsernameFilter(value as any); void loadFilteredAudience(value as any, activityFilter); }}>
+            <button key={value} type="button" className={`min-h-9 min-w-0 whitespace-normal break-words rounded px-1.5 text-[11px] font-semibold sm:px-2 sm:text-xs ${usernameFilter === value ? "bg-cyan-500 text-slate-950" : "text-muted-foreground"}`} onClick={() => { setUsernameFilter(value as any); void loadFilteredAudience(value as any, activityFilter); }}>
               {t(String(label))}
             </button>
           ))}
@@ -3036,35 +3098,12 @@ function AddUsersPage({ auth, data, actions, reload, setNotice, actionBusy, runA
             ["AROUND_MONTH", "Around a Month"],
             ["LONG_TIME_AGO", "Long Time Ago"],
           ].map(([value, label]) => (
-            <button key={value} type="button" className={`min-h-9 rounded px-2 text-xs font-semibold ${activityFilter === value ? "bg-cyan-500 text-slate-950" : "text-muted-foreground"}`} onClick={() => { setActivityFilter(value as any); void loadFilteredAudience(usernameFilter, value as any); }}>
+            <button key={value} type="button" className={`min-h-9 min-w-0 whitespace-normal break-words rounded px-1.5 text-[11px] font-semibold sm:px-2 sm:text-xs ${activityFilter === value ? "bg-cyan-500 text-slate-950" : "text-muted-foreground"}`} onClick={() => { setActivityFilter(value as any); void loadFilteredAudience(usernameFilter, value as any); }}>
               {t(String(label))}
             </button>
           ))}
         </div>
         <p className="text-sm font-semibold">{t("Matching Users")}: {audience?.totalFound ?? 0}</p>
-        <div className="grid grid-cols-3 gap-2">
-          <Button type="button" size="sm" variant="secondary" onClick={() => void selectAllMatching()}>{t("Select All Matching")}</Button>
-          <Button type="button" size="sm" variant="secondary" onClick={() => setSelected((audience.users ?? []).map((user: any) => user.id))}>{t("Select Visible")}</Button>
-          <Button type="button" size="sm" variant="secondary" onClick={() => setSelected([])}>{t("Clear Selection")}</Button>
-        </div>
-      </section>
-
-      <section className={panelClass("space-y-3")}>
-        <p className="text-sm font-semibold">{t("Selected")}: {selected.length}</p>
-        <div className="max-h-[44vh] space-y-2 overflow-y-auto pr-1">
-          {(audience.users ?? []).map((user: any) => (
-            <label key={user.id} className={`flex gap-3 border p-2.5 text-sm ${selected.includes(user.id) ? "border-cyan-400 bg-cyan-500/10" : "border-border bg-background"}`}>
-              <input type="checkbox" checked={selected.includes(user.id)} onChange={() => toggleUser(user.id)} />
-              <span className="min-w-0">
-                <span className="block truncate font-semibold">{user.username ? `@${user.username}` : (user.display_name ?? user.telegram_user_id)}</span>
-                <span className="block text-xs text-muted-foreground">
-                  {presenceLabel(user.presence_status)}{user.last_seen_at ? ` | ${new Date(user.last_seen_at).toLocaleDateString()}` : ""}
-                </span>
-              </span>
-            </label>
-          ))}
-          {!audience.users?.length ? <p className="text-sm text-muted-foreground">{t("No matching users.")}</p> : null}
-        </div>
       </section>
 
       <section className={panelClass("space-y-3")}>
@@ -3090,10 +3129,20 @@ function AddUsersPage({ auth, data, actions, reload, setNotice, actionBusy, runA
 
       <section className={panelClass("space-y-3")}>
         <p className="text-xs font-semibold uppercase text-muted-foreground">{t("Paste Group or Channel Link")}</p>
-        <input className={inputClass()} value={destination} onChange={(e) => { setDestination(e.target.value); setDestinationCheck(null); }} placeholder="@groupname or https://t.me/channel" />
-        <Button type="button" className="w-full border-cyan-400/40 bg-cyan-500/15 text-cyan-700 hover:bg-cyan-500/25 dark:text-cyan-200" variant="secondary" disabled={!healthySession || !destination || actionBusy === "check-add-users-destination"} onClick={() => void checkDestination()}>
+        <input
+          className={inputClass("appearance-none text-foreground caret-cyan-500")}
+          name="add-users-destination"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          value={destination}
+          onChange={(event) => { setDestination(event.currentTarget.value); setDestinationCheck(null); }}
+          placeholder="@groupname or https://t.me/channel"
+        />
+        <Button type="button" className="w-full bg-cyan-500 font-semibold text-slate-950 hover:bg-cyan-400 disabled:border disabled:border-border disabled:bg-muted disabled:text-muted-foreground" disabled={!healthySession || !destination.trim() || actionBusy === "check-add-users-destination"} onClick={() => void checkDestination()}>
           {actionBusy === "check-add-users-destination" ? t("Checking...") : t("RESOLVE / CHECK")}
         </Button>
+        {!healthySession ? <p className="text-xs text-muted-foreground">{t("Select a connected, healthy Telegram session to resolve this destination.")}</p> : !destination.trim() ? <p className="text-xs text-muted-foreground">{t("Enter a group or channel username/link to continue.")}</p> : null}
         {destinationCheck ? (
           <div className={`border p-3 text-sm ${destinationCheck.ok ? "border-success/40 bg-success/10 text-success" : "border-destructive/40 bg-destructive/10 text-destructive"}`}>
             <p className="font-semibold">{destinationCheck.ok ? (destinationCheck.title ?? destinationCheck.username ?? destination) : destinationCheck.reason}</p>
@@ -3108,14 +3157,40 @@ function AddUsersPage({ auth, data, actions, reload, setNotice, actionBusy, runA
 
       <section className={panelClass("space-y-3")}>
         <p className="font-semibold">{t("Add Users Credits")}</p>
-        <div className="grid grid-cols-3 gap-2 text-xs">
+        <div className="grid grid-cols-1 gap-2 text-xs min-[340px]:grid-cols-3">
           <Stat label={t("Current balance")} value={credits.purchased_balance ?? 0} />
           <Stat label={t("Free trial remaining")} value={credits.free_trial_remaining ?? 5} />
           <Stat label={t("Available")} value={credits.available_capacity ?? 5} />
         </div>
       </section>
 
-      <section className="sticky bottom-[calc(var(--miniapp-bottom-nav-height,5rem)+0.5rem)] z-10 border border-border bg-card p-3 shadow-lg">
+      <section className={panelClass("min-w-0 space-y-3")}>
+        <div className="flex min-w-0 flex-col gap-2 min-[340px]:grid min-[340px]:grid-cols-3">
+          <Button type="button" size="sm" variant="secondary" className="h-auto min-h-9 min-w-0 whitespace-normal break-words px-2 py-2 text-[11px] leading-tight sm:text-xs" onClick={() => void selectAllMatching()}>{t("Select All Matching")}</Button>
+          <Button type="button" size="sm" variant="secondary" className="h-auto min-h-9 min-w-0 whitespace-normal break-words px-2 py-2 text-[11px] leading-tight sm:text-xs" onClick={() => setSelected((audience.users ?? []).map((user: any) => user.id))}>{t("Select Visible")}</Button>
+          <Button type="button" size="sm" variant="secondary" className="h-auto min-h-9 min-w-0 whitespace-normal break-words px-2 py-2 text-[11px] leading-tight sm:text-xs" onClick={() => setSelected([])}>{t("Clear Selection")}</Button>
+        </div>
+        <div className="flex min-w-0 items-center justify-between gap-2">
+          <p className="min-w-0 font-semibold">{t("Selected Users")}</p>
+          <span className="shrink-0 rounded-full bg-cyan-500 px-2.5 py-1 text-xs font-bold text-slate-950">{selected.length}</span>
+        </div>
+        <div className="max-h-[44vh] min-w-0 space-y-2 overflow-y-auto overflow-x-hidden pr-1">
+          {(audience.users ?? []).map((user: any) => (
+            <label key={user.id} className={`flex min-w-0 gap-3 border p-2.5 text-sm ${selected.includes(user.id) ? "border-cyan-400 bg-cyan-500/10" : "border-border bg-background"}`}>
+              <input className="shrink-0" type="checkbox" checked={selected.includes(user.id)} onChange={() => toggleUser(user.id)} />
+              <span className="min-w-0 flex-1 overflow-hidden">
+                <span className="block truncate font-semibold">{user.username ? `@${user.username}` : (user.display_name ?? user.telegram_user_id)}</span>
+                <span className="block truncate text-xs text-muted-foreground">
+                  {presenceLabel(user.presence_status)}{user.last_seen_at ? ` | ${new Date(user.last_seen_at).toLocaleDateString()}` : ""}
+                </span>
+              </span>
+            </label>
+          ))}
+          {!audience.users?.length ? <p className="text-sm text-muted-foreground">{t("No matching users.")}</p> : null}
+        </div>
+      </section>
+
+      <section className="border border-cyan-400/40 bg-card p-3 shadow-sm">
         <Button type="button" className="w-full" disabled={!canStart || actionBusy === "start-add-users"} onClick={() => void startJob()}>
           {actionBusy === "start-add-users" ? t("Starting...") : t(actionLabel)}
         </Button>
@@ -3128,7 +3203,7 @@ function AddUsersPage({ auth, data, actions, reload, setNotice, actionBusy, runA
 
       {currentJob ? (
         <section className={panelClass("space-y-3")}>
-          <div className="grid grid-cols-5 gap-1 text-xs">
+          <div className="grid grid-cols-2 gap-1 text-xs min-[380px]:grid-cols-5">
             <Stat label={t("Selected")} value={currentJob.selected_count ?? selected.length} />
             <Stat label={t("Pending")} value={currentJob.pending_count ?? 0} />
             <Stat label={t("Processing")} value={currentJob.processing_count ?? 0} />
@@ -3150,8 +3225,8 @@ function AddUsersPage({ auth, data, actions, reload, setNotice, actionBusy, runA
               <Button type="button" size="sm" variant="secondary" disabled={["COMPLETED", "CANCELLED"].includes(currentJob.status)} onClick={() => void controlJob("CANCEL")}>{t("Cancel")}</Button>
             </div>
           </div>
-          <div className="grid grid-cols-4 gap-1 rounded-md border border-border bg-muted/40 p-1">
-            {(["ALL", "PENDING", "SUCCESSFUL", "FAILED"] as const).map((tab) => (
+          <div className="grid grid-cols-2 gap-1 rounded-md border border-border bg-muted/40 p-1 min-[380px]:grid-cols-5">
+            {(["ALL", "PENDING", "PROCESSING", "SUCCESSFUL", "FAILED"] as const).map((tab) => (
               <button key={tab} type="button" className={`min-h-8 rounded px-1 text-[11px] font-semibold ${resultTab === tab ? "bg-cyan-500 text-slate-950" : "text-muted-foreground"}`} onClick={() => setResultTab(tab)}>
                 {t(tab)}
               </button>

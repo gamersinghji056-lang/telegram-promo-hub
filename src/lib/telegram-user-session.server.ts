@@ -2220,10 +2220,13 @@ export async function createShareableFolderLinkViaUserSession(
     }
     const invite = exported instanceof Api.chatlists.ExportedChatlistInvite ? exported.invite : null;
     const url = invite && "url" in invite ? String(invite.url) : "";
-    if (!url) throw new Error("Telegram did not return a shareable folder link.");
+    const slug = chatlistSlug(url);
+    if (!/^https:\/\/t\.me\/addlist\/[A-Za-z0-9_-]+$/i.test(url) || !slug) {
+      throw new Error("INVALID_EXPORTED_INVITE: Telegram did not return a valid shareable folder link.");
+    }
     return {
       url,
-      slug: chatlistSlug(url),
+      slug,
       filterId,
       title: invite && "title" in invite ? String(invite.title) : input.title,
       peerCount: inputPeers.length,

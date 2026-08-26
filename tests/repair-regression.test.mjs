@@ -778,3 +778,71 @@ test("Add Users MTProto flow detects destination permissions and handles invite 
     assert(i18n.includes(phrase), `missing Add Users i18n phrase ${phrase}`);
   }
 });
+
+test("Add Users mobile workflow keeps configuration before selection and results", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  const page = route.slice(route.indexOf("function AddUsersPage"), route.indexOf("function CampaignsPage"));
+  const filters = page.indexOf('t("User Filters")');
+  const session = page.indexOf('t("Telegram Session")');
+  const destination = page.indexOf('t("Paste Group or Channel Link")');
+  const credits = page.indexOf('t("Add Users Credits")');
+  const controls = page.indexOf('t("Select All Matching")');
+  const selectedUsers = page.indexOf('t("Selected Users")');
+  const action = page.indexOf('t(actionLabel)');
+  const results = page.indexOf('t("Current Add Users Job")');
+  assert(filters < session && session < destination && destination < credits);
+  assert(credits < controls && controls < selectedUsers && selectedUsers < action && action < results);
+  assert(page.includes("overflow-x-clip"));
+  assert(page.includes("min-[340px]:grid-cols-3"));
+  assert(page.includes("whitespace-normal break-words"));
+  assert(!page.includes('sticky bottom-[calc(var(--miniapp-bottom-nav-height'));
+  assert(page.includes('["ALL", "PENDING", "PROCESSING", "SUCCESSFUL", "FAILED"]'));
+});
+
+test("Add Users destination remains visible and controlled across checks", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  const page = route.slice(route.indexOf("function AddUsersPage"), route.indexOf("function CampaignsPage"));
+  assert(route.includes("text-foreground caret-foreground opacity-100"));
+  assert(route.includes("[-webkit-text-fill-color:currentColor]"));
+  assert(page.includes('name="add-users-destination"'));
+  assert(page.includes('value={destination}'));
+  assert(page.includes('setDestination(event.currentTarget.value)'));
+  assert(page.includes('appearance-none text-foreground caret-cyan-500'));
+  assert(page.includes('!destination.trim()'));
+  assert(!page.includes('setDestination("")'));
+});
+
+test("folder modal surfaces persisted Telegram results and safe real failures above selection", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  const data = read("src/lib/customer-data.server.ts");
+  const telegram = read("src/lib/telegram-user-session.server.ts");
+  const modal = route.slice(route.indexOf("function GroupList"), route.indexOf("function GroupRows"));
+  const session = modal.indexOf("Telegram Session");
+  const loading = modal.indexOf("Creating Telegram folder link…");
+  const existing = modal.indexOf("Created Links");
+  const quickSelection = modal.indexOf("Up to {limit.toLocaleString()}");
+  const groupList = modal.indexOf("approvedGroups.map");
+  assert(session < loading && loading < existing && existing < quickSelection && quickSelection < groupList);
+  assert(modal.includes("setFolderResult(created)"));
+  assert(modal.includes("setFolderError(message)"));
+  assert(modal.includes("COPY LINK"));
+  assert(modal.includes("VIEW INCLUDED GROUPS"));
+  assert(modal.includes("activeFolderLinks"));
+  assert(modal.includes("pb-[calc(5.5rem+env(safe-area-inset-bottom))]"));
+  assert(!modal.includes('setModal("");\n                          await reload();'));
+  assert(data.includes("safeFolderLinkFailure"));
+  assert(data.includes("CHATLISTS_TOO_MUCH:"));
+  assert(data.includes("FILTER_INCLUDE_EMPTY:"));
+  assert(data.includes("PERSISTENCE_FAILED:"));
+  assert(data.includes("revokeShareableFolderLinkViaUserSession"));
+  assert(telegram.includes("INVALID_EXPORTED_INVITE"));
+  assert(telegram.includes("/^https:\\/\\/t\\.me\\/addlist"));
+});
+
+test("approved group primary actions intentionally distinguish import and folder export", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  const groupList = route.slice(route.indexOf("function GroupList"), route.indexOf("function GroupRows"));
+  assert.equal((groupList.match(/bg-cyan-500 text-slate-950 hover:bg-cyan-400/g) ?? []).length >= 2, true);
+  assert(groupList.includes('<Plus className="mr-2 size-4" /> IMPORT GROUPS'));
+  assert(groupList.includes("border-emerald-400/40 bg-emerald-500/15"));
+});

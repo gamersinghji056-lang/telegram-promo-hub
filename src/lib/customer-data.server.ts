@@ -1286,6 +1286,27 @@ export async function approvedGroupFolderLinks(ctx: AuthContext) {
 const CHATLIST_LIMIT_MESSAGE = "Telegram shared-folder limit reached for this account.";
 const EMPTY_EXPORT_MESSAGE = "No selected approved groups are exportable from this Telegram account.";
 
+function safeFolderLinkFailure(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  const upper = message.toUpperCase();
+  if (upper.includes("CHATLISTS_TOO_MUCH") || upper.includes("FOLDER LIMIT")) {
+    return `CHATLISTS_TOO_MUCH: ${CHATLIST_LIMIT_MESSAGE}`;
+  }
+  if (upper.includes("FILTER_INCLUDE_EMPTY")) {
+    return `FILTER_INCLUDE_EMPTY: ${EMPTY_EXPORT_MESSAGE}`;
+  }
+  if (upper.includes("CHANNEL_PRIVATE") || upper.includes("USER_NOT_PARTICIPANT")) {
+    return "SELECTED_PEER_INACCESSIBLE: One or more selected groups are private, inaccessible, or not joined by this session.";
+  }
+  if (upper.includes("AUTH_KEY_UNREGISTERED") || upper.includes("SESSION INVALID") || upper.includes("RECONNECT")) {
+    return "SESSION_RECONNECT_REQUIRED: Reconnect the selected Telegram session and try again.";
+  }
+  const code = upper.match(/\b[A-Z][A-Z0-9_]{2,}\b/)?.[0];
+  return code
+    ? `${code}: Telegram could not create the folder link.`
+    : "TELEGRAM_FOLDER_EXPORT_FAILED: Telegram could not create the folder link.";
+}
+
 async function approvedFolderGroups(ctx: AuthContext, ids?: string[]) {
   let query = db()
     .from("discovered_groups")
@@ -1375,13 +1396,18 @@ export async function createApprovedGroupFolderLink(
   if (!sessionUsable(connection as Record<string, unknown>)) throw new Error("Reconnect required");
   const rows = await approvedFolderGroups(ctx, ids);
   if (rows.length !== ids.length) throw new Error("Only your own approved groups can be exported.");
-  const eligibility = await folderLinkEligibilityViaUserSession(ctx.tenantId, String(connection.id), rows.map((group) => ({
-    id: String(group.id),
-    username: group.username as string | null,
-    telegram_group_id: group.telegram_group_id as number | null,
-    access_hash: group.access_hash as string | null,
-    entity_type: group.entity_type as string | null,
-  })));
+  let eligibility: Awaited<ReturnType<typeof folderLinkEligibilityViaUserSession>>;
+  try {
+    eligibility = await folderLinkEligibilityViaUserSession(ctx.tenantId, String(connection.id), rows.map((group) => ({
+      id: String(group.id),
+      username: group.username as string | null,
+      telegram_group_id: group.telegram_group_id as number | null,
+      access_hash: group.access_hash as string | null,
+      entity_type: group.entity_type as string | null,
+    })));
+  } catch (error) {
+    throw new Error(safeFolderLinkFailure(error));
+  }
   const exportableIds = new Set(eligibility.filter((row) => row.exportable).map((row) => row.groupId));
   const exportRows = rows.filter((group) => exportableIds.has(String(group.id)));
   if (!exportRows.length) throw new Error(EMPTY_EXPORT_MESSAGE);
@@ -1400,10 +1426,7 @@ export async function createApprovedGroupFolderLink(
       groups: exportGroups,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (message.includes("CHATLISTS_TOO_MUCH")) throw new Error(CHATLIST_LIMIT_MESSAGE);
-    if (message.includes("FILTER_INCLUDE_EMPTY")) throw new Error(EMPTY_EXPORT_MESSAGE);
-    throw error;
+    throw new Error(safeFolderLinkFailure(error));
   }
   const includedGroups = rows.map((group) => ({
     id: group.id,
@@ -1428,7 +1451,17 @@ export async function createApprovedGroupFolderLink(
     })
     .select("*")
     .single();
-  if (insertError || !link) throw new Error(insertError?.message ?? "Could not save Telegram folder link.");
+  if (insertError || !link) {
+    try {
+      await revokeShareableFolderLinkViaUserSession(ctx.tenantId, String(connection.id), {
+        filterId: result.filterId,
+        slug: result.slug,
+      });
+    } catch {
+      /* The original persistence failure remains authoritative; cleanup is best effort. */
+    }
+    throw new Error("PERSISTENCE_FAILED: Telegram created the invite, but it could not be saved. No success was recorded.");
+  }
   await clientConnectionUsed(ctx.tenantId, connection.id as string);
   await logSystem({
     tenant_id: ctx.tenantId,
