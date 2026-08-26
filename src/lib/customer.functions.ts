@@ -220,7 +220,7 @@ export const getApprovedGroupFolderEligibility = createServerFn({ method: "POST"
   );
 
 export const createApprovedGroupFolderLink = createServerFn({ method: "POST" })
-  .inputValidator((i: Auth & { connectionId?: string | null; groupIds: string[] }) => i)
+  .inputValidator((i: Auth & { connectionId: string; groupIds: string[] }) => i)
   .handler(async ({ data: i }) =>
     jsonSafe(await data.createApprovedGroupFolderLink(await resolveAuth(i.auth), {
       connectionId: i.connectionId,

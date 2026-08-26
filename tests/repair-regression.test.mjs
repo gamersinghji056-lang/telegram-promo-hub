@@ -653,7 +653,9 @@ test("approved groups create real Telegram addlist links with stored management 
   assert(telegram.includes("Api.chatlists.DeleteExportedInvite"));
   assert(telegram.includes("Api.InputChatlistDialogFilter"));
   assert(telegram.includes("folderLinkEligibilityViaUserSession"));
-  assert(telegram.includes("Not joined on this account"));
+  const eligibility = telegram.slice(telegram.indexOf("export async function folderLinkEligibilityViaUserSession"), telegram.indexOf("async function nextChatlistFilterId"));
+  assert(!eligibility.includes("getDialogs({ limit: 500 })"));
+  assert(eligibility.includes("client.getInputEntity"));
   assert(telegram.includes("Private/inaccessible"));
   assert(telegram.includes("Not exportable by Telegram"));
   assert(!telegram.includes("wpay/addlist"));
@@ -777,6 +779,27 @@ test("Add Users MTProto flow detects destination permissions and handles invite 
   for (const phrase of ["Add Users", "User Filters", "Select Telegram Session", "ADD USERS TO GROUP", "ADD USERS TO CHANNEL", "Recent Add Users Jobs"]) {
     assert(i18n.includes(phrase), `missing Add Users i18n phrase ${phrase}`);
   }
+});
+
+test("folder export reuses the selected account's suitable chatlist and records exact MTProto failures", () => {
+  const funcs = read("src/lib/customer.functions.ts");
+  const data = read("src/lib/customer-data.server.ts");
+  const telegram = read("src/lib/telegram-user-session.server.ts");
+  const create = telegram.slice(telegram.indexOf("export async function createShareableFolderLinkViaUserSession"), telegram.indexOf("export async function revokeShareableFolderLinkViaUserSession"));
+  const serverCreate = data.slice(data.indexOf("export async function createApprovedGroupFolderLink"), data.indexOf("export async function revokeApprovedGroupFolderLink"));
+
+  assert(funcs.includes("connectionId: string; groupIds: string[]"));
+  assert(serverCreate.includes("await requireConnection(ctx, connectionId)"));
+  assert(!serverCreate.includes("defaultHealthyConnection"));
+  assert(serverCreate.includes("preferredFilterId"));
+  assert(create.includes("SUITABLE_EXISTING_CHATLIST"));
+  assert(create.includes('filterTitle(filter) === "WPAY Groups"'));
+  assert(create.includes("const filterCreated = !reusable"));
+  assert(create.includes("if (!reusable || ownedReusable)"));
+  assert(create.includes('method: "chatlists.ExportChatlistInvite"'));
+  assert(create.includes("errorCode: errorCode(error)"));
+  assert(create.includes("https:\\/\\/t\\.me\\/addlist\\/"));
+  assert(data.includes('.from("telegram_folder_links")'));
 });
 
 test("Add Users mobile workflow keeps configuration before selection and results", () => {

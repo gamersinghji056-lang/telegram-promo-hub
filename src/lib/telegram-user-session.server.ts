@@ -20,6 +20,9 @@ const CATALOG_CACHE_STALE_MS = 30 * 60_000;
 const CATALOG_CACHE_EXPIRES_MS = 7 * 86400_000;
 const previewCache = new Map<string, { expiresAt: number; value: CustomEmojiPreview }>();
 type ConnectionRow = {
+  telegram_id?: number | null;
+  telegram_user_id?: number | null;
+  username?: string | null;
   id: string;
   tenant_id: string;
   label: string;
@@ -2074,12 +2077,6 @@ function entityId(value: unknown) {
   return id == null ? null : String(id);
 }
 
-function entityUsername(value: unknown) {
-  if (!value || typeof value !== "object" || !("username" in value)) return null;
-  const username = (value as { username?: string | null }).username;
-  return username ? username.replace(/^@/, "").toLowerCase() : null;
-}
-
 function isExportableChatEntity(value: unknown) {
   if (value instanceof Api.Chat) return true;
   if (value instanceof Api.Channel) {
@@ -2088,6 +2085,33 @@ function isExportableChatEntity(value: unknown) {
     return channel.megagroup === true || channel.broadcast === true;
   }
   return false;
+}
+
+function inputPeerKey(peer: unknown) {
+  if (peer instanceof Api.InputPeerChannel) return `channel:${String(peer.channelId)}`;
+  if (peer instanceof Api.InputPeerChat) return `chat:${String(peer.chatId)}`;
+  return null;
+}
+
+function filterTitle(filter: Api.TypeDialogFilter) {
+  if (!("title" in filter) || !filter.title || typeof filter.title !== "object" || !("text" in filter.title)) return "";
+  return String(filter.title.text ?? "");
+}
+
+function filterPeers(filter: Api.TypeDialogFilter) {
+  if (!("includePeers" in filter) || !Array.isArray(filter.includePeers)) return [];
+  return filter.includePeers as Api.TypeInputPeer[];
+}
+
+function folderFilterSummary(filters: Api.TypeDialogFilter[]) {
+  return filters.map((filter) => ({
+    id: "id" in filter ? Number(filter.id) : 0,
+    type: filter.className,
+    title: filterTitle(filter),
+    peerCount: filterPeers(filter).length,
+    peerKeys: filterPeers(filter).map(inputPeerKey).filter(Boolean),
+    hasMyInvites: filter instanceof Api.DialogFilterChatlist ? Boolean(filter.hasMyInvites) : false,
+  }));
 }
 
 function folderEligibilityReason(error: unknown) {
@@ -2110,27 +2134,8 @@ export async function folderLinkEligibilityViaUserSession(
   groups: FolderLinkCandidateGroup[],
 ): Promise<FolderLinkEligibilityResult[]> {
   return withAuthorizedUserClient(tenantId, connectionId, async (client) => {
-    const dialogs = await client.getDialogs({ limit: 500 });
-    const joinedUsernames = new Set<string>();
-    const joinedIds = new Set<string>();
-    for (const dialog of dialogs) {
-      const entity = (dialog as { entity?: unknown }).entity;
-      const username = entityUsername(entity);
-      const id = entityId(entity);
-      if (username) joinedUsernames.add(username);
-      if (id) joinedIds.add(id);
-    }
-
     const results: FolderLinkEligibilityResult[] = [];
     for (const group of groups) {
-      const username = group.username?.replace(/^@/, "").toLowerCase() ?? null;
-      const id = group.telegram_group_id == null ? null : String(group.telegram_group_id);
-      const isJoined = Boolean((username && joinedUsernames.has(username)) || (id && joinedIds.has(id)));
-      if (!isJoined) {
-        results.push({ groupId: group.id, exportable: false, reason: "Not joined on this account" });
-        continue;
-      }
-
       try {
         const peer = await resolveSendEntity(client, {
           id: group.telegram_group_id ?? null,
@@ -2143,7 +2148,18 @@ export async function folderLinkEligibilityViaUserSession(
           results.push({ groupId: group.id, exportable: false, reason: "Not exportable by Telegram" });
           continue;
         }
-        await client.getInputEntity(entity as Api.TypeEntityLike);
+        const inputPeer = await client.getInputEntity(entity as Api.TypeEntityLike);
+        if (!inputPeerKey(inputPeer)) {
+          results.push({ groupId: group.id, exportable: false, reason: "Not exportable by Telegram" });
+          continue;
+        }
+        if (entity instanceof Api.Channel) {
+          const channel = entity as Api.Channel & { username?: string | null; creator?: boolean; adminRights?: { inviteUsers?: boolean } | null };
+          if (!channel.username && channel.creator !== true && channel.adminRights?.inviteUsers !== true) {
+            results.push({ groupId: group.id, exportable: false, reason: "Private chat requires invite-link permission" });
+            continue;
+          }
+        }
         results.push({ groupId: group.id, exportable: true, reason: null });
       } catch (error) {
         results.push({ groupId: group.id, exportable: false, reason: folderEligibilityReason(error) });
@@ -2159,10 +2175,28 @@ async function nextChatlistFilterId(client: TelegramClient) {
   const ids = filters
     .map((filter) => ("id" in filter && typeof filter.id === "number" ? filter.id : 0))
     .filter((id) => id > 0);
-  for (let id = Math.max(2, ...ids, 1) + 1; id < 255; id += 1) {
+  for (let id = 2; id < 255; id += 1) {
     if (!ids.includes(id)) return id;
   }
   throw new Error("Telegram folder limit reached for this account.");
+}
+
+export async function inspectShareableFolderStateViaUserSession(tenantId: string, connectionId: string) {
+  return withAuthorizedUserClient(tenantId, connectionId, async (client, connection) => {
+    const response = await client.invoke(new Api.messages.GetDialogFilters());
+    const filters = response instanceof Api.messages.DialogFilters ? response.filters : [];
+    const summary = folderFilterSummary(filters);
+    console.info("FOLDER_LINK_MTProto", {
+      stage: "inspect",
+      method: "messages.GetDialogFilters",
+      connectionId,
+      telegramUserId: connection.telegram_user_id ?? connection.telegram_id ?? null,
+      username: connection.username ?? null,
+      existingFilterCount: summary.length,
+      existingFilterTypes: summary.map((filter) => filter.type),
+    });
+    return { connectionId, telegramUserId: connection.telegram_user_id ?? connection.telegram_id ?? null, username: connection.username ?? null, filters: summary };
+  });
 }
 
 export async function createShareableFolderLinkViaUserSession(
@@ -2170,6 +2204,7 @@ export async function createShareableFolderLinkViaUserSession(
   connectionId: string,
   input: {
     title: string;
+    preferredFilterId?: number | null;
     groups: {
       username?: string | null;
       telegram_group_id?: number | null;
@@ -2178,10 +2213,9 @@ export async function createShareableFolderLinkViaUserSession(
     }[];
   },
 ) {
-  return withAuthorizedUserClient(tenantId, connectionId, async (client) => {
+  return withAuthorizedUserClient(tenantId, connectionId, async (client, connection) => {
     const selected = input.groups.filter(Boolean);
     if (!selected.length) throw new Error("Select at least one approved group.");
-    const exportPeers: Api.TypeEntityLike[] = [];
     const inputPeers: Api.TypeInputPeer[] = [];
     for (const group of selected) {
       const peer = await resolveSendEntity(client, {
@@ -2190,31 +2224,78 @@ export async function createShareableFolderLinkViaUserSession(
         accessHash: group.access_hash ?? null,
         entityType: group.entity_type ?? null,
       }) as Api.TypeEntityLike;
-      exportPeers.push(peer);
       inputPeers.push(await client.getInputEntity(peer));
     }
-    const filterId = await nextChatlistFilterId(client);
+    const selectedPeerKeys = new Set(inputPeers.map(inputPeerKey).filter(Boolean));
+    const response = await client.invoke(new Api.messages.GetDialogFilters());
+    const filters = response instanceof Api.messages.DialogFilters ? response.filters : [];
+    const preferred = input.preferredFilterId
+      ? filters.find((filter) => "id" in filter && Number(filter.id) === Number(input.preferredFilterId))
+      : null;
+    const suitable = filters
+      .filter((filter) => filter instanceof Api.DialogFilterChatlist)
+      .filter((filter) => {
+        const keys = new Set(filterPeers(filter).map(inputPeerKey).filter(Boolean));
+        return [...selectedPeerKeys].every((key) => keys.has(key));
+      })
+      .sort((left, right) => filterPeers(left).length - filterPeers(right).length)[0];
+    const exact = filters.find((filter) => {
+      const keys = new Set(filterPeers(filter).map(inputPeerKey).filter(Boolean));
+      return keys.size === selectedPeerKeys.size && [...selectedPeerKeys].every((key) => keys.has(key));
+    });
+    const legacyOwned = filters.find((filter) => filterTitle(filter) === "WPAY Groups") ?? null;
+    const reusable = preferred ?? suitable ?? exact ?? legacyOwned ?? null;
+    const filterId = reusable && "id" in reusable ? Number(reusable.id) : await nextChatlistFilterId(client);
+    const filterCreated = !reusable;
+    const ownedReusable = preferred ?? legacyOwned;
+    const mergedPeers = ownedReusable
+      ? [...filterPeers(ownedReusable), ...inputPeers.filter((peer) => !new Set(filterPeers(ownedReusable).map(inputPeerKey)).has(inputPeerKey(peer)))]
+      : inputPeers;
     const titleText = new Api.TextWithEntities({ text: input.title.trim() || "WPAY Groups", entities: [] });
     const filter = new Api.DialogFilterChatlist({
       id: filterId,
       title: titleText,
       pinnedPeers: [],
-      includePeers: inputPeers,
+      includePeers: mergedPeers,
     });
-    await client.invoke(new Api.messages.UpdateDialogFilter({ id: filterId, filter }));
+    const method = reusable && !ownedReusable ? "chatlists.ExportChatlistInvite" : "messages.UpdateDialogFilter";
+    const filterSource = preferred ? "APP_PERSISTED" : suitable ? "SUITABLE_EXISTING_CHATLIST" : exact ? "EXACT_EXISTING" : legacyOwned ? "LEGACY_WPAY" : "NEW_WPAY";
+    console.info("FOLDER_LINK_MTProto", {
+      stage: "prepare",
+      method,
+      connectionId,
+      telegramUserId: connection.telegram_user_id ?? connection.telegram_id ?? null,
+      username: connection.username ?? null,
+      filterId,
+      selectedPeerCount: inputPeers.length,
+      existingFilterCount: filters.length,
+      existingFilterTypes: filters.map((item) => item.className),
+      filterSource,
+    });
+    if (!reusable || ownedReusable) {
+      try {
+        await client.invoke(new Api.messages.UpdateDialogFilter({ id: filterId, filter }));
+      } catch (error) {
+        console.warn("FOLDER_LINK_MTProto_ERROR", { method: "messages.UpdateDialogFilter", connectionId, filterId, selectedPeerCount: inputPeers.length, errorCode: errorCode(error) });
+        throw error;
+      }
+    }
     const chatlist = new Api.InputChatlistDialogFilter({ filterId });
     let exported: Api.chatlists.TypeExportedChatlistInvite;
     try {
       exported = await client.invoke(new Api.chatlists.ExportChatlistInvite({
         chatlist,
         title: input.title.trim() || "WPAY Groups",
-        peers: exportPeers,
+        peers: inputPeers,
       }));
     } catch (error) {
-      try {
-        await client.invoke(new Api.messages.UpdateDialogFilter({ id: filterId }));
-      } catch {
-        /* Best-effort cleanup after Telegram rejects exported invite creation. */
+      console.warn("FOLDER_LINK_MTProto_ERROR", { method: "chatlists.ExportChatlistInvite", connectionId, filterId, selectedPeerCount: inputPeers.length, existingFilterCount: filters.length, errorCode: errorCode(error) });
+      if (filterCreated) {
+        try {
+          await client.invoke(new Api.messages.UpdateDialogFilter({ id: filterId }));
+        } catch {
+          /* Best-effort cleanup only for the new WPAY filter created by this request. */
+        }
       }
       throw error;
     }
@@ -2230,6 +2311,8 @@ export async function createShareableFolderLinkViaUserSession(
       filterId,
       title: invite && "title" in invite ? String(invite.title) : input.title,
       peerCount: inputPeers.length,
+      filterCreated,
+      filterSource,
     };
   });
 }
@@ -2237,7 +2320,7 @@ export async function createShareableFolderLinkViaUserSession(
 export async function revokeShareableFolderLinkViaUserSession(
   tenantId: string,
   connectionId: string,
-  input: { filterId: number; slug: string },
+  input: { filterId: number; slug: string; removeFilter?: boolean },
 ) {
   return withAuthorizedUserClient(tenantId, connectionId, async (client) => {
     if (!input.slug) throw new Error("Telegram folder link slug is missing.");
@@ -2245,6 +2328,9 @@ export async function revokeShareableFolderLinkViaUserSession(
       chatlist: new Api.InputChatlistDialogFilter({ filterId: input.filterId }),
       slug: input.slug,
     }));
+    if (input.removeFilter) {
+      await client.invoke(new Api.messages.UpdateDialogFilter({ id: input.filterId }));
+    }
     return { revoked: true };
   });
 }

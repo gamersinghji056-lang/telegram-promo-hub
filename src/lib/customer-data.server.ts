@@ -1385,14 +1385,14 @@ export async function approvedGroupFolderEligibility(ctx: AuthContext, connectio
 
 export async function createApprovedGroupFolderLink(
   ctx: AuthContext,
-  input: string[] | { connectionId?: string | null; groupIds: string[] },
+  input: { connectionId: string; groupIds: string[] },
 ) {
-  const groupIds = Array.isArray(input) ? input : input.groupIds;
+  const groupIds = input.groupIds;
   const ids = [...new Set(groupIds)].filter(Boolean);
   if (!ids.length) throw new Error("Select at least one approved group.");
   const client = db();
-  const connectionId = Array.isArray(input) ? null : input.connectionId;
-  const connection = connectionId ? await requireConnection(ctx, connectionId) : await defaultHealthyConnection(ctx);
+  const connectionId = input.connectionId;
+  const connection = await requireConnection(ctx, connectionId);
   if (!sessionUsable(connection as Record<string, unknown>)) throw new Error("Reconnect required");
   const rows = await approvedFolderGroups(ctx, ids);
   if (rows.length !== ids.length) throw new Error("Only your own approved groups can be exported.");
@@ -1413,6 +1413,15 @@ export async function createApprovedGroupFolderLink(
   if (!exportRows.length) throw new Error(EMPTY_EXPORT_MESSAGE);
   if (exportRows.length !== rows.length) throw new Error(EMPTY_EXPORT_MESSAGE);
   const title = "WPAY Groups";
+  const { data: previousLink } = await untypedDb()
+    .from("telegram_folder_links")
+    .select("filter_id")
+    .eq("tenant_id", ctx.tenantId)
+    .eq("customer_id", ctx.customerId)
+    .eq("connection_id", connection.id)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
   const exportGroups = exportRows.map((group) => ({
     username: group.username as string | null,
     telegram_group_id: group.telegram_group_id as number | null,
@@ -1424,6 +1433,7 @@ export async function createApprovedGroupFolderLink(
     result = await createShareableFolderLinkViaUserSession(ctx.tenantId, String(connection.id), {
       title,
       groups: exportGroups,
+      preferredFilterId: previousLink?.filter_id == null ? null : Number(previousLink.filter_id),
     });
   } catch (error) {
     throw new Error(safeFolderLinkFailure(error));
@@ -1456,6 +1466,7 @@ export async function createApprovedGroupFolderLink(
       await revokeShareableFolderLinkViaUserSession(ctx.tenantId, String(connection.id), {
         filterId: result.filterId,
         slug: result.slug,
+        removeFilter: result.filterCreated,
       });
     } catch {
       /* The original persistence failure remains authoritative; cleanup is best effort. */
@@ -1468,7 +1479,15 @@ export async function createApprovedGroupFolderLink(
     customer_id: ctx.customerId,
     action: "TELEGRAM_FOLDER_LINK_CREATED",
     resource: result.url,
-    details: { group_count: rows.length, connection_id: connection.id },
+    details: {
+      group_count: rows.length,
+      connection_id: connection.id,
+      telegram_user_id: connection.telegram_user_id ?? connection.telegram_id ?? null,
+      username: connection.username ?? null,
+      filter_id: result.filterId,
+      filter_source: result.filterSource,
+      filter_created: result.filterCreated,
+    },
   });
   return link;
 }
