@@ -23,6 +23,8 @@ test("Growth snapshots and membership events are idempotent and never fabricate 
   assert(growth.includes('onConflict: "destination_id,telegram_event_id"'));
   assert(growth.includes("FLOOD_WAIT_"));
   assert(growth.includes("growth_collection_checkpoints"));
+  assert(growth.includes("reactions: hasReactions"));
+  assert(growth.includes("postViews: hasViews"));
   assert(dashboard.includes("Visitor data unavailable from Telegram"));
   assert(!dashboard.toLowerCase().includes("estimated visitors"));
 });

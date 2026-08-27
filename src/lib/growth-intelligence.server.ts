@@ -92,11 +92,17 @@ export async function collectGrowthDestination(target: GrowthTarget) {
       let views = 0;
       let forwards = 0;
       let reactions = 0;
+      let hasViews = false;
+      let hasForwards = false;
+      let hasReactions = false;
       for (const message of messages) {
+        hasViews ||= message.views != null;
+        hasForwards ||= message.forwards != null;
+        hasReactions ||= message.reactions != null;
         views += Number(message.views ?? 0);
         forwards += Number(message.forwards ?? 0);
-        const reactionCount = message.reactions?.results?.reduce((sum, item) => sum + Number(item.count), 0) ?? 0;
-        reactions += reactionCount;
+        const reactionCount = message.reactions?.results?.reduce((sum, item) => sum + Number(item.count), 0) ?? null;
+        reactions += reactionCount ?? 0;
         await clientDb.from("growth_content_metrics").upsert({
           tenant_id: target.tenant_id, destination_id: target.id, telegram_message_id: message.id,
           posted_at: new Date(message.date * 1000).toISOString(), views: message.views ?? null,
@@ -108,8 +114,8 @@ export async function collectGrowthDestination(target: GrowthTarget) {
       await clientDb.from("growth_snapshots").upsert({
         tenant_id: target.tenant_id, destination_id: target.id, snapshot_bucket: bucket.toISOString(),
         member_count: participantCount(full), message_count: messages.length,
-        reaction_count: reactions, post_views: views, forwards,
-        available_metrics: { memberCount: participantCount(full) != null, messages: true, reactions: true, postViews: true, forwards: true, visitors: false },
+        reaction_count: hasReactions ? reactions : null, post_views: hasViews ? views : null, forwards: hasForwards ? forwards : null,
+        available_metrics: { memberCount: participantCount(full) != null, messages: true, reactions: hasReactions, postViews: hasViews, forwards: hasForwards, visitors: false },
         collected_at: attemptedAt,
       }, { onConflict: "destination_id,snapshot_bucket" });
 
