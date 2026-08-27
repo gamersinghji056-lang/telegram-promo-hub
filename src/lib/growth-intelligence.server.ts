@@ -86,6 +86,21 @@ export function classifyMembershipAction(e: Api.ChannelAdminLogEvent) {
   return null;
 }
 
+export function classifyServiceMembership(message: Api.MessageService) {
+  const action = message.action;
+  const actorUserId = message.fromId instanceof Api.PeerUser ? Number(message.fromId.userId) : null;
+  if (action instanceof Api.MessageActionChatAddUser)
+    return action.users.map((id) => ({ type: "JOINED" as const, userId: Number(id), actorUserId }));
+  if (action instanceof Api.MessageActionChatDeleteUser)
+    return [{ type: "LEFT" as const, userId: Number(action.userId), actorUserId }];
+  if (
+    action instanceof Api.MessageActionChatJoinedByLink ||
+    action instanceof Api.MessageActionChatJoinedByRequest
+  )
+    return actorUserId ? [{ type: "JOINED" as const, userId: actorUserId, actorUserId }] : [];
+  return [];
+}
+
 export async function discoverAdminDestinations(
   tenantId: string,
   customerId: string,
@@ -195,6 +210,7 @@ async function persistPage(
     const m = classifyMembershipAction(e);
     if (!m?.userId) continue;
     const u = map.get(String(m.userId));
+    const eventAt = new Date(e.date * 1000).toISOString();
     const { error } = await db()
       .from("growth_membership_events")
       .upsert(
@@ -202,18 +218,81 @@ async function persistPage(
           tenant_id: target.tenant_id,
           destination_id: target.id,
           telegram_event_id: Number(e.id),
+          source_type: "ADMIN_LOG",
+          source_event_id: Number(e.id),
+          actor_user_id: Number(e.userId),
           event_type: m.type,
           telegram_user_id: m.userId,
           username: u?.username ?? null,
           display_name: u ? [u.firstName, u.lastName].filter(Boolean).join(" ") || null : null,
-          event_at: new Date(e.date * 1000).toISOString(),
+          event_at: eventAt,
           source_info: m.source,
           previous_chat_status:
             m.type === "LEFT" ? (u ? await previousChat(client, u) : "UNABLE_TO_VERIFY") : null,
         },
-        { onConflict: "destination_id,telegram_event_id" },
+        { onConflict: "destination_id,source_type,source_event_id,telegram_user_id" },
       );
     if (error) throw new Error(error.message);
+  }
+}
+
+async function persistServiceMessages(
+  client: TelegramClient,
+  target: GrowthTarget,
+  messages: Api.TypeMessage[],
+  users: Api.TypeUser[],
+) {
+  const map = new Map(
+    users.filter((u): u is Api.User => u instanceof Api.User).map((u) => [String(u.id), u]),
+  );
+  for (const message of messages) {
+    if (!(message instanceof Api.MessageService)) continue;
+    for (const membership of classifyServiceMembership(message)) {
+      const eventAt = new Date(message.date * 1000),
+        from = new Date(eventAt.getTime() - 3000).toISOString(),
+        to = new Date(eventAt.getTime() + 3000).toISOString();
+      const { data: duplicate } = await db()
+        .from("growth_membership_events")
+        .select("id")
+        .eq("destination_id", target.id)
+        .eq("event_type", membership.type)
+        .eq("telegram_user_id", membership.userId)
+        .neq("source_type", "MESSAGE_SERVICE")
+        .gte("event_at", from)
+        .lte("event_at", to)
+        .limit(1)
+        .maybeSingle();
+      if (duplicate) continue;
+      const user = map.get(String(membership.userId));
+      const { error } = await db()
+        .from("growth_membership_events")
+        .upsert(
+          {
+            tenant_id: target.tenant_id,
+            destination_id: target.id,
+            telegram_event_id: message.id,
+            source_type: "MESSAGE_SERVICE",
+            source_event_id: message.id,
+            actor_user_id: membership.actorUserId,
+            event_type: membership.type,
+            telegram_user_id: membership.userId,
+            username: user?.username ?? null,
+            display_name: user
+              ? [user.firstName, user.lastName].filter(Boolean).join(" ") || null
+              : null,
+            event_at: eventAt.toISOString(),
+            source_info: { type: message.action.className },
+            previous_chat_status:
+              membership.type === "LEFT"
+                ? user
+                  ? await previousChat(client, user)
+                  : "UNABLE_TO_VERIFY"
+                : null,
+          },
+          { onConflict: "destination_id,source_type,source_event_id,telegram_user_id" },
+        );
+      if (error) throw new Error(error.message);
+    }
   }
 }
 
@@ -320,6 +399,108 @@ async function collectLog(
       flood_wait_until: null,
       updated_at: now,
     });
+  return cp;
+}
+
+async function collectMembershipHistory(
+  client: TelegramClient,
+  input: Api.InputChannel,
+  target: GrowthTarget,
+  now: string,
+) {
+  const store = db();
+  const { data: saved } = await store
+    .from("growth_collection_checkpoints")
+    .select("checkpoint")
+    .eq("destination_id", target.id)
+    .eq("collection_type", "MEMBERSHIP_HISTORY")
+    .maybeSingle();
+  const cp: AdminLogCheckpoint = { ...((saved?.checkpoint as AdminLogCheckpoint | null) ?? {}) };
+  let pages = 0;
+  const save = async () => {
+    const { error } = await store.from("growth_collection_checkpoints").upsert({
+      destination_id: target.id,
+      collection_type: "MEMBERSHIP_HISTORY",
+      checkpoint: cp,
+      last_attempt_at: now,
+      last_success_at: now,
+      last_error_code: null,
+      flood_wait_until: null,
+      updated_at: now,
+    });
+    if (error) throw new Error(error.message);
+  };
+  const fetch = async (maxId: number, minId: number) => {
+    const result = await client.invoke(
+      new Api.messages.GetHistory({
+        peer: input,
+        offsetId: 0,
+        offsetDate: 0,
+        addOffset: 0,
+        limit: 100,
+        maxId,
+        minId,
+        hash: bigInt(0),
+      }),
+    );
+    const messages = "messages" in result ? result.messages : [];
+    const users = "users" in result ? result.users : [];
+    await persistServiceMessages(client, target, messages, users);
+    pages++;
+    return messages.filter(
+      (message): message is Api.Message | Api.MessageService =>
+        (message instanceof Api.Message || message instanceof Api.MessageService) && message.id > 0,
+    );
+  };
+
+  if (!cp.newestProcessedId) {
+    const messages = await fetch(0, 0);
+    if (messages.length) {
+      cp.newestProcessedId = Math.max(...messages.map((message) => message.id));
+      cp.oldestBackfilledId = Math.min(...messages.map((message) => message.id));
+      cp.latestEventAt = new Date(Math.max(...messages.map((message) => message.date)) * 1000).toISOString();
+      cp.oldestEventAt = new Date(Math.min(...messages.map((message) => message.date)) * 1000).toISOString();
+    }
+    cp.backfillComplete = messages.length < 100;
+    await save();
+  } else {
+    const messages = await fetch(cp.incrementalCursorMaxId ?? 0, cp.newestProcessedId);
+    if (messages.length) {
+      cp.incrementalCycleNewestId = Math.max(
+        cp.incrementalCycleNewestId ?? 0,
+        ...messages.map((message) => message.id),
+      );
+      if (messages.length === 100)
+        cp.incrementalCursorMaxId = Math.min(...messages.map((message) => message.id));
+      else {
+        cp.newestProcessedId = Math.max(cp.newestProcessedId, cp.incrementalCycleNewestId);
+        delete cp.incrementalCursorMaxId;
+        delete cp.incrementalCycleNewestId;
+      }
+    } else {
+      if (cp.incrementalCycleNewestId)
+        cp.newestProcessedId = Math.max(cp.newestProcessedId, cp.incrementalCycleNewestId);
+      delete cp.incrementalCursorMaxId;
+      delete cp.incrementalCycleNewestId;
+    }
+    await save();
+  }
+
+  if (
+    pages < MAX_PAGES &&
+    !cp.incrementalCursorMaxId &&
+    !cp.backfillComplete &&
+    cp.oldestBackfilledId
+  ) {
+    const messages = await fetch(cp.oldestBackfilledId, 0),
+      older = messages.filter((message) => message.id < cp.oldestBackfilledId!);
+    if (older.length) {
+      cp.oldestBackfilledId = Math.min(...older.map((message) => message.id));
+      cp.oldestEventAt = new Date(Math.min(...older.map((message) => message.date)) * 1000).toISOString();
+    }
+    cp.backfillComplete = messages.length < 100 || !older.length;
+    await save();
+  }
   return cp;
 }
 
@@ -430,6 +611,26 @@ export async function collectGrowthDestination(target: GrowthTarget) {
               flood_wait_until: floodUntil(code),
               updated_at: now,
             });
+        }
+        try {
+          await collectMembershipHistory(client, input, target, now);
+        } catch (error) {
+          const code = safeCode(error),
+            prior = await store
+              .from("growth_collection_checkpoints")
+              .select("checkpoint")
+              .eq("destination_id", target.id)
+              .eq("collection_type", "MEMBERSHIP_HISTORY")
+              .maybeSingle();
+          await store.from("growth_collection_checkpoints").upsert({
+            destination_id: target.id,
+            collection_type: "MEMBERSHIP_HISTORY",
+            checkpoint: prior.data?.checkpoint ?? {},
+            last_attempt_at: now,
+            last_error_code: code,
+            flood_wait_until: floodUntil(code),
+            updated_at: now,
+          });
         }
         await store
           .from("growth_destinations")

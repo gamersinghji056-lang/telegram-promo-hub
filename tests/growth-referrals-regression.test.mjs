@@ -22,7 +22,7 @@ test("Growth snapshots and membership events are idempotent and never fabricate 
   assert(migration.includes("UNIQUE (destination_id, snapshot_bucket)"));
   assert(migration.includes("UNIQUE (destination_id, telegram_event_id)"));
   assert(growth.includes('onConflict: "destination_id,snapshot_bucket"'));
-  assert(growth.includes('onConflict: "destination_id,telegram_event_id"'));
+  assert(growth.includes('onConflict: "destination_id,source_type,source_event_id,telegram_user_id"'));
   assert(growth.includes("FLOOD_WAIT_"));
   assert(growth.includes("growth_collection_checkpoints"));
   assert(growth.includes("reactions: hr"));
@@ -73,6 +73,27 @@ test("Growth totals and chart buckets are aggregated over all persisted rows in 
       repair.includes("growth_snapshots"),
   );
   assert(repair.includes("jsonb_agg") && repair.includes("memberCount"));
+});
+
+test("MessageService membership actions are real, resumable, and dual-source deduplicated", () => {
+  const growth = read("src/lib/growth-intelligence.server.ts");
+  const data = read("src/lib/growth-data.server.ts");
+  const migration = read("supabase/migrations/20260827164138_add_membership_service_history.sql");
+  for (const action of ["MessageActionChatAddUser", "MessageActionChatDeleteUser", "MessageActionChatJoinedByLink", "MessageActionChatJoinedByRequest"]) assert(growth.includes(action));
+  assert(growth.includes('type: "JOINED"') && growth.includes('type: "LEFT"'));
+  assert(growth.includes('collection_type: "MEMBERSHIP_HISTORY"'));
+  assert(growth.includes("oldestBackfilledId") && growth.includes("incrementalCursorMaxId"));
+  assert(growth.includes('.neq("source_type", "MESSAGE_SERVICE")'));
+  assert(migration.includes("growth_membership_exact_source_once"));
+  assert(data.includes("Boolean(adminCheckpoint.backfillComplete) &&") && data.includes("Boolean(historyCheckpoint.backfillComplete)"));
+});
+
+test("Recent membership details retain source, identity, and previous-chat status", () => {
+  const data = read("src/lib/growth-data.server.ts");
+  const ui = read("src/routes/mini-app.$section.tsx");
+  assert(data.includes("source_type") && data.includes("actor_user_id"));
+  assert(ui.includes("RECENT") && ui.includes("Telegram Service Event"));
+  assert(ui.includes("previous_chat_status") && ui.includes("Telegram ID:"));
 });
 
 test("Health score is transparent and withheld without history", () => {

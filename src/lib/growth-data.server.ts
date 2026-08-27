@@ -88,8 +88,8 @@ export async function growthDashboard(
       .order("created_at"),
     client
       .from("growth_collection_checkpoints")
-      .select("destination_id,checkpoint,last_success_at,last_error_code,flood_wait_until")
-      .eq("collection_type", "ADMIN_LOG"),
+      .select("destination_id,collection_type,checkpoint,last_success_at,last_error_code,flood_wait_until")
+      .in("collection_type", ["ADMIN_LOG", "MEMBERSHIP_HISTORY"]),
   ]);
   if (error) throw new Error(error.message);
   const ids = (destinations ?? []).map((r) => r.id);
@@ -97,7 +97,7 @@ export async function growthDashboard(
     ? await client
         .from("growth_membership_events")
         .select(
-          "id,destination_id,event_type,telegram_user_id,username,display_name,event_at,source_info,previous_chat_status",
+          "id,destination_id,event_type,telegram_user_id,username,display_name,event_at,source_type,source_info,actor_user_id,previous_chat_status",
         )
         .eq("tenant_id", ctx.tenantId)
         .in("destination_id", ids)
@@ -107,10 +107,20 @@ export async function growthDashboard(
         .range(0, 99)
     : { data: [] };
   const amap = new Map((aggregate ?? []).map((r: any) => [r.destination_id, r])),
-    cmap = new Map((checkpoints ?? []).map((r: any) => [r.destination_id, r]));
+    adminMap = new Map(
+      (checkpoints ?? [])
+        .filter((r: any) => r.collection_type === "ADMIN_LOG")
+        .map((r: any) => [r.destination_id, r]),
+    ),
+    historyMap = new Map(
+      (checkpoints ?? [])
+        .filter((r: any) => r.collection_type === "MEMBERSHIP_HISTORY")
+        .map((r: any) => [r.destination_id, r]),
+    );
   const enriched = (destinations ?? []).map((d) => {
     const a: any = amap.get(d.id) ?? {},
-      c: any = cmap.get(d.id),
+      admin: any = adminMap.get(d.id),
+      history: any = historyMap.get(d.id),
       joins = Number(a.joins ?? 0),
       leaves = Number(a.leaves ?? 0),
       messages = Number(a.messages ?? 0),
@@ -118,7 +128,8 @@ export async function growthDashboard(
       views = a.views == null ? null : Number(a.views),
       forwards = a.forwards == null ? null : Number(a.forwards),
       netGrowth = joins - leaves,
-      cp = c?.checkpoint ?? {};
+      adminCheckpoint = admin?.checkpoint ?? {},
+      historyCheckpoint = history?.checkpoint ?? {};
     return {
       ...d,
       joins,
@@ -148,12 +159,22 @@ export async function growthDashboard(
         snapshotCount: Number(a.snapshot_count ?? 0),
       }),
       coverage: {
-        backfillComplete: Boolean(cp.backfillComplete),
-        oldestEventAt: cp.oldestEventAt ?? a.oldest_event_at,
-        latestEventAt: cp.latestEventAt ?? a.latest_event_at,
-        lastSync: c?.last_success_at,
-        lastError: c?.last_error_code,
-        floodWaitUntil: c?.flood_wait_until,
+        backfillComplete:
+          Boolean(adminCheckpoint.backfillComplete) && Boolean(historyCheckpoint.backfillComplete),
+        adminLog: {
+          complete: Boolean(adminCheckpoint.backfillComplete),
+          error: admin?.last_error_code,
+        },
+        membershipHistory: {
+          complete: Boolean(historyCheckpoint.backfillComplete),
+          started: Boolean(history),
+          error: history?.last_error_code,
+        },
+        oldestEventAt: a.oldest_event_at,
+        latestEventAt: a.latest_event_at,
+        lastSync: history?.last_success_at ?? admin?.last_success_at,
+        lastError: history?.last_error_code ?? admin?.last_error_code,
+        floodWaitUntil: history?.flood_wait_until ?? admin?.flood_wait_until,
       },
     };
   });
