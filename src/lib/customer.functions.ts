@@ -40,9 +40,7 @@ export const logout = createServerFn({ method: "POST" })
 
 export const getAccountSettings = createServerFn({ method: "POST" })
   .inputValidator((i: Auth) => i)
-  .handler(async ({ data: i }) =>
-    getCustomerAccountSettings(await resolveAuth(i.auth)),
-  );
+  .handler(async ({ data: i }) => getCustomerAccountSettings(await resolveAuth(i.auth)));
 
 export const updateAccountPassword = createServerFn({ method: "POST" })
   .inputValidator(
@@ -55,14 +53,11 @@ export const updateAccountPassword = createServerFn({ method: "POST" })
     ) => i,
   )
   .handler(async ({ data: i }) =>
-    changeCustomerPassword(
-      await resolveAuth(i.auth),
-      {
-        currentPassword: i.currentPassword,
-        newPassword: i.newPassword,
-        confirmPassword: i.confirmPassword,
-      },
-    ),
+    changeCustomerPassword(await resolveAuth(i.auth), {
+      currentPassword: i.currentPassword,
+      newPassword: i.newPassword,
+      confirmPassword: i.confirmPassword,
+    }),
   );
 
 export const getDashboard = createServerFn({ method: "POST" })
@@ -124,7 +119,9 @@ export const checkConnection = createServerFn({ method: "POST" })
 
 export const testSessionHealth = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { id: string }) => i)
-  .handler(async ({ data: i }) => jsonSafe(await data.testSessionHealth(await resolveAuth(i.auth), i.id)));
+  .handler(async ({ data: i }) =>
+    jsonSafe(await data.testSessionHealth(await resolveAuth(i.auth), i.id)),
+  );
 
 export const setPreferredPremiumEmojiSession = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { mode: "AUTO" | "MANUAL"; connectionId?: string | null }) => i)
@@ -224,10 +221,12 @@ export const getApprovedGroupFolderEligibility = createServerFn({ method: "POST"
 export const createApprovedGroupFolderLink = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { connectionId: string; groupIds: string[] }) => i)
   .handler(async ({ data: i }) =>
-    jsonSafe(await data.createApprovedGroupFolderLink(await resolveAuth(i.auth), {
-      connectionId: i.connectionId,
-      groupIds: i.groupIds,
-    })),
+    jsonSafe(
+      await data.createApprovedGroupFolderLink(await resolveAuth(i.auth), {
+        connectionId: i.connectionId,
+        groupIds: i.groupIds,
+      }),
+    ),
   );
 
 export const revokeApprovedGroupFolderLink = createServerFn({ method: "POST" })
@@ -313,7 +312,15 @@ export const getSupportSettings = createServerFn({ method: "POST" })
   });
 
 export const saveCustomerPreferenceSettings = createServerFn({ method: "POST" })
-  .inputValidator((i: Auth & { language?: string; theme?: string; notifications?: Record<string, string | number | boolean | null> }) => i)
+  .inputValidator(
+    (
+      i: Auth & {
+        language?: string;
+        theme?: string;
+        notifications?: Record<string, string | number | boolean | null>;
+      },
+    ) => i,
+  )
   .handler(async ({ data: i }) =>
     saveCustomerPreferences(await resolveAuth(i.auth), {
       language: i.language,
@@ -325,19 +332,23 @@ export const saveCustomerPreferenceSettings = createServerFn({ method: "POST" })
 export const testWritableGroups = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { groupIds: string[]; joinIfRequired?: boolean }) => i)
   .handler(async ({ data: i }) =>
-    jsonSafe(await data.testWritableGroups(await resolveAuth(i.auth), {
-      groupIds: i.groupIds,
-      joinIfRequired: i.joinIfRequired,
-    })),
+    jsonSafe(
+      await data.testWritableGroups(await resolveAuth(i.auth), {
+        groupIds: i.groupIds,
+        joinIfRequired: i.joinIfRequired,
+      }),
+    ),
   );
 
 export const testSendableGroups = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { groupIds: string[]; joinIfRequired?: boolean }) => i)
   .handler(async ({ data: i }) =>
-    jsonSafe(await data.testSendableGroups(await resolveAuth(i.auth), {
-      groupIds: i.groupIds,
-      joinIfRequired: i.joinIfRequired,
-    })),
+    jsonSafe(
+      await data.testSendableGroups(await resolveAuth(i.auth), {
+        groupIds: i.groupIds,
+        joinIfRequired: i.joinIfRequired,
+      }),
+    ),
   );
 
 export const getGroupCategoryDetail = createServerFn({ method: "POST" })
@@ -346,13 +357,15 @@ export const getGroupCategoryDetail = createServerFn({ method: "POST" })
 
 export const saveGroupCategory = createServerFn({ method: "POST" })
   .inputValidator(
-    (i: Auth & {
-      id?: string | null;
-      name: string;
-      group_ids: string[];
-      category_type?: "NW_NS" | "WRITABLE" | "SENDABLE";
-      joinIfRequired?: boolean;
-    }) => i,
+    (
+      i: Auth & {
+        id?: string | null;
+        name: string;
+        group_ids: string[];
+        category_type?: "NW_NS" | "WRITABLE" | "SENDABLE";
+        joinIfRequired?: boolean;
+      },
+    ) => i,
   )
   .handler(async ({ data: i }) =>
     data.saveGroupCategory(await resolveAuth(i.auth), {
@@ -370,16 +383,18 @@ export const deleteGroupCategory = createServerFn({ method: "POST" })
 
 export const findAudience = createServerFn({ method: "POST" })
   .inputValidator(
-    (i: Auth & {
-      groupIds?: string[];
-      onlyNew?: boolean;
-      filter?: "ALL_ELIGIBLE" | "ACTIVE_POSTERS" | "ACTIVE_30_DAYS" | "RECENTLY_ONLINE";
-      usernameFilter?: "ALL" | "WITH_USERNAME" | "WITHOUT_USERNAME";
-      activityFilter?: "ALL" | "ACTIVE_RECENTLY" | "AROUND_MONTH" | "LONG_TIME_AGO";
-      excludeInactive?: boolean;
-      page?: number;
-      pageSize?: number;
-    }) => i,
+    (
+      i: Auth & {
+        groupIds?: string[];
+        onlyNew?: boolean;
+        filter?: "ALL_ELIGIBLE" | "ACTIVE_POSTERS" | "ACTIVE_30_DAYS" | "RECENTLY_ONLINE";
+        usernameFilter?: "ALL" | "WITH_USERNAME" | "WITHOUT_USERNAME";
+        activityFilter?: "ALL" | "ACTIVE_RECENTLY" | "AROUND_MONTH" | "LONG_TIME_AGO";
+        excludeInactive?: boolean;
+        page?: number;
+        pageSize?: number;
+      },
+    ) => i,
   )
   .handler(async ({ data: i }) =>
     data.findAudience(await resolveAuth(i.auth), {
@@ -396,16 +411,18 @@ export const findAudience = createServerFn({ method: "POST" })
 
 export const selectAudienceIds = createServerFn({ method: "POST" })
   .inputValidator(
-    (i: Auth & {
-      groupIds?: string[];
-      onlyNew?: boolean;
-      filter?: "ALL_ELIGIBLE" | "ACTIVE_POSTERS" | "ACTIVE_30_DAYS" | "RECENTLY_ONLINE";
-      usernameFilter?: "ALL" | "WITH_USERNAME" | "WITHOUT_USERNAME";
-      activityFilter?: "ALL" | "ACTIVE_RECENTLY" | "AROUND_MONTH" | "LONG_TIME_AGO";
-      excludeInactive?: boolean;
-      rangeFrom?: number | null;
-      rangeTo?: number | null;
-    }) => i,
+    (
+      i: Auth & {
+        groupIds?: string[];
+        onlyNew?: boolean;
+        filter?: "ALL_ELIGIBLE" | "ACTIVE_POSTERS" | "ACTIVE_30_DAYS" | "RECENTLY_ONLINE";
+        usernameFilter?: "ALL" | "WITH_USERNAME" | "WITHOUT_USERNAME";
+        activityFilter?: "ALL" | "ACTIVE_RECENTLY" | "AROUND_MONTH" | "LONG_TIME_AGO";
+        excludeInactive?: boolean;
+        rangeFrom?: number | null;
+        rangeTo?: number | null;
+      },
+    ) => i,
   )
   .handler(async ({ data: i }) =>
     data.selectAudienceIds(await resolveAuth(i.auth), {
@@ -447,29 +464,37 @@ export const getAddUsersState = createServerFn({ method: "POST" })
 export const checkAddUsersDestination = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { connectionId: string; destination: string }) => i)
   .handler(async ({ data: i }) =>
-    jsonSafe(await data.checkAddUsersDestination(await resolveAuth(i.auth), {
-      connectionId: i.connectionId,
-      destination: i.destination,
-    })),
+    jsonSafe(
+      await data.checkAddUsersDestination(await resolveAuth(i.auth), {
+        connectionId: i.connectionId,
+        destination: i.destination,
+      }),
+    ),
   );
 
 export const startAddUsersJob = createServerFn({ method: "POST" })
-  .inputValidator((i: Auth & { connectionId: string; destination: string; contactIds: string[] }) => i)
+  .inputValidator(
+    (i: Auth & { connectionId: string; destination: string; contactIds: string[] }) => i,
+  )
   .handler(async ({ data: i }) =>
-    jsonSafe(await data.startAddUsersJob(await resolveAuth(i.auth), {
-      connectionId: i.connectionId,
-      destination: i.destination,
-      contactIds: i.contactIds,
-    })),
+    jsonSafe(
+      await data.startAddUsersJob(await resolveAuth(i.auth), {
+        connectionId: i.connectionId,
+        destination: i.destination,
+        contactIds: i.contactIds,
+      }),
+    ),
   );
 
 export const controlAddUsersJob = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { id: string; action: "PAUSE" | "RESUME" | "CANCEL" }) => i)
   .handler(async ({ data: i }) =>
-    jsonSafe(await data.controlAddUsersJob(await resolveAuth(i.auth), {
-      id: i.id,
-      action: i.action,
-    })),
+    jsonSafe(
+      await data.controlAddUsersJob(await resolveAuth(i.auth), {
+        id: i.id,
+        action: i.action,
+      }),
+    ),
   );
 
 export const getContactHistory = createServerFn({ method: "POST" })
@@ -521,7 +546,14 @@ export const createCampaign = createServerFn({ method: "POST" })
         message: {
           text?: string;
           entities?: {
-            type: "custom_emoji" | "bold" | "italic" | "underline" | "strikethrough" | "spoiler" | "text_url";
+            type:
+              | "custom_emoji"
+              | "bold"
+              | "italic"
+              | "underline"
+              | "strikethrough"
+              | "spoiler"
+              | "text_url";
             offset: number;
             length: number;
             document_id?: string;
@@ -563,9 +595,7 @@ export const controlCampaign = createServerFn({ method: "POST" })
       },
     ) => i,
   )
-  .handler(async ({ data: i }) =>
-    data.controlCampaign(await resolveAuth(i.auth), i.id, i.action),
-  );
+  .handler(async ({ data: i }) => data.controlCampaign(await resolveAuth(i.auth), i.id, i.action));
 
 export const updateCampaign = createServerFn({ method: "POST" })
   .inputValidator(
@@ -578,7 +608,14 @@ export const updateCampaign = createServerFn({ method: "POST" })
         message: {
           text?: string;
           entities?: {
-            type: "custom_emoji" | "bold" | "italic" | "underline" | "strikethrough" | "spoiler" | "text_url";
+            type:
+              | "custom_emoji"
+              | "bold"
+              | "italic"
+              | "underline"
+              | "strikethrough"
+              | "spoiler"
+              | "text_url";
             offset: number;
             length: number;
             document_id?: string;
@@ -617,12 +654,23 @@ export const getAnalytics = createServerFn({ method: "POST" })
   .handler(async ({ data: i }) => data.analytics(await resolveAuth(i.auth)));
 
 export const getGrowthIntelligence = createServerFn({ method: "POST" })
-  .inputValidator((i: Auth & { range?: "24H" | "7D" | "30D"; customStart?: string | null; customEnd?: string | null; destinationId?: string | null }) => i)
+  .inputValidator(
+    (
+      i: Auth & {
+        range?: "24H" | "7D" | "30D" | "90D";
+        customStart?: string | null;
+        customEnd?: string | null;
+        destinationId?: string | null;
+      },
+    ) => i,
+  )
   .handler(async ({ data: i }) => growthDashboard(await resolveAuth(i.auth), i));
 
 export const discoverGrowthDestinations = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { connectionId: string }) => i)
-  .handler(async ({ data: i }) => jsonSafe(await refreshGrowthDestinations(await resolveAuth(i.auth), i.connectionId)));
+  .handler(async ({ data: i }) =>
+    jsonSafe(await refreshGrowthDestinations(await resolveAuth(i.auth), i.connectionId)),
+  );
 
 export const getReferralDashboard = createServerFn({ method: "POST" })
   .inputValidator((i: Auth) => i)
@@ -630,7 +678,9 @@ export const getReferralDashboard = createServerFn({ method: "POST" })
 
 export const useCoinsForInvoice = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { invoiceId: string; coins: number }) => i)
-  .handler(async ({ data: i }) => reserveInvoiceCoins(await resolveAuth(i.auth), i.invoiceId, i.coins));
+  .handler(async ({ data: i }) =>
+    reserveInvoiceCoins(await resolveAuth(i.auth), i.invoiceId, i.coins),
+  );
 
 export const getBilling = createServerFn({ method: "POST" })
   .inputValidator((i: Auth) => i)
@@ -638,15 +688,21 @@ export const getBilling = createServerFn({ method: "POST" })
 
 export const requestPayment = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { planId: string; replace?: boolean }) => i)
-  .handler(async ({ data: i }) => data.requestPayment(await resolveAuth(i.auth), { planId: i.planId, replace: i.replace }));
+  .handler(async ({ data: i }) =>
+    data.requestPayment(await resolveAuth(i.auth), { planId: i.planId, replace: i.replace }),
+  );
 
 export const requestPremiumEmojiPayment = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { replace?: boolean }) => i)
-  .handler(async ({ data: i }) => data.requestPremiumEmojiPayment(await resolveAuth(i.auth), { replace: i.replace }));
+  .handler(async ({ data: i }) =>
+    data.requestPremiumEmojiPayment(await resolveAuth(i.auth), { replace: i.replace }),
+  );
 
 export const requestAddUsersCreditsPayment = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { replace?: boolean }) => i)
-  .handler(async ({ data: i }) => data.requestAddUsersCreditsPayment(await resolveAuth(i.auth), { replace: i.replace }));
+  .handler(async ({ data: i }) =>
+    data.requestAddUsersCreditsPayment(await resolveAuth(i.auth), { replace: i.replace }),
+  );
 
 export const getInvoiceStatus = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { invoiceId: string }) => i)
@@ -654,10 +710,14 @@ export const getInvoiceStatus = createServerFn({ method: "POST" })
 
 export const checkInvoicePaymentStatus = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { invoiceId: string }) => i)
-  .handler(async ({ data: i }) => data.checkInvoicePaymentStatus(await resolveAuth(i.auth), i.invoiceId));
+  .handler(async ({ data: i }) =>
+    data.checkInvoicePaymentStatus(await resolveAuth(i.auth), i.invoiceId),
+  );
 
 export const getCustomEmojiCatalog = createServerFn({ method: "POST" })
-  .inputValidator((i: Auth & { connectionId?: string | null; query?: string | null; tab?: string | null }) => i)
+  .inputValidator(
+    (i: Auth & { connectionId?: string | null; query?: string | null; tab?: string | null }) => i,
+  )
   .handler(async ({ data: i }) =>
     data.customEmojiCatalog(await resolveAuth(i.auth), {
       connectionId: i.connectionId,
