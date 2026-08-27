@@ -9,6 +9,8 @@ import {
 } from "./customer-auth.server";
 import * as data from "./customer-data.server";
 import { customerPreferences, saveCustomerPreferences } from "./preferences.server";
+import { growthDashboard, refreshGrowthDestinations } from "./growth-data.server";
+import { referralDashboard, reserveInvoiceCoins } from "./referrals.server";
 
 type Auth = { auth: string };
 
@@ -613,6 +615,22 @@ export const deleteCampaign = createServerFn({ method: "POST" })
 export const getAnalytics = createServerFn({ method: "POST" })
   .inputValidator((i: Auth) => i)
   .handler(async ({ data: i }) => data.analytics(await resolveAuth(i.auth)));
+
+export const getGrowthIntelligence = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { range?: "24H" | "7D" | "30D"; customStart?: string | null; customEnd?: string | null; destinationId?: string | null }) => i)
+  .handler(async ({ data: i }) => growthDashboard(await resolveAuth(i.auth), i));
+
+export const discoverGrowthDestinations = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { connectionId: string }) => i)
+  .handler(async ({ data: i }) => jsonSafe(await refreshGrowthDestinations(await resolveAuth(i.auth), i.connectionId)));
+
+export const getReferralDashboard = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth) => i)
+  .handler(async ({ data: i }) => referralDashboard(await resolveAuth(i.auth)));
+
+export const useCoinsForInvoice = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth & { invoiceId: string; coins: number }) => i)
+  .handler(async ({ data: i }) => reserveInvoiceCoins(await resolveAuth(i.auth), i.invoiceId, i.coins));
 
 export const getBilling = createServerFn({ method: "POST" })
   .inputValidator((i: Auth) => i)

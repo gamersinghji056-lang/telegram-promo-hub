@@ -2,6 +2,8 @@ import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import * as admin from "./admin-data.server";
 import { adminPreferences, saveAdminPreferences } from "./preferences.server";
+import { adminGrowthOverview } from "./growth-data.server";
+import { adminAdjustCoins, adminReferralOverview, adminReverseReferralReward } from "./referrals.server";
 
 export const getAdminRegistrationStatus = createServerFn({ method: "GET" })
   .handler(async () => admin.adminRegistrationStatus());
@@ -217,6 +219,36 @@ export const getUsage = createServerFn({ method: "POST" })
   .handler(async ({ context }) => {
     await admin.assertSuperAdmin(context.userId);
     return admin.adminUsage();
+  });
+
+export const getAdminGrowthIntelligence = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    await admin.assertSuperAdmin(context.userId);
+    return adminGrowthOverview();
+  });
+
+export const getAdminReferrals = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    await admin.assertSuperAdmin(context.userId);
+    return adminReferralOverview();
+  });
+
+export const adjustCustomerCoins = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((i: { customerId: string; amount: number; reason: string }) => i)
+  .handler(async ({ context, data }) => {
+    await admin.assertSuperAdmin(context.userId);
+    return adminAdjustCoins(context.userId, data.customerId, data.amount, data.reason);
+  });
+
+export const reverseReferralReward = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((i: { invoiceId: string; reason: string }) => i)
+  .handler(async ({ context, data }) => {
+    await admin.assertSuperAdmin(context.userId);
+    return adminReverseReferralReward(context.userId, data.invoiceId, data.reason);
   });
 
 export const resetUsage = createServerFn({ method: "POST" })

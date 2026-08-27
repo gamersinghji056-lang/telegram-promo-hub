@@ -7,6 +7,7 @@ import {
   verifyTelegramInitData,
 } from "./security.server";
 import { botToken } from "./telegram.server";
+import { claimPendingReferral } from "./referrals.server";
 
 export type AuthContext = {
   customerId: string;
@@ -340,6 +341,8 @@ export async function registerCustomerWithPasswordHash(
       role: "customer",
     });
 
+  await claimPendingReferral(customer.id, tenant.id, input.telegramUserId ?? null);
+
   if (plan) {
     await client
       .from("subscriptions")
@@ -479,6 +482,8 @@ export async function loginCustomer(input: {
         "Login succeeded but Telegram linking failed. Try again.",
     };
   }
+
+  await claimPendingReferral(customer.id as string, customer.tenant_id as string, input.telegramUserId ?? null);
 
   const token = await createCustomerSession({
     customerId: customer.id as string,

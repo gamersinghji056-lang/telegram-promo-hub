@@ -13,6 +13,8 @@ import {
   Send,
   Tags,
   Users,
+  TrendingUp,
+  Gift,
 } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -28,6 +30,8 @@ const items = [
   ["add-users", "Add Users", Users, "#0ca678"],
   ["group-categories", "Categories", Tags, "#12b886"],
   ["analytics", "Analytics", BarChart3, "#228be6"],
+  ["growth-intelligence", "Growth Intelligence", TrendingUp, "#0891b2"],
+  ["refer-earn", "Refer & Earn", Gift, "#7c3aed"],
   ["billing", "Billing", CreditCard, "#40c057"],
   ["settings", "Settings", Settings, "#868e96"],
 ] as const;

@@ -20,6 +20,10 @@ import {
   getAdminCustomers,
   getAdminCustomer,
   getAdminDashboard,
+  getAdminGrowthIntelligence,
+  getAdminReferrals,
+  adjustCustomerCoins,
+  reverseReferralReward,
   getAdminNotifications,
   getRegistration,
   getLogs,
@@ -55,6 +59,8 @@ const valid = new Set([
   "payments",
   "telegram",
   "analytics",
+  "growth-intelligence",
+  "referrals",
   "usage",
   "notifications",
   "registration",
@@ -109,6 +115,8 @@ function AdminSection() {
       const loaders: Record<string, () => Promise<any>> = {
         dashboard: getAdminDashboard,
         analytics: getAdminDashboard,
+        "growth-intelligence": getAdminGrowthIntelligence,
+        referrals: getAdminReferrals,
         customers: () => getAdminCustomers({ data: {} }),
         plans: getPlans,
         subscriptions: getSubscriptions,
@@ -161,6 +169,8 @@ function SectionContent({
   reload: () => Promise<void>;
 }) {
   if (section === "dashboard" || section === "analytics") return <Dashboard data={data} />;
+  if (section === "growth-intelligence") return <GrowthAdmin rows={Array.isArray(data) ? data : []} />;
+  if (section === "referrals") return <ReferralAdmin data={data ?? { referrals: [], wallets: [], ledger: [] }} reload={reload} />;
   if (section === "customers")
     return <CustomersAdmin rows={Array.isArray(data) ? data : []} reload={reload} />;
   if (section === "plans")
@@ -870,6 +880,21 @@ function PlansAdmin({ rows, reload }: { rows: AnyData[]; reload: () => Promise<v
       </form>
     </div>
   );
+}
+
+function GrowthAdmin({ rows }: { rows: AnyData[] }) {
+  return <div className="space-y-3"><div className="grid gap-3 sm:grid-cols-3">{[["Monitored",rows.length],["Healthy",rows.filter((row) => row.status === "ACTIVE").length],["Errors / FloodWait",rows.filter((row) => row.last_error_code).length]].map(([label,value]) => <section key={String(label)} className="border border-border bg-card p-4"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 text-2xl font-semibold">{value}</p></section>)}</div><DetailList title="Monitored groups/channels" rows={rows} fields={["title","destination_type","member_count","status","last_error_code","last_checked_at","last_collected_at"]}/></div>;
+}
+
+function ReferralAdmin({ data, reload }: { data: AnyData; reload: () => Promise<void> }) {
+  const [customerId, setCustomerId] = useState("");
+  const [amount, setAmount] = useState("");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [reversalInvoice, setReversalInvoice] = useState("");
+  const [reversalReason, setReversalReason] = useState("");
+  return <div className="space-y-4"><section className="border border-border bg-card p-4"><h2 className="font-semibold">Controlled Coin Adjustment</h2><div className="mt-3 grid gap-2 sm:grid-cols-3"><select className="min-w-0 border border-border bg-background p-2 text-sm" value={customerId} onChange={(e) => setCustomerId(e.target.value)}><option value="">Select wallet</option>{(data.wallets ?? []).map((row: any) => <option key={row.customer_id} value={row.customer_id}>{row.customers?.email ?? row.customer_id} · {row.balance} Coins</option>)}</select><input className="min-w-0 border border-border bg-background p-2 text-sm" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Whole Coin amount (+/-)"/><input className="min-w-0 border border-border bg-background p-2 text-sm" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Required audit reason"/></div><Button className="mt-3" disabled={busy || !customerId || !amount || !reason.trim()} onClick={async () => { setBusy(true); setError(""); try { await adjustCustomerCoins({ data: { customerId, amount: Number(amount), reason } }); setAmount(""); setReason(""); await reload(); } catch(e) { setError(e instanceof Error ? e.message : "Adjustment failed"); } finally { setBusy(false); } }}>{busy ? "ADJUSTING..." : "ADJUST COINS"}</Button>{error ? <p className="mt-2 text-sm text-destructive">{error}</p> : null}</section><section className="border border-border bg-card p-4"><h2 className="font-semibold">Reward Reversal</h2><p className="mt-1 text-xs text-muted-foreground">Reversals preserve ledger history. Spent rewards are surfaced for admin review.</p><div className="mt-3 grid gap-2 sm:grid-cols-2"><input className="min-w-0 border border-border bg-background p-2 text-sm" value={reversalInvoice} onChange={(e) => setReversalInvoice(e.target.value)} placeholder="Rewarded invoice ID"/><input className="min-w-0 border border-border bg-background p-2 text-sm" value={reversalReason} onChange={(e) => setReversalReason(e.target.value)} placeholder="Required reversal reason"/></div><Button className="mt-3" variant="destructive" disabled={busy || !reversalInvoice || !reversalReason.trim()} onClick={async () => { setBusy(true); setError(""); try { await reverseReferralReward({ data: { invoiceId: reversalInvoice, reason: reversalReason } }); setReversalInvoice(""); setReversalReason(""); await reload(); } catch(e) { setError(e instanceof Error ? e.message : "Reversal failed"); } finally { setBusy(false); } }}>REVERSE REWARD</Button></section><DetailList title="Direct referrals" rows={data.referrals ?? []} fields={["status","registered_at","first_purchase_at","rewarded_at","first_purchase_invoice_id"]}/><DetailList title="Coin wallets" rows={data.wallets ?? []} fields={["customer_id","balance","lifetime_earned","lifetime_spent","updated_at"]}/><DetailList title="Immutable Coin ledger" rows={data.ledger ?? []} fields={["entry_type","delta","balance_after","reason","invoice_id","admin_user_id","created_at"]}/></div>;
 }
 
 function Dashboard({ data }: { data: any }) {

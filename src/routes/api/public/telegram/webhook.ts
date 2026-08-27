@@ -13,6 +13,7 @@ import {
 import { normalizeLanguage, t } from "@/lib/i18n";
 import { saveCustomerPreferences } from "@/lib/preferences.server";
 import type { LanguageCode } from "@/lib/i18n";
+import { parseReferralStart, recordReferralClick } from "@/lib/referrals.server";
 
 type TgUser = { id: number; username?: string; first_name?: string; language_code?: string };
 type TgChat = { id: number; type: string; title?: string; username?: string };
@@ -344,6 +345,15 @@ async function handlePrivateText(msg: TgMessage) {
   const text = (msg.text ?? "").trim();
   const { flow, step, payload } = await getState(userId);
   const language = await botLanguage(msg.from!);
+
+  const referralCode = parseReferralStart(text);
+  if (referralCode) {
+    diagnostic("handler", { handler: "referral_start", chat_id: chatId });
+    await recordReferralClick(referralCode, userId, msg.from?.username ?? null);
+    await clearTelegramFlow(userId);
+    await mainMenu(chatId, msg.from!);
+    return;
+  }
 
   if (text === "/start" || text === "/menu") {
     diagnostic("handler", { handler: "main_menu", chat_id: chatId });

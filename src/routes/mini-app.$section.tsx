@@ -62,6 +62,10 @@ import {
   findAudience,
   getAudienceDiscoveryState,
   getAnalytics,
+  getGrowthIntelligence,
+  discoverGrowthDestinations,
+  getReferralDashboard,
+  useCoinsForInvoice,
   getAccountProfile,
   getAddUsersState,
   getApprovedGroupFolderEligibility,
@@ -144,6 +148,8 @@ const valid = new Set([
   "group-create",
   "group-history",
   "analytics",
+  "growth-intelligence",
+  "refer-earn",
   "billing",
   "settings",
 ]);
@@ -164,6 +170,8 @@ const titles: Record<string, string> = {
   "group-create": "Group Promotion",
   "group-history": "Group History",
   analytics: "Analytics",
+  "growth-intelligence": "Growth Intelligence",
+  "refer-earn": "Refer & Earn",
   billing: "Billing",
   settings: "Settings",
 };
@@ -299,6 +307,8 @@ function MiniAppSection() {
   const groupCategoriesFn = useServerFn(getGroupCategories);
   const groupWritabilitySummaryFn = useServerFn(getGroupWritabilitySummary);
   const analyticsFn = useServerFn(getAnalytics);
+  const growthFn = useServerFn(getGrowthIntelligence);
+  const referralFn = useServerFn(getReferralDashboard);
   const billingFn = useServerFn(getBilling);
   const logsFn = useServerFn(getOwnActivity);
   const notificationsFn = useServerFn(getNotifications);
@@ -373,6 +383,9 @@ function MiniAppSection() {
     setPreferredPremiumEmojiSession: useServerFn(setPreferredPremiumEmojiSession),
     saveCustomerPreferenceSettings: useServerFn(saveCustomerPreferenceSettings),
     requestAddUsersCreditsPayment: useServerFn(requestAddUsersCreditsPayment),
+    discoverGrowthDestinations: useServerFn(discoverGrowthDestinations),
+    getGrowthIntelligence: useServerFn(getGrowthIntelligence),
+    useCoinsForInvoice: useServerFn(useCoinsForInvoice),
     logout: useServerFn(logoutCustomer),
   };
 
@@ -474,6 +487,8 @@ function MiniAppSection() {
         writability: await groupWritabilitySummaryFn({ data: { auth: a } }),
       }),
       analytics: (a) => analyticsFn({ data: { auth: a } }),
+      "growth-intelligence": (a) => growthFn({ data: { auth: a, range: "7D" } }),
+      "refer-earn": (a) => referralFn({ data: { auth: a } }),
       billing: (a) => billingFn({ data: { auth: a } }),
       settings: async (a) => ({
         logs: await logsFn({ data: { auth: a } }),
@@ -893,6 +908,8 @@ function CustomerContent(props: {
     return <CampaignHistory {...props} />;
   if (section === "group-create") return <GroupCampaign {...props} />;
   if (section === "analytics") return <Analytics data={props.data} />;
+  if (section === "growth-intelligence") return <GrowthIntelligence {...props} />;
+  if (section === "refer-earn") return <ReferEarn {...props} />;
   if (section === "billing") return <Billing {...props} />;
   if (section === "settings") return <SettingsPanel {...props} />;
   return null;
@@ -4766,6 +4783,54 @@ function CampaignHistory({ auth, data, actions, reload }: any) {
   );
 }
 
+function GrowthIntelligence({ auth, data, actions, reload, runAction, actionBusy }: any) {
+  const [view, setView] = useState(data);
+  useEffect(() => setView(data), [data]);
+  const [connectionId, setConnectionId] = useState(data?.connections?.find((row: any) => row.status === "CONNECTED")?.id ?? "");
+  const [customStart, setCustomStart] = useState("");
+  const [customEnd, setCustomEnd] = useState("");
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const detail = view?.destinations?.find((row: any) => row.id === detailId);
+  const summary = view?.summary ?? {};
+  const cards = [["Admin Groups", summary.adminGroups], ["Admin Channels", summary.adminChannels], ["Total Members/Subscribers", summary.totalMembers], ["New Joins", summary.joins], ["Leaves", summary.leaves], ["Net Growth", summary.netGrowth], ["Engagement", summary.engagement]];
+  return <div className="min-w-0 space-y-3 overflow-x-hidden pb-[calc(2rem+env(safe-area-inset-bottom))]">
+    <section className={panelClass("space-y-3")}>
+      <p className="text-sm font-semibold">Telegram Session</p>
+      <select className={inputClass()} value={connectionId} onChange={(event) => setConnectionId(event.target.value)}>
+        <option value="">Select connected admin account</option>
+        {(view?.connections ?? []).map((row: any) => <option key={row.id} value={row.id} disabled={row.status !== "CONNECTED"}>{row.username ? `@${row.username}` : row.label} · {row.health}</option>)}
+      </select>
+      <Button className="w-full" disabled={!connectionId || actionBusy === "growth-discover"} onClick={() => runAction("growth-discover", async () => { await actions.discoverGrowthDestinations({ data: { auth, connectionId } }); await reload(); })}>{actionBusy === "growth-discover" ? "DISCOVERING ADMIN CHATS..." : "DISCOVER / REFRESH ADMIN CHATS"}</Button>
+      <p className="text-xs text-muted-foreground">Collection uses only this selected session. Background checks run incrementally.</p>
+    </section>
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">{cards.map(([label, value]) => <section key={String(label)} className={panelClass("min-w-0 p-3")}><p className="break-words text-[11px] text-muted-foreground">{label}</p><p className="mt-1 text-xl font-semibold">{value ?? 0}</p></section>)}</div>
+    <section className={panelClass("space-y-2")}><div className="flex flex-wrap gap-2">{["24H", "7D", "30D"].map((range) => <Button key={range} size="sm" variant={range === view?.range ? "default" : "secondary"} onClick={() => void runAction(`growth-range-${range}`, async () => setView(await actions.getGrowthIntelligence({ data: { auth, range } })))}>{range}</Button>)}</div><div className="grid min-w-0 grid-cols-2 gap-2"><input className={inputClass()} type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)}/><input className={inputClass()} type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)}/></div><Button size="sm" variant="secondary" disabled={!customStart || !customEnd} onClick={() => void runAction("growth-custom", async () => setView(await actions.getGrowthIntelligence({ data: { auth, range: "30D", customStart, customEnd } })))}>CUSTOM RANGE</Button><p className="text-xs text-muted-foreground">Visitor data unavailable from Telegram</p></section>
+    {view?.destinations?.length ? <section className={panelClass("space-y-2")}><h2 className="font-semibold">Rankings</h2><div className="grid gap-2 text-xs sm:grid-cols-2">{[["Fastest Growing", [...view.destinations].sort((a:any,b:any) => b.netGrowth-a.netGrowth)[0]], ["Most Members Gained", [...view.destinations].sort((a:any,b:any) => b.joins-a.joins)[0]], ["Most Members Lost", [...view.destinations].sort((a:any,b:any) => b.leaves-a.leaves)[0]], ["Best Engagement", [...view.destinations].sort((a:any,b:any) => Number(b.engagementRate ?? -1)-Number(a.engagementRate ?? -1))[0]], ["Most Active", [...view.destinations].sort((a:any,b:any) => b.messages-a.messages)[0]], ["Needs Attention", [...view.destinations].filter((row:any) => row.health).sort((a:any,b:any) => a.health.score-b.health.score)[0]]].map(([label,row]:any) => <p key={label} className="min-w-0 border border-border p-2"><span className="text-muted-foreground">{label}</span><br/><span className="block truncate font-semibold">{row?.title ?? "Not enough data yet"}</span></p>)}</div></section> : null}
+    {(view?.destinations ?? []).map((row: any) => <button type="button" key={row.id} onClick={() => setDetailId(detailId === row.id ? null : row.id)} className="block w-full min-w-0 border border-border bg-card p-3 text-left">
+      <div className="flex min-w-0 items-start justify-between gap-2"><div className="min-w-0"><p className="truncate font-semibold">{row.title}</p><p className="truncate text-xs text-muted-foreground">{row.username ? `@${row.username}` : row.destination_type} · {row.admin_status}</p></div><span className={statusTone(row.status)}>{row.status}</span></div>
+      <div className="mt-2 grid grid-cols-4 gap-1 text-center text-xs"><span>+{row.joins}<br/>joins</span><span>-{row.leaves}<br/>leaves</span><span>{row.netGrowth}<br/>net</span><span>{row.engagementRate == null ? "—" : `${row.engagementRate.toFixed(1)}%`}<br/>engage</span></div>
+      <div className="mt-2 text-xs">Health: {row.health ? `${row.health.score}/100` : "Not enough data yet"}</div>
+    </button>)}
+    {!view?.destinations?.length ? <Empty message="No admin groups or channels collected yet. Select a session and discover." /> : null}
+    {detail ? <section className={panelClass("space-y-3")}><h2 className="break-words font-semibold">{detail.title}</h2><div className="flex flex-wrap gap-2 text-xs">{["Overview","Growth","Engagement","Join/Leave Events","Content/Post Performance","Health","History"].map((label) => <span key={label} className="border border-border px-2 py-1">{label}</span>)}</div>{detail.health ? <div className="grid grid-cols-2 gap-2 text-sm"><p>Growth {detail.health.growth}/30</p><p>Engagement {detail.health.engagement}/30</p><p>Retention {detail.health.retention}/20</p><p>Activity {detail.health.activity}/20</p></div> : <p className="text-sm text-muted-foreground">Not enough data yet</p>}<div className="space-y-2">{(view.events ?? []).filter((event: any) => event.destination_id === detail.id).map((event: any) => <div key={event.id} className="border border-border p-2 text-xs"><p>{event.event_type} · {event.display_name || event.username || event.telegram_user_id}</p>{event.event_type === "LEFT" ? <p className="text-muted-foreground">{String(event.previous_chat_status ?? "UNABLE_TO_VERIFY").replaceAll("_", " ")}</p> : null}<p className="text-muted-foreground">{new Date(event.event_at).toLocaleString()}</p></div>)}</div></section> : null}
+  </div>;
+}
+
+function ReferEarn({ data }: any) {
+  const [copied, setCopied] = useState(false);
+  const share = () => {
+    const url = `https://t.me/share/url?url=${encodeURIComponent(data.link)}&text=${encodeURIComponent("Join WPAY Promotion")}`;
+    openExternalLink(url, true);
+  };
+  return <div className="min-w-0 space-y-3 overflow-x-hidden pb-[calc(2rem+env(safe-area-inset-bottom))]">
+    <section className={panelClass("space-y-3 border-l-2 border-l-primary")}><p className="text-sm font-semibold">My Referral Link</p><p className="break-all bg-background p-3 text-xs">{data?.link}</p><div className="grid grid-cols-2 gap-2"><Button onClick={async () => setCopied(await copyText(data.link))}>{copied ? "COPIED" : "COPY"}</Button><Button variant="secondary" onClick={share}>SHARE</Button></div><p className="text-xs text-muted-foreground">Direct referrals only. A reward is issued after the referred customer’s first verified paid purchase.</p></section>
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">{Object.entries(data?.summary ?? {}).map(([key,value]) => <section key={key} className={panelClass("min-w-0 p-3")}><p className="break-words text-[11px] capitalize text-muted-foreground">{key.replace(/([A-Z])/g," $1")}</p><p className="text-xl font-semibold">{String(value)}</p></section>)}</div>
+    <section className={panelClass("grid grid-cols-2 gap-3 text-center")}><div><p className="text-xs text-muted-foreground">Coin Balance</p><p className="text-2xl font-semibold">{data?.wallet?.balance ?? 0}</p></div><div><p className="text-xs text-muted-foreground">USDT Value</p><p className="text-2xl font-semibold">{Number(data?.usdtValue ?? 0).toFixed(2)}</p></div><p className="col-span-2 text-xs text-muted-foreground">100 Coins = 1 USDT platform credit. No withdrawal.</p></section>
+    <section className={panelClass("space-y-2")}><h2 className="font-semibold">Direct Referrals</h2>{(data?.referrals ?? []).map((row: any) => <div key={row.id} className="min-w-0 border border-border p-2 text-xs"><div className="flex justify-between gap-2"><p className="min-w-0 truncate">{row.telegram_username ? `@${row.telegram_username}` : row.telegram_user_id ?? "Registered customer"}</p><span className="font-semibold text-primary">{row.status}</span></div><p className="text-muted-foreground">{new Date(row.registered_at ?? row.clicked_at).toLocaleString()}</p></div>)}{!data?.referrals?.length ? <Empty message="No direct referrals yet." /> : null}</section>
+    <section className={panelClass("space-y-2")}><h2 className="font-semibold">Coin Ledger</h2>{(data?.ledger ?? []).map((row: any) => <div key={row.id} className="grid grid-cols-[1fr_auto] gap-2 border-b border-border py-2 text-xs"><div className="min-w-0"><p className="break-words font-medium">{row.entry_type}</p><p className="break-words text-muted-foreground">{row.reason}</p></div><p className={row.delta > 0 ? "text-success" : "text-destructive"}>{row.delta > 0 ? "+" : ""}{row.delta} · {row.balance_after}</p></div>)}</section>
+  </div>;
+}
+
 function Analytics({ data }: { data: any }) {
   const totals = data?.totals ?? {};
   const campaignOverview = data?.campaignOverview ?? {};
@@ -4947,6 +5012,7 @@ function Billing({ auth, data, actions, setNotice, actionBusy, runAction, reload
   const currentPlan = usage.plan ?? data?.tenant?.plans ?? data?.subscription?.plans ?? {};
   const currentCode = currentPlan?.code ?? "";
   const [invoice, setInvoice] = useState<any>(data?.activeInvoice ?? null);
+  const [coinAmount, setCoinAmount] = useState("");
   const [now, setNow] = useState(Date.now());
   useEffect(() => setInvoice(data?.activeInvoice ?? null), [data?.activeInvoice?.id, data?.activeInvoice?.status]);
   useEffect(() => {
@@ -5085,6 +5151,8 @@ function Billing({ auth, data, actions, setNotice, actionBusy, runAction, reload
               <p className="break-all rounded-md border border-white/10 bg-white/[0.03] p-2 font-mono text-xs text-white">{invoice.receiving_address}</p>
               <p className="text-slate-300">Countdown: <span className="font-semibold text-white">{invoice.status === "EXPIRED" ? "Expired" : countdownText}</span></p>
               <p className="text-slate-300">Status: {invoice.status === "PENDING" ? "Waiting for payment..." : invoice.status}</p>
+              {invoice.status === "PENDING" && !invoice.coin_discount ? <div className="space-y-2 rounded-md border border-violet-400/30 p-3"><p className="text-xs text-violet-200">Coin Balance: {data?.coins?.balance ?? 0} · 100 Coins = 1 USDT</p><div className="flex min-w-0 flex-wrap gap-2"><input className={inputClass("min-w-0 flex-1 bg-slate-950 text-white")} inputMode="numeric" value={coinAmount} onChange={(event) => setCoinAmount(event.target.value.replace(/\D/g, ""))} placeholder="Coins to use"/><Button size="sm" disabled={!coinAmount || actionBusy === `use-coins-${invoice.id}`} onClick={() => void runAction(`use-coins-${invoice.id}`, async () => { const next = await actions.useCoinsForInvoice({ data: { auth, invoiceId: invoice.id, coins: Number(coinAmount) } }); setInvoice(next); setNotice("Coins applied as platform credit."); await reload(); })}>USE COINS</Button></div></div> : null}
+              {Number(invoice.coin_discount ?? 0) > 0 ? <p className="text-xs text-violet-200">Platform credit applied: {invoice.coin_discount} Coins = {(Number(invoice.coin_discount) / 100).toFixed(2)} USDT</p> : null}
               <div className="flex flex-wrap gap-2">
                 <Button
                   size="sm"

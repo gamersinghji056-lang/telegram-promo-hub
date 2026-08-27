@@ -1,5 +1,5 @@
 import { Link, useNavigate } from "@tanstack/react-router";
-import { BarChart3, Bell, Bot, CreditCard, FileText, LayoutDashboard, LockKeyhole, LogOut, Settings, TrendingUp, UserPlus, Users, WalletCards } from "lucide-react";
+import { BarChart3, Bell, Bot, CreditCard, FileText, Gift, LayoutDashboard, LockKeyhole, LogOut, Settings, TrendingUp, UserPlus, Users, WalletCards } from "lucide-react";
 import type { ReactNode } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,8 @@ const items = [
   ["registration", "Registration", UserPlus],
   ["telegram", "Telegram", Bot],
   ["analytics", "Analytics", BarChart3],
+  ["growth-intelligence", "Growth Intelligence", TrendingUp],
+  ["referrals", "Refer & Earn", Gift],
   ["logs", "Logs", FileText],
   ["settings", "Settings", Settings],
   ["account", "Account / Security", LockKeyhole],

@@ -7,6 +7,7 @@ import {
 } from "./customer-data.server";
 import { expireInvoices } from "./billing.server";
 import { processTronUsdtPayments } from "./tron-monitor.server";
+import { processGrowthCollection } from "./growth-intelligence.server";
 
 declare global {
   var __wpayBackgroundWorkersStarted: boolean | undefined;
@@ -39,6 +40,7 @@ export function startBackgroundWorkers() {
       await processAudienceDiscoveryJobs(Number(process.env["AUDIENCE_DISCOVERY_BATCH_LIMIT"] ?? 2));
       await processBulkJoinJobs(Number(process.env["BULK_JOIN_BATCH_LIMIT"] ?? 2));
       await processAddUsersJobs(Number(process.env["ADD_USERS_BATCH_LIMIT"] ?? 1));
+      await processGrowthCollection(Number(process.env["GROWTH_COLLECTION_BATCH_LIMIT"] ?? 2));
     } catch (error) {
       console.error("Background worker failed", error instanceof Error ? error.message : error);
     } finally {

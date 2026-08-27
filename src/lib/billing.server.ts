@@ -219,6 +219,7 @@ async function insertBillingTransaction(invoice: Record<string, unknown>) {
 
 export async function createInvoice(input: {
   tenantId: string;
+  customerId: string;
   productType: InvoiceProductType;
   productCode: string;
   planId?: string | null;
@@ -249,7 +250,9 @@ export async function createInvoice(input: {
     throw new Error(message);
   }
   await insertBillingTransaction(data as Record<string, unknown>);
-  return publicInvoice(data as Record<string, unknown>);
+  const created = data as Record<string, unknown>;
+  await db().from("billing_invoices").update({ customer_id: input.customerId }).eq("id", created["id"] as string).eq("tenant_id", input.tenantId);
+  return publicInvoice({ ...created, customer_id: input.customerId });
 }
 
 export async function activeInvoice(tenantId: string) {
@@ -278,12 +281,16 @@ export async function invoiceByIdForTenant(tenantId: string, invoiceId: string) 
   return publicInvoice(data);
 }
 
-export async function activatePaidInvoice(invoiceId: string, actor: "BLOCKCHAIN" | "ADMIN", adminId?: string | null, reason?: string | null) {
+export async function activatePaidInvoice(invoiceId: string, actor: "BLOCKCHAIN" | "ADMIN" | "COINS", adminId?: string | null, reason?: string | null) {
   const client = db();
   const { data: invoice } = await client.from("billing_invoices").select("*").eq("id", invoiceId).maybeSingle();
   if (!invoice) throw new Error("Invoice not found.");
-  if (invoice.status === "PAID") return { ok: true, alreadyPaid: true };
-  if (!["PAYMENT_DETECTED", "CONFIRMING", "REVIEW_REQUIRED"].includes(String(invoice.status)) && actor !== "ADMIN") {
+  if (invoice.status === "PAID") {
+    if (actor !== "COINS") await client.rpc("award_first_purchase_referral", { p_tenant_id: invoice.tenant_id, p_invoice_id: invoice.id });
+    return { ok: true, alreadyPaid: true };
+  }
+  const coinOnly = actor === "COINS" && invoice.status === "PENDING" && Number(invoice.payable_amount) === 0 && Number(invoice.coin_discount) > 0;
+  if (!["PAYMENT_DETECTED", "CONFIRMING", "REVIEW_REQUIRED"].includes(String(invoice.status)) && actor !== "ADMIN" && !coinOnly) {
     throw new Error("Invoice is not ready for activation.");
   }
 
@@ -336,7 +343,7 @@ export async function activatePaidInvoice(invoiceId: string, actor: "BLOCKCHAIN"
       expires_at: expires,
       no_expiry: expires === null,
       granted_by: actor === "ADMIN" ? adminId : null,
-      grant_reason: reason ?? (actor === "ADMIN" ? "Manual invoice confirmation" : "Verified TRON USDT payment"),
+      grant_reason: reason ?? (actor === "ADMIN" ? "Manual invoice confirmation" : actor === "COINS" ? "Paid with platform Coins" : "Verified TRON USDT payment"),
       metadata: { invoice_id: invoiceId, tx_hash: paid.tx_hash },
     });
     await client.from("tenant_entitlement_overrides").delete().eq("tenant_id", paid.tenant_id);
@@ -378,12 +385,19 @@ export async function activatePaidInvoice(invoiceId: string, actor: "BLOCKCHAIN"
 
   await logSystem({
     tenant_id: paid.tenant_id,
-    action: actor === "ADMIN" ? "INVOICE_MANUALLY_CONFIRMED" : "INVOICE_PAID",
+    action: actor === "ADMIN" ? "INVOICE_MANUALLY_CONFIRMED" : actor === "COINS" ? "INVOICE_PAID_WITH_COINS" : "INVOICE_PAID",
     resource: invoiceId,
     details: { product_type: paid.product_type, product_code: paid.product_code, tx_hash: paid.tx_hash, actor },
   });
   if (actor === "ADMIN") {
     await logAdmin({ admin_user_id: adminId ?? null, action: "INVOICE_MANUALLY_CONFIRMED", resource: invoiceId, details: { reason } });
+  }
+  if (actor !== "COINS") {
+    const { error: referralError } = await client.rpc("award_first_purchase_referral", {
+      p_tenant_id: paid.tenant_id,
+      p_invoice_id: paid.id,
+    });
+    if (referralError) console.error("REFERRAL_REWARD_FAILED", { invoiceId: paid.id, code: referralError.code ?? "RPC_FAILED" });
   }
   return { ok: true };
 }

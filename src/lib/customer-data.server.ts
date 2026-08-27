@@ -4052,7 +4052,7 @@ export async function analytics(ctx: AuthContext) {
 export async function billing(ctx: AuthContext) {
   const client = db();
   await ensureDefaultPlans();
-  const [tenant, plans, { data: subscription }, { data: transactions }, { data: invoices }, payments, usage, active, premiumEmoji, premiumEmojiProduct, addUsersCredits] =
+  const [tenant, plans, { data: subscription }, { data: transactions }, { data: invoices }, payments, usage, active, premiumEmoji, premiumEmojiProduct, addUsersCredits, { data: coinWallet }] =
     await Promise.all([
       tenantOverview(ctx),
       officialPlans(),
@@ -4083,6 +4083,7 @@ export async function billing(ctx: AuthContext) {
       premiumEmojiEntitlement(ctx.tenantId),
       premiumEmojiSettings(),
       addUsersCreditsForTenant(ctx.tenantId),
+      client.from("coin_wallets").select("balance,lifetime_earned,lifetime_spent").eq("customer_id", ctx.customerId).maybeSingle(),
     ]);
   const currentCode = String(usage.plan?.code ?? tenant?.plans?.code ?? "TEST").toUpperCase();
   const currentRank = usage.expired ? (PLAN_RANK.TEST ?? 0) : (PLAN_RANK[currentCode] ?? PLAN_RANK.TEST ?? 0);
@@ -4120,12 +4121,14 @@ export async function billing(ctx: AuthContext) {
       network: payments.network ?? "TRC20",
       wallet: payments.payment_enabled ? (payments.wallet_address ?? "") : "",
     },
+    coins: { ...(coinWallet ?? { balance: 0, lifetime_earned: 0, lifetime_spent: 0 }), usdtValue: Number(coinWallet?.balance ?? 0) / 100 },
   };
 }
 
 export async function requestAddUsersCreditsPayment(ctx: AuthContext, input: { replace?: boolean } = {}) {
   return createInvoice({
     tenantId: ctx.tenantId,
+    customerId: ctx.customerId,
     productType: "ADDON",
     productCode: ADD_USERS_CREDITS_CODE,
     basePrice: ADD_USERS_CREDITS_PRICE_USD,
@@ -4174,6 +4177,7 @@ export async function requestPayment(ctx: AuthContext, input: string | { planId:
   }
   return createInvoice({
     tenantId: ctx.tenantId,
+    customerId: ctx.customerId,
     productType: "PLAN",
     productCode: targetCode,
     planId,
@@ -4189,6 +4193,7 @@ export async function requestPremiumEmojiPayment(ctx: AuthContext, input: { repl
   if (!settings.enabled) throw new Error("Premium Emoji add-on is not available.");
   return createInvoice({
     tenantId: ctx.tenantId,
+    customerId: ctx.customerId,
     productType: "ADDON",
     productCode: PREMIUM_EMOJI_CODE,
     basePrice: settings.price_usd,
