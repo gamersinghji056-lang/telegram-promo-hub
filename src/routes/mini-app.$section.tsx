@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import {
   AlertTriangle,
+  ArrowRight,
   BarChart3,
   Bell,
   Bot,
@@ -135,6 +136,7 @@ import { MINI_LANGUAGE_LABELS, applyMiniAppTranslations, miniT, normalizeMiniLan
 
 const valid = new Set([
   "dashboard",
+  "audience",
   "sessions",
   "groups-find",
   "groups-found",
@@ -157,6 +159,7 @@ const valid = new Set([
 
 const titles: Record<string, string> = {
   dashboard: "Home",
+  audience: "Audience",
   sessions: "Sessions",
   "groups-find": "Find Groups",
   "groups-found": "Found Groups",
@@ -238,7 +241,7 @@ function inputClass(extra = "") {
 }
 
 function panelClass(extra = "") {
-  return `border border-border bg-card p-4 ${extra}`;
+  return `rounded-xl border border-border/80 bg-card p-4 shadow-[0_1px_2px_rgba(2,6,23,0.06)] ${extra}`;
 }
 
 function statusTone(status?: string) {
@@ -432,6 +435,7 @@ function MiniAppSection() {
   const loaders = useMemo<Record<string, (auth: string) => Promise<any>>>(
     () => ({
       dashboard: (a) => dashboardFn({ data: { auth: a } }),
+      audience: async () => ({}),
       sessions: (a) => connectionsFn({ data: { auth: a } }),
       "groups-find": async (a) => ({
         connections: await connectionsFn({ data: { auth: a } }),
@@ -750,10 +754,10 @@ function MiniAppSection() {
 
   return (
     <MiniAppShell active={section}>
-      <div className="mb-5 flex items-end justify-between gap-3">
-        <div>
-          <p className="text-xs font-semibold uppercase text-primary">Workspace</p>
-          <h1 className="mt-1 text-2xl font-semibold">{miniT(appLanguage, titles[section] ?? section)}</h1>
+      <div className="mb-5 flex min-w-0 items-center justify-between gap-3 border-b border-border/70 pb-4">
+        <div className="min-w-0">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">Customer workspace</p>
+          <h1 className="mt-1 truncate text-2xl font-bold tracking-tight">{miniT(appLanguage, titles[section] ?? section)}</h1>
         </div>
         <div className="flex gap-2">
           <Button size="icon" variant="secondary" aria-label="Refresh" onClick={() => load(true)} disabled={busy}>
@@ -896,6 +900,7 @@ function CustomerContent(props: {
 }) {
   const { section } = props;
   if (section === "dashboard") return <Dashboard data={props.data} />;
+  if (section === "audience") return <AudienceHub />;
   if (section === "sessions") return <Sessions {...props} />;
   if (section === "groups-find") return <GroupFinder {...props} />;
   if (["groups-found", "groups-approved", "groups-joined"].includes(section))
@@ -914,6 +919,48 @@ function CustomerContent(props: {
   if (section === "billing") return <Billing {...props} />;
   if (section === "settings") return <SettingsPanel {...props} />;
   return null;
+}
+
+type HubItem = { href: string; label: string; body: string; icon: any };
+
+function HubSection({ title, description, items }: { title: string; description: string; items: HubItem[] }) {
+  return (
+    <section className="space-y-3">
+      <div>
+        <h2 className="text-sm font-semibold tracking-tight">{title}</h2>
+        <p className="mt-0.5 text-xs leading-5 text-muted-foreground">{description}</p>
+      </div>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {items.map((item) => <QuickLink key={item.href} {...item} />)}
+      </div>
+    </section>
+  );
+}
+
+function AudienceHub() {
+  return (
+    <div className="space-y-6">
+      <section className={panelClass("bg-gradient-to-br from-primary/10 via-card to-card") }>
+        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">Audience workspace</p>
+        <h2 className="mt-2 text-xl font-bold tracking-tight">Find, organize, and grow your reach</h2>
+        <p className="mt-1 max-w-xl text-sm leading-6 text-muted-foreground">Move from group discovery to qualified users without losing any step in your existing workflow.</p>
+      </section>
+      <HubSection title="Groups" description="Discover, review, approve, join, and organize Telegram groups." items={[
+        { href: "/mini-app/groups-find", label: "Find Groups", body: "Run keyword-based group discovery.", icon: Search },
+        { href: "/mini-app/groups-found", label: "Found Groups", body: "Review newly discovered destinations.", icon: FolderOpen },
+        { href: "/mini-app/groups-approved", label: "Approved Groups", body: "Manage approved groups and folder links.", icon: CheckCircle2 },
+        { href: "/mini-app/groups-joined", label: "Joined Groups", body: "View groups connected sessions have joined.", icon: Bot },
+        { href: "/mini-app/group-categories", label: "Group Categories", body: "Organize targets for group campaigns.", icon: Settings },
+      ]} />
+      <HubSection title="Users" description="Build and activate a real Telegram audience." items={[
+        { href: "/mini-app/dm-audience", label: "Find Users", body: "Discover eligible users from approved sources.", icon: Users },
+        { href: "/mini-app/add-users", label: "Add Users", body: "Add selected users through the existing job flow.", icon: Plus },
+      ]} />
+      <HubSection title="Growth" description="Monitor destinations where your selected session has admin access." items={[
+        { href: "/mini-app/growth-intelligence", label: "Growth Intelligence", body: "Real snapshots, membership events, and engagement.", icon: BarChart3 },
+      ]} />
+    </div>
+  );
 }
 
 function Dashboard({ data }: { data: any }) {
@@ -999,10 +1046,12 @@ function Dashboard({ data }: { data: any }) {
 
 function MetricCard({ label, value, icon: Icon }: { label: string; value: number | string; icon: any }) {
   return (
-    <section className={panelClass("min-h-28")}>
-      <Icon className="size-4 text-primary" />
-      <p className="mt-3 text-xs text-muted-foreground">{label}</p>
-      <p className="mt-1 text-2xl font-semibold">{value}</p>
+    <section className={panelClass("min-h-24") }>
+      <div className="flex items-center justify-between gap-2">
+        <p className="min-w-0 text-xs leading-4 text-muted-foreground">{label}</p>
+        <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary"><Icon className="size-3.5" /></span>
+      </div>
+      <p className="mt-2 text-2xl font-bold tracking-tight tabular-nums">{value}</p>
     </section>
   );
 }
@@ -1010,14 +1059,15 @@ function MetricCard({ label, value, icon: Icon }: { label: string; value: number
 function QuickLink({ href, label, body, icon: Icon }: { href: string; label: string; body: string; icon: any }) {
   return (
     <a
-      className="flex min-h-28 items-start gap-3 border border-border bg-card p-4 text-left transition-colors hover:border-primary"
+      className="group flex min-h-24 min-w-0 items-start gap-3 rounded-xl border border-border/80 bg-card p-4 text-left shadow-[0_1px_2px_rgba(2,6,23,0.05)] outline-none transition-colors hover:border-primary/60 hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring"
       href={href}
     >
-      <Icon className="mt-1 size-5 text-primary" />
-      <span>
+      <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary"><Icon className="size-4" /></span>
+      <span className="min-w-0 flex-1">
         <span className="block text-sm font-semibold text-foreground">{label}</span>
-        <span className="mt-1 block text-xs text-muted-foreground">{body}</span>
+        <span className="mt-1 block text-xs leading-5 text-muted-foreground">{body}</span>
       </span>
+      <ArrowRight className="mt-1 size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-primary" />
     </a>
   );
 }
@@ -3292,7 +3342,25 @@ function CampaignsPage({ auth, data, actions, reload, setNotice, actionBusy, run
     return c.status === filter;
   });
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
+      <section className={panelClass("space-y-3 bg-gradient-to-br from-primary/10 via-card to-card") }>
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">Create a campaign</p>
+          <h2 className="mt-1 text-xl font-bold tracking-tight">Who do you want to promote to?</h2>
+        </div>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <QuickLink href="/mini-app/dm-create" label="Direct Users" body="Create a private DM Promotion campaign." icon={Send} />
+          <QuickLink href="/mini-app/group-create" label="Groups" body="Create a Group Promotion campaign." icon={Megaphone} />
+        </div>
+        <div className="flex flex-wrap gap-2 border-t border-border/70 pt-3 text-xs">
+          <a className="rounded-lg bg-secondary px-3 py-2 font-medium hover:bg-accent" href="/mini-app/dm-history">DM History</a>
+          <a className="rounded-lg bg-secondary px-3 py-2 font-medium hover:bg-accent" href="/mini-app/group-history">Group History</a>
+        </div>
+      </section>
+      <div>
+        <h2 className="text-sm font-semibold">Campaign management</h2>
+        <p className="mt-0.5 text-xs text-muted-foreground">Monitor and control existing DM and group campaigns.</p>
+      </div>
       <section className={panelClass("flex flex-wrap gap-2")}>
         {["ALL", "GROUP", "DM", "ACTIVE", "PAUSED", "COMPLETED"].map((f) => (
           <Button key={f} size="sm" variant={filter === f ? "default" : "secondary"} onClick={() => setFilter(f)}>
@@ -4848,6 +4916,15 @@ function Analytics({ data }: { data: any }) {
   const groups = data?.groups ?? {};
   return (
     <div className="space-y-4">
+      <section className={panelClass("flex min-w-0 items-center justify-between gap-3 bg-gradient-to-r from-primary/10 to-card") }>
+        <div className="min-w-0">
+          <p className="text-sm font-semibold">Reporting overview</p>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">Campaign, audience, and delivery metrics from existing production data.</p>
+        </div>
+        <a href="/mini-app/growth-intelligence" className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-secondary px-3 py-2 text-xs font-semibold hover:bg-accent">
+          Growth <ArrowRight className="size-3.5" />
+        </a>
+      </section>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {[
           ["Total Users", totals.totalUsers],
@@ -5382,7 +5459,18 @@ function SettingsPanel({ auth, data, actions, setNotice, actionBusy, runAction, 
     setTheme(prefs.theme ?? "system");
   }, [prefs.theme]);
   return (
-    <div className="space-y-3">
+    <div className="space-y-5">
+      <HubSection title="Telegram" description="Connected accounts and operational session health." items={[
+        { href: "/mini-app/sessions", label: "Connected Accounts", body: "Manage sessions, reconnect state, and Premium status.", icon: Bot },
+      ]} />
+      <HubSection title="Product & billing" description="Manage plan value, payments, Coins, and rewards." items={[
+        { href: "/mini-app/billing", label: "Billing & Coins", body: "Plans, invoices, add-ons, and Coin redemption.", icon: CreditCard },
+        { href: "/mini-app/refer-earn", label: "Refer & Earn", body: "Share your link and track direct referral rewards.", icon: Users },
+      ]} />
+      <div>
+        <h2 className="text-sm font-semibold">Account & preferences</h2>
+        <p className="mt-0.5 text-xs text-muted-foreground">Profile, appearance, language, security, notifications, and support.</p>
+      </div>
       <section className={panelClass("space-y-3")}>
         <Settings className="size-5 text-primary" />
         <p className="mt-3 font-semibold">{t("Account Settings")}</p>

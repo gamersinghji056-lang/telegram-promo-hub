@@ -691,7 +691,7 @@ test("Add Users page reuses audience filters and persists tracked job state", ()
   const data = read("src/lib/customer-data.server.ts");
   const migration = read("supabase/migrations/20260825210000_add_users_jobs.sql");
   const shell = read("src/components/mini-app-shell.tsx");
-  assert(shell.includes('"add-users", "Add Users"'));
+  assert(shell.includes('"add-users": "audience"'));
   assert(route.includes('"add-users"'));
   assert(route.includes("function AddUsersPage"));
   assert(route.includes("usernameFilter"));
