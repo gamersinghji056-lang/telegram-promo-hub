@@ -781,6 +781,23 @@ test("Add Users MTProto flow detects destination permissions and handles invite 
   }
 });
 
+test("every Telegram Mini App entry point uses one canonical PUBLIC_APP_URL origin", () => {
+  const telegram = read("src/lib/telegram.server.ts");
+  const webhook = read("src/routes/api/public/telegram/webhook.ts");
+  const admin = read("src/lib/admin-data.server.ts");
+  assert(telegram.includes('process.env["PUBLIC_APP_URL"]'));
+  assert(telegram.includes("export function canonicalPublicAppOrigin"));
+  assert(telegram.includes("export function canonicalMiniAppUrl"));
+  assert(telegram.includes('new URL("/mini-app"'));
+  assert(telegram.includes('.endsWith(".railway.internal")'));
+  assert(webhook.includes("return canonicalMiniAppUrl()"));
+  assert(webhook.includes("openMiniAppKeyboard(language, sessionToken)"));
+  assert(webhook.includes("sendOpenMiniApp(chatId, language, bt(language, \"registrationOpenMiniApp\"), sessionToken)"));
+  assert(webhook.includes("sendOpenMiniApp(chatId, language, bt(language, \"loginOpenMiniApp\"), result.token)"));
+  assert(!webhook.includes("s.mini_app_url"));
+  assert(admin.includes("requested !== canonical"));
+});
+
 test("folder export reuses the selected account's suitable chatlist and records exact MTProto failures", () => {
   const funcs = read("src/lib/customer.functions.ts");
   const data = read("src/lib/customer-data.server.ts");

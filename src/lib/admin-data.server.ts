@@ -6,6 +6,7 @@ import {
   registerWebhook,
   syncBotIdentity,
   telegramSettings,
+  canonicalMiniAppUrl,
 } from "./telegram.server";
 import type { MessagePayload } from "./telegram.server";
 import { sendDiagnosticCampaignMessage, type DiagnosticTargetType } from "./campaign-worker.server";
@@ -1019,7 +1020,12 @@ export async function adminSaveSettings(
   value: Record<string, unknown>,
 ) {
   if (key === "telegram" && typeof value["mini_app_url"] === "string") {
-    value["mini_app_url"] = normalizeMiniAppUrl(value["mini_app_url"]);
+    const requested = normalizeMiniAppUrl(value["mini_app_url"]);
+    const canonical = canonicalMiniAppUrl();
+    if (requested && requested !== canonical) {
+      throw new Error("Mini App URL must match PUBLIC_APP_URL and the canonical /mini-app path.");
+    }
+    value["mini_app_url"] = canonical;
   }
   if (key === "payments") {
     const current = normalizePaymentSettings(await getSetting("payments"));

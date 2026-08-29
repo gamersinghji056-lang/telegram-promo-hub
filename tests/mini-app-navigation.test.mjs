@@ -61,7 +61,35 @@ test("customer branding and deterministic secondary-route back navigation are ce
   for (const child of ["dm-create", "group-create", "dm-history", "group-history", "groups-find", "groups-found", "groups-approved", "groups-joined", "group-categories", "dm-audience", "add-users", "growth-intelligence", "sessions", "billing", "refer-earn"]) {
     assert(route.includes(`\"${child}\"`), `${child} needs a deterministic parent`);
   }
-  assert(route.includes("Back to ${parentSections[section].label}"));
+  assert(route.includes("Back to ${currentPage.parent.label}"));
+});
+
+test("page identity always follows the current route through rapid and direct navigation", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  const expected = {
+    dashboard: "Home", campaigns: "Campaigns", "dm-create": "DM Promotion", "group-create": "Group Promotion",
+    sessions: "Sessions", "refer-earn": "Refer & Earn", billing: "Billing", settings: "Settings",
+    "groups-find": "Find Groups", "groups-found": "Found Groups", "groups-approved": "Approved Groups",
+    "groups-joined": "Joined Groups", "group-categories": "Group Categories", "dm-audience": "DM Audience",
+    "add-users": "Add Users", "growth-intelligence": "Growth Intelligence", analytics: "Analytics",
+  };
+  for (const [section, title] of Object.entries(expected)) {
+    assert(route.includes(`${section.includes("-") ? `"${section}"` : section}: "${title}"`), `${section} must map directly to ${title}`);
+  }
+  assert(route.includes("const currentPage = pageIdentity(section)"));
+  assert(route.includes("key={section} data-page-section={section}"));
+  assert(route.includes("sectionRef.current = section"));
+  assert(route.includes("if (sectionRef.current !== targetSection) return"));
+  assert(route.includes("currentPage.parent.section"));
+});
+
+test("Find Groups uses a neutral example without changing persisted keyword behavior", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  const customer = read("src/lib/customer-data.server.ts");
+  assert(route.includes('placeholder="Education, Courses, Learning"'));
+  assert(!route.includes('placeholder="USDT, P2P, Gaming"'));
+  assert(route.includes("data?.keywords"));
+  assert(customer.includes('.from("keywords")'));
 });
 
 test("premium product icons stay local and campaign chooser stays on the hub only", () => {

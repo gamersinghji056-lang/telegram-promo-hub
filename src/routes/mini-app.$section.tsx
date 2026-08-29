@@ -224,6 +224,16 @@ const sectionContext: Record<string, string> = {
   billing: "Plans, payments, Coins, credits, and add-ons",
 };
 
+function pageIdentity(section: string) {
+  return {
+    title: titles[section] ?? section,
+    context: sectionContext[section] ?? "Telegram promotion workspace",
+    visual: sectionVisual[section],
+    parent: parentSections[section],
+    primary: primarySections.has(section),
+  };
+}
+
 const sectionVisual: Record<string, ProductIconName> = {
   dashboard: "home", campaigns: "campaigns", audience: "audience", analytics: "analytics", settings: "settings",
   sessions: "sessions", "groups-find": "search-groups", "groups-found": "groups", "groups-approved": "approved",
@@ -458,6 +468,7 @@ function MiniAppSection() {
   const [showProfile, setShowProfile] = useState(false);
   const [appLanguage, setAppLanguageState] = useState(() => normalizeMiniLanguage(typeof window !== "undefined" ? localStorage.getItem("wpay-language") : telegramLanguageHint()));
   const sectionRef = useRef(section);
+  sectionRef.current = section;
   const cacheRef = useRef(new Map<string, any>());
   const languageVersionRef = useRef(0);
   const manualLanguageRef = useRef(false);
@@ -561,6 +572,7 @@ function MiniAppSection() {
     const targetSection = section;
     const requestLanguageVersion = languageVersionRef.current;
     const nextAuth = await telegramAuthReady();
+    if (sectionRef.current !== targetSection) return;
     const cacheKey = `${nextAuth ?? "none"}:${targetSection}`;
     const cached = cacheRef.current.get(cacheKey);
     if (cached && !force) {
@@ -592,6 +604,7 @@ function MiniAppSection() {
     }
     try {
       const result = await loaders[targetSection]?.(nextAuth);
+      if (sectionRef.current !== targetSection) return;
       setData(result);
       if (result?.preferences?.language) {
         applyAuthoritativeLanguage(result.preferences.language, "server-preferences", false, requestLanguageVersion);
@@ -663,7 +676,6 @@ function MiniAppSection() {
   }
 
   useEffect(() => {
-    sectionRef.current = section;
     void load(false);
   }, [section]);
 
@@ -792,6 +804,7 @@ function MiniAppSection() {
   }, []);
 
   const unread = notifications.filter((n) => !n.read_at).length;
+  const currentPage = pageIdentity(section);
   const guardedNotice = (origin: string) => (value: string) => {
     if (sectionRef.current === origin) setNotice(value);
   };
@@ -815,21 +828,21 @@ function MiniAppSection() {
         </>
       }
     >
-      <div className="mb-4 flex min-w-0 items-center gap-2.5 border-b border-border/70 pb-2.5">
+      <div key={section} data-page-section={section} className="mb-4 flex min-w-0 items-center gap-2.5 border-b border-border/70 pb-2.5">
         <div className="flex min-w-0 items-center gap-2.5">
-          {!primarySections.has(section) && parentSections[section] ? (
+          {!currentPage.primary && currentPage.parent ? (
             <a
-              href={`/mini-app/${parentSections[section].section}`}
-              aria-label={`Back to ${parentSections[section].label}`}
+              href={`/mini-app/${currentPage.parent.section}`}
+              aria-label={`Back to ${currentPage.parent.label}`}
               className="grid size-8 shrink-0 place-items-center rounded-lg border border-border bg-card text-muted-foreground shadow-sm outline-none transition-colors hover:border-primary/40 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring"
             >
               <ChevronLeft className="size-4" />
             </a>
           ) : null}
-          {sectionVisual[section] ? <ProductIcon name={sectionVisual[section]} className="hidden size-8 shrink-0 min-[390px]:block" /> : null}
+          {currentPage.visual ? <ProductIcon name={currentPage.visual} className="hidden size-8 shrink-0 min-[390px]:block" /> : null}
           <div className="min-w-0">
-            <h1 className="truncate text-lg font-semibold tracking-tight sm:text-xl">{miniT(appLanguage, titles[section] ?? section)}</h1>
-            <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{sectionContext[section] ?? "Telegram promotion workspace"}</p>
+            <h1 className="truncate text-lg font-semibold tracking-tight sm:text-xl">{miniT(appLanguage, currentPage.title)}</h1>
+            <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{currentPage.context}</p>
           </div>
         </div>
       </div>
@@ -1621,7 +1634,7 @@ function GroupFinder({ auth, data, actions, reload, setNotice, actionBusy, runAc
             className={inputClass()}
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
-            placeholder="USDT, P2P, Gaming"
+            placeholder="Education, Courses, Learning"
           />
           <Button type="submit" size="icon" aria-label="Add keyword">
             <Plus />

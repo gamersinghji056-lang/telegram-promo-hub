@@ -123,7 +123,13 @@ export async function telegramSettings() {
   }>("telegram");
   return {
     bot_username: s.bot_username ?? "",
-    mini_app_url: s.mini_app_url ?? "",
+    mini_app_url: (() => {
+      try {
+        return canonicalMiniAppUrl();
+      } catch {
+        return "";
+      }
+    })(),
     token_configured: !!botToken(),
     webhook_url: s.webhook_url ?? "",
     webhook_status: s.webhook_status ?? "NOT_CHECKED",
@@ -135,14 +141,33 @@ export async function telegramSettings() {
   };
 }
 
-function configuredWebhookUrl(): string | null {
-  const base = process.env["PUBLIC_APP_URL"];
-  if (!base) return null;
+export function canonicalPublicAppOrigin(): string {
+  const raw = process.env["PUBLIC_APP_URL"]?.trim();
+  if (!raw) throw new Error("PUBLIC_APP_URL is required for Telegram production URLs");
+  let url: URL;
   try {
-    const url = new URL(base);
-    if (!["https:", "http:"].includes(url.protocol)) return null;
-    const webhook = new URL("/api/public/telegram/webhook", url.origin);
-    return webhook.toString();
+    url = new URL(raw);
+  } catch {
+    throw new Error("PUBLIC_APP_URL must be a valid absolute URL");
+  }
+  const local = ["localhost", "127.0.0.1"].includes(url.hostname);
+  if (url.protocol !== "https:" && !(process.env["NODE_ENV"] !== "production" && local && url.protocol === "http:")) {
+    throw new Error("PUBLIC_APP_URL must use HTTPS in production");
+  }
+  if (url.username || url.password) throw new Error("PUBLIC_APP_URL must not contain credentials");
+  if (process.env["NODE_ENV"] === "production" && (local || url.hostname.endsWith(".railway.internal"))) {
+    throw new Error("PUBLIC_APP_URL must be a publicly resolvable production hostname");
+  }
+  return url.origin;
+}
+
+export function canonicalMiniAppUrl(): string {
+  return new URL("/mini-app", `${canonicalPublicAppOrigin()}/`).toString().replace(/\/$/, "");
+}
+
+function configuredWebhookUrl(): string | null {
+  try {
+    return new URL("/api/public/telegram/webhook", `${canonicalPublicAppOrigin()}/`).toString();
   } catch {
     return null;
   }

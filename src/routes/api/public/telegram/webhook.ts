@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { db, getSetting, logSystem } from "@/lib/db.server";
 import { deriveWebhookSecret, hashPassword, safeEqual, verifyPassword } from "@/lib/security.server";
-import { botToken, callBot } from "@/lib/telegram.server";
+import { botToken, callBot, canonicalMiniAppUrl } from "@/lib/telegram.server";
 import {
   clearTelegramFlow,
   createCustomerSessionForCustomer,
@@ -123,26 +123,7 @@ function updateChatId(update: Update) {
 }
 
 async function miniAppUrl() {
-  const s = await getSetting<{ mini_app_url?: string }>("telegram");
-  return validMiniAppUrl(s.mini_app_url ?? "");
-}
-
-function validMiniAppUrl(raw: string) {
-  const value = raw.trim();
-  if (!value) return "";
-  try {
-    const url = new URL(value);
-    const isLocal = ["localhost", "127.0.0.1"].includes(url.hostname);
-    if (url.protocol !== "https:" && !(isLocal && url.protocol === "http:")) return "";
-    if (url.username || url.password) return "";
-    if (!["/mini-app", "/mini-app/"].includes(url.pathname)) return "";
-    url.pathname = "/mini-app";
-    url.search = "";
-    url.hash = "";
-    return url.toString().replace(/\/$/, "");
-  } catch {
-    return "";
-  }
+  return canonicalMiniAppUrl();
 }
 
 async function setState(
@@ -218,7 +199,9 @@ async function deleteMessage(chatId: number, messageId: number) {
 
 function miniAppUrlWithSession(url: string, sessionToken?: string) {
   if (!sessionToken) return url;
-  return `${url}#sess=${encodeURIComponent(sessionToken)}`;
+  const target = new URL(url);
+  target.hash = `sess=${encodeURIComponent(sessionToken)}`;
+  return target.toString();
 }
 
 async function openMiniAppKeyboard(language?: string | null, sessionToken?: string) {
