@@ -11,6 +11,7 @@ import {
   Bot,
   CalendarDays,
   CheckCircle2,
+  ChevronLeft,
   Circle,
   Clock,
   Copy,
@@ -180,14 +181,56 @@ const titles: Record<string, string> = {
   settings: "Settings",
 };
 
+const primarySections = new Set(["dashboard", "campaigns", "audience", "analytics", "settings"]);
+const parentSections: Record<string, { section: "campaigns" | "audience" | "settings"; label: string }> = {
+  "dm-create": { section: "campaigns", label: "Campaigns" },
+  "group-create": { section: "campaigns", label: "Campaigns" },
+  "dm-history": { section: "campaigns", label: "Campaigns" },
+  "group-history": { section: "campaigns", label: "Campaigns" },
+  "groups-find": { section: "audience", label: "Audience" },
+  "groups-found": { section: "audience", label: "Audience" },
+  "groups-approved": { section: "audience", label: "Audience" },
+  "groups-joined": { section: "audience", label: "Audience" },
+  "group-categories": { section: "audience", label: "Audience" },
+  "dm-audience": { section: "audience", label: "Audience" },
+  "add-users": { section: "audience", label: "Audience" },
+  "growth-intelligence": { section: "audience", label: "Audience" },
+  sessions: { section: "settings", label: "Settings" },
+  billing: { section: "settings", label: "Settings" },
+  "refer-earn": { section: "settings", label: "Settings" },
+};
+
+const sectionContext: Record<string, string> = {
+  dashboard: "Your promotion operations at a glance",
+  campaigns: "Create, monitor, and manage promotion campaigns",
+  audience: "Discover, organize, and grow your Telegram reach",
+  analytics: "Real campaign, delivery, and audience performance",
+  settings: "Accounts, billing, preferences, security, and support",
+  sessions: "Connected Telegram accounts and session health",
+  "groups-find": "Discover public groups using your connected accounts",
+  "groups-found": "Review groups returned by discovery",
+  "groups-approved": "Manage approved destinations and folder links",
+  "groups-joined": "Groups joined by your connected accounts",
+  "group-categories": "Organize destinations for group campaigns",
+  "dm-audience": "Discover eligible users from approved sources",
+  "add-users": "Configure and run tracked Telegram invite jobs",
+  "dm-create": "Create a direct-user promotion campaign",
+  "group-create": "Create a promotion campaign for approved groups",
+  "dm-history": "Past direct-user campaign activity",
+  "group-history": "Past group campaign activity",
+  "growth-intelligence": "Real Telegram membership and engagement analytics",
+  "refer-earn": "Direct referrals, rewards, and Coin activity",
+  billing: "Plans, payments, Coins, credits, and add-ons",
+};
+
 const AUTH_REQUIRED_MESSAGE = "Please login or register in @wpaypromotionbot first.";
 
 export const Route = createFileRoute("/mini-app/$section")({
   head: ({ params }: { params: { section: string } }) => ({
     meta: [
-      { title: `${titles[params.section] ?? "Mini App"} | WPAY Mini App` },
+      { title: `${titles[params.section] ?? "Mini App"} | Telegram Promotion` },
       { name: "description", content: "Telegram-native campaign and audience control panel." },
-      { property: "og:title", content: "WPAY Telegram Mini App" },
+      { property: "og:title", content: "Telegram Promotion Mini App" },
       { property: "og:description", content: "Manage Telegram promotion campaigns securely." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
@@ -237,11 +280,11 @@ function telegramLanguageHint() {
 }
 
 function inputClass(extra = "") {
-  return `w-full min-w-0 border border-border bg-background px-3 py-2 text-sm text-foreground caret-foreground opacity-100 outline-none placeholder:text-muted-foreground focus:border-primary disabled:cursor-not-allowed disabled:opacity-60 [-webkit-text-fill-color:currentColor] ${extra}`;
+  return `min-h-10 w-full min-w-0 rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground caret-foreground opacity-100 shadow-[inset_0_1px_1px_rgba(2,6,23,0.03)] outline-none transition-[border-color,box-shadow,background-color] placeholder:text-muted-foreground/80 focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:cursor-not-allowed disabled:bg-muted disabled:opacity-60 [-webkit-text-fill-color:currentColor] ${extra}`;
 }
 
 function panelClass(extra = "") {
-  return `rounded-xl border border-border/80 bg-card p-4 shadow-[0_1px_2px_rgba(2,6,23,0.06)] ${extra}`;
+  return `mini-panel min-w-0 rounded-xl border border-border/80 bg-card p-4 shadow-[0_1px_2px_rgba(2,6,23,0.06)] ${extra}`;
 }
 
 function statusTone(status?: string) {
@@ -754,10 +797,21 @@ function MiniAppSection() {
 
   return (
     <MiniAppShell active={section}>
-      <div className="mb-5 flex min-w-0 items-center justify-between gap-3 border-b border-border/70 pb-4">
-        <div className="min-w-0">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">Customer workspace</p>
-          <h1 className="mt-1 truncate text-2xl font-bold tracking-tight">{miniT(appLanguage, titles[section] ?? section)}</h1>
+      <div className="mb-5 flex min-w-0 items-center justify-between gap-3 border-b border-border/70 pb-3">
+        <div className="flex min-w-0 items-center gap-2.5">
+          {!primarySections.has(section) && parentSections[section] ? (
+            <a
+              href={`/mini-app/${parentSections[section].section}`}
+              aria-label={`Back to ${parentSections[section].label}`}
+              className="grid size-9 shrink-0 place-items-center rounded-lg border border-border bg-card text-muted-foreground shadow-sm outline-none transition-colors hover:border-primary/40 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <ChevronLeft className="size-4" />
+            </a>
+          ) : null}
+          <div className="min-w-0">
+            <h1 className="truncate text-xl font-bold tracking-tight sm:text-2xl">{miniT(appLanguage, titles[section] ?? section)}</h1>
+            <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{sectionContext[section] ?? "Telegram promotion workspace"}</p>
+          </div>
         </div>
         <div className="flex gap-2">
           <Button size="icon" variant="secondary" aria-label="Refresh" onClick={() => load(true)} disabled={busy}>
@@ -790,7 +844,7 @@ function MiniAppSection() {
       {error ? (
         <SessionWarning error={error} />
       ) : busy || loadedSection !== section ? (
-        <p className="py-10 text-center text-muted-foreground">Loading workspace...</p>
+        <LoadingWorkspace />
       ) : (
         <CustomerContent
           section={section}
@@ -1049,7 +1103,7 @@ function MetricCard({ label, value, icon: Icon }: { label: string; value: number
     <section className={panelClass("min-h-24") }>
       <div className="flex items-center justify-between gap-2">
         <p className="min-w-0 text-xs leading-4 text-muted-foreground">{label}</p>
-        <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary"><Icon className="size-3.5" /></span>
+        <span className="relative grid size-8 shrink-0 place-items-center overflow-hidden rounded-lg bg-primary/12 text-primary"><span className="absolute -right-1 -top-1 size-3 rounded-full bg-primary/15" /><Icon className="relative size-4" strokeWidth={2.2} /></span>
       </div>
       <p className="mt-2 text-2xl font-bold tracking-tight tabular-nums">{value}</p>
     </section>
@@ -1062,7 +1116,7 @@ function QuickLink({ href, label, body, icon: Icon }: { href: string; label: str
       className="group flex min-h-24 min-w-0 items-start gap-3 rounded-xl border border-border/80 bg-card p-4 text-left shadow-[0_1px_2px_rgba(2,6,23,0.05)] outline-none transition-colors hover:border-primary/60 hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring"
       href={href}
     >
-      <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary"><Icon className="size-4" /></span>
+      <span className="relative grid size-10 shrink-0 place-items-center overflow-hidden rounded-xl bg-primary/12 text-primary"><span className="absolute -bottom-1 -right-1 size-4 rounded-full bg-primary/15" /><Icon className="relative size-[18px]" strokeWidth={2.2} /></span>
       <span className="min-w-0 flex-1">
         <span className="block text-sm font-semibold text-foreground">{label}</span>
         <span className="mt-1 block text-xs leading-5 text-muted-foreground">{body}</span>
@@ -4882,7 +4936,7 @@ function GrowthIntelligence({ auth, data, actions, reload, runAction, actionBusy
       <div className="mt-3 border-y border-border py-2"><p className="text-[10px] uppercase tracking-wide text-muted-foreground">Current Members</p><p className="text-2xl font-semibold">{row.member_count == null ? "Unavailable" : Number(row.member_count).toLocaleString()}</p></div>
       <div className="mt-2 grid grid-cols-4 gap-1 text-center text-xs"><span>+{row.joins}<br/>joins</span><span>-{row.leaves}<br/>leaves</span><span>{row.netGrowth}<br/>net</span><span>{row.engagementRate == null ? "—" : `${row.engagementRate.toFixed(1)}%`}<br/>engage</span></div>
       <div className="mt-3 flex flex-wrap gap-1" onClick={(event) => event.stopPropagation()}>{([[["memberCount","Member Count"],["joins","Joins"],["leaves","Leaves"],["netGrowth","Net Growth"]]] as const)[0].map(([series,label]) => <Button key={series} type="button" size="sm" variant={chartSeries.includes(series) ? "default" : "secondary"} className="h-7 px-2 text-[10px]" onClick={() => toggleChartSeries(series)}>{label}</Button>)}</div>
-      <div className="mt-2 h-44 min-w-0" onClick={(event) => event.stopPropagation()}><ResponsiveContainer width="100%" height="100%"><LineChart data={row.chart}><CartesianGrid strokeDasharray="3 3" opacity={0.2}/><XAxis dataKey="bucket" tickFormatter={(v) => new Date(v).toLocaleDateString(undefined,{month:"short",day:"numeric"})} minTickGap={24} tick={{fontSize:10}}/><YAxis width={42} tick={{fontSize:10}}/><Tooltip labelFormatter={(v) => new Date(v).toLocaleString()}/>{chartSeries.includes("memberCount") ? <Line type="linear" dataKey="memberCount" name="Members" stroke="#22d3ee" connectNulls={false} dot={row.chart?.length < 12}/> : null}{chartSeries.includes("joins") ? <Line type="linear" dataKey="joins" name="Joins" stroke="#22c55e" connectNulls={false} dot={false}/> : null}{chartSeries.includes("leaves") ? <Line type="linear" dataKey="leaves" name="Leaves" stroke="#f97316" connectNulls={false} dot={false}/> : null}{chartSeries.includes("netGrowth") ? <Line type="linear" dataKey="netGrowth" name="Net Growth" stroke="#a78bfa" connectNulls={false} dot={false}/> : null}</LineChart></ResponsiveContainer></div>
+      <div className="mt-2 h-44 min-w-0 rounded-lg bg-muted/20 p-1" onClick={(event) => event.stopPropagation()}><ResponsiveContainer width="100%" height="100%"><LineChart data={row.chart}><CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false}/><XAxis dataKey="bucket" axisLine={false} tickLine={false} tickFormatter={(v) => new Date(v).toLocaleDateString(undefined,{month:"short",day:"numeric"})} minTickGap={24} tick={{fontSize:10,fill:"var(--muted-foreground)"}}/><YAxis axisLine={false} tickLine={false} width={42} tick={{fontSize:10,fill:"var(--muted-foreground)"}}/><Tooltip contentStyle={{borderRadius:10,border:"1px solid var(--border)",background:"var(--popover)",color:"var(--popover-foreground)",fontSize:12}} labelFormatter={(v) => new Date(v).toLocaleString()}/>{chartSeries.includes("memberCount") ? <Line type="linear" dataKey="memberCount" name="Members" stroke="var(--chart-1)" strokeWidth={2.25} connectNulls={false} dot={row.chart?.length < 12}/> : null}{chartSeries.includes("joins") ? <Line type="linear" dataKey="joins" name="Joins" stroke="var(--success)" strokeWidth={2} connectNulls={false} dot={false}/> : null}{chartSeries.includes("leaves") ? <Line type="linear" dataKey="leaves" name="Leaves" stroke="var(--destructive)" strokeWidth={2} connectNulls={false} dot={false}/> : null}{chartSeries.includes("netGrowth") ? <Line type="linear" dataKey="netGrowth" name="Net Growth" stroke="var(--chart-2)" strokeWidth={2} connectNulls={false} dot={false}/> : null}</LineChart></ResponsiveContainer></div>
       <div className="mt-2 space-y-0.5 text-[11px] text-muted-foreground"><p>Live tracking: {row.status === "ACTIVE" ? "Active" : row.status}</p><p>Admin log history: {row.coverage?.adminLog?.error ?? (row.coverage?.adminLog?.complete ? "Complete" : "In progress")}</p><p>Membership message history: {row.coverage?.membershipHistory?.error ?? (!row.coverage?.membershipHistory?.started ? "Pending" : row.coverage?.membershipHistory?.complete ? "Complete" : "In progress")}</p>{row.coverage?.oldestEventAt ? <p>Oldest membership event collected: {new Date(row.coverage.oldestEventAt).toLocaleString()}</p> : null}<p>Last sync: {row.coverage?.lastSync ? new Date(row.coverage.lastSync).toLocaleString() : "Pending"}</p></div>
       <div className="mt-2 text-xs">Health: {row.health ? `${row.health.score}/100` : "Not enough data yet"}</div>
     </button>)}
@@ -4894,7 +4948,7 @@ function GrowthIntelligence({ auth, data, actions, reload, runAction, actionBusy
 function ReferEarn({ data }: any) {
   const [copied, setCopied] = useState(false);
   const share = () => {
-    const url = `https://t.me/share/url?url=${encodeURIComponent(data.link)}&text=${encodeURIComponent("Join WPAY Promotion")}`;
+    const url = `https://t.me/share/url?url=${encodeURIComponent(data.link)}&text=${encodeURIComponent("Join Telegram Promotion")}`;
     openExternalLink(url, true);
   };
   return <div className="min-w-0 space-y-3 overflow-x-hidden pb-[calc(2rem+env(safe-area-inset-bottom))]">
@@ -5312,7 +5366,7 @@ function Billing({ auth, data, actions, setNotice, actionBusy, runAction, reload
           <p className="text-xs font-semibold uppercase text-primary">Add-ons</p>
           <h2 className="mt-1 text-lg font-semibold">Premium Emoji</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Unlock WPAY custom emoji composer capability. This does not buy Telegram Premium for your linked account.
+            Unlock Telegram Promotion custom emoji composer capability. This does not buy Telegram Premium for your linked account.
           </p>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -5334,28 +5388,28 @@ function Billing({ auth, data, actions, setNotice, actionBusy, runAction, reload
           const isCurrent = String(plan.code) === String(currentCode);
           const accent = planAccent(plan.code);
           return (
-            <article key={plan.id} className={`rounded-lg border ${accent.border} bg-slate-950/70 p-4 shadow-sm`}>
+            <article key={plan.id} className={`rounded-xl border ${accent.border} bg-card p-4 shadow-sm`}>
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="flex items-center gap-2">
-                    <p className="text-base font-semibold text-white">{plan.name}</p>
-                    {String(plan.code).toUpperCase() === "PRO" ? <span className="rounded-full bg-violet-400/15 px-2 py-0.5 text-[10px] font-semibold text-violet-200">Popular</span> : null}
+                    <p className="text-base font-semibold text-foreground">{plan.name}</p>
+                    {String(plan.code).toUpperCase() === "PRO" ? <span className="rounded-full bg-primary/12 px-2 py-0.5 text-[10px] font-semibold text-primary">Popular</span> : null}
                   </div>
-                  <p className="mt-1 text-xs text-slate-400">{plan.description || planDescription(plan.code)}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{plan.description || planDescription(plan.code)}</p>
                 </div>
                 <div className="text-right">
-                  <p className="text-3xl font-semibold text-white">${Number(plan.price_usd ?? 0)}</p>
-                  <p className="text-xs text-slate-400">/ month</p>
+                  <p className="text-3xl font-bold tracking-tight text-foreground">${Number(plan.price_usd ?? 0)}</p>
+                  <p className="text-xs text-muted-foreground">/ month</p>
                 </div>
               </div>
               <div className="mt-4 grid grid-cols-2 gap-2">
                 {planFeatures(plan).map(({ label, value, Icon }) => (
-                  <div key={label} className="rounded-md border border-white/10 bg-white/[0.03] p-2">
+                  <div key={label} className="rounded-lg border border-border bg-muted/30 p-2">
                     <div className={`flex items-center gap-1.5 text-[11px] ${accent.text}`}>
                       <Icon className="size-3.5" />
                       <span>{label}</span>
                     </div>
-                    <p className="mt-1 text-sm font-semibold text-white">{value}</p>
+                    <p className="mt-1 text-sm font-semibold text-foreground">{value}</p>
                   </div>
                 ))}
               </div>
@@ -5397,14 +5451,14 @@ function MiniUsageBar({ label, used, limit }: { label: string; used: number; lim
   const rawPct = limit == null ? 0 : Math.round((used / Math.max(limit, 1)) * 100);
   const pct = Math.min(100, rawPct);
   const over = limit != null && used > limit;
-  const tone = over || pct >= 90 ? "bg-red-500" : pct >= 80 ? "bg-amber-400" : "bg-cyan-400";
+  const tone = over || pct >= 90 ? "bg-destructive" : pct >= 80 ? "bg-warning" : "bg-primary";
   return (
     <div>
       <div className="flex items-center justify-between text-[11px]">
-        <span className="text-slate-300">{label}</span>
-        <span className={over ? "font-semibold text-red-300" : "text-slate-400"}>{used.toLocaleString()} / {limitLabel(limit)}</span>
+        <span className="text-foreground/80">{label}</span>
+        <span className={over ? "font-semibold text-destructive" : "text-muted-foreground"}>{used.toLocaleString()} / {limitLabel(limit)}</span>
       </div>
-      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-800">
+      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted">
         <div className={`h-full ${tone}`} style={{ width: `${limit == null ? 100 : pct}%` }} />
       </div>
     </div>
@@ -5413,10 +5467,9 @@ function MiniUsageBar({ label, used, limit }: { label: string; used: number; lim
 
 function planAccent(code: string) {
   const key = String(code).toUpperCase();
-  if (key === "PLUS") return { border: "border-cyan-400/30", text: "text-cyan-300", button: "bg-cyan-500 text-slate-950 hover:bg-cyan-400" };
-  if (key === "PRO") return { border: "border-violet-400/35", text: "text-violet-300", button: "bg-violet-500 text-white hover:bg-violet-400" };
-  if (key === "ENTERPRISE") return { border: "border-emerald-300/40 shadow-[0_0_24px_rgba(45,212,191,0.08)]", text: "text-emerald-300", button: "bg-emerald-400 text-slate-950 hover:bg-emerald-300" };
-  return { border: "border-slate-700", text: "text-slate-300", button: "" };
+  if (key === "PRO") return { border: "border-primary/50 ring-1 ring-primary/15", text: "text-primary", button: "" };
+  if (key === "PLUS" || key === "ENTERPRISE") return { border: "border-primary/25", text: "text-primary", button: "" };
+  return { border: "border-border", text: "text-muted-foreground", button: "" };
 }
 
 function planDescription(code: string) {
@@ -5459,7 +5512,7 @@ function SettingsPanel({ auth, data, actions, setNotice, actionBusy, runAction, 
     setTheme(prefs.theme ?? "system");
   }, [prefs.theme]);
   return (
-    <div className="space-y-5">
+    <div className="settings-control-center space-y-5">
       <HubSection title="Telegram" description="Connected accounts and operational session health." items={[
         { href: "/mini-app/sessions", label: "Connected Accounts", body: "Manage sessions, reconnect state, and Premium status.", icon: Bot },
       ]} />
@@ -5640,9 +5693,22 @@ function Stat({ label, value }: { label: string; value: number | string }) {
 
 function Empty({ message }: { message: string }) {
   return (
-    <div className="py-10 text-center">
-      <Bot className="mx-auto size-7 text-muted-foreground" />
-      <p className="mt-3 text-sm text-muted-foreground">{message}</p>
+    <div className="rounded-xl border border-dashed border-border bg-muted/25 px-4 py-9 text-center">
+      <span className="mx-auto grid size-10 place-items-center rounded-full bg-secondary text-muted-foreground"><Bot className="size-5" /></span>
+      <p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-muted-foreground">{message}</p>
+    </div>
+  );
+}
+
+function LoadingWorkspace() {
+  return (
+    <div className="space-y-3" aria-busy="true" aria-label="Loading workspace">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {[0, 1, 2, 3].map((item) => <div key={item} className="h-24 animate-pulse rounded-xl border border-border bg-card" />)}
+      </div>
+      <div className="h-40 animate-pulse rounded-xl border border-border bg-card" />
+      <div className="h-24 animate-pulse rounded-xl border border-border bg-card" />
+      <span className="sr-only">Loading workspace…</span>
     </div>
   );
 }

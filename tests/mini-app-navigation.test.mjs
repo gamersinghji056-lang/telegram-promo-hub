@@ -48,3 +48,18 @@ test("Audience, Campaigns, Analytics, and Settings hubs retain every secondary r
   assert(route.includes('href: "/mini-app/sessions"'));
   assert(route.includes('href: "/mini-app/billing"'));
 });
+
+test("customer branding and deterministic secondary-route back navigation are centralized", () => {
+  const shell = read("src/components/mini-app-shell.tsx");
+  const route = read("src/routes/mini-app.$section.tsx");
+  const mark = read("src/components/telegram-promotion-mark.tsx");
+  assert(shell.includes("Telegram Promotion"));
+  assert(shell.includes("PROMOTION WORKSPACE"));
+  assert(shell.includes("TelegramPromotionMark"));
+  assert(mark.includes("viewBox=\"0 0 40 40\""));
+  assert(route.includes("const parentSections"));
+  for (const child of ["dm-create", "group-create", "dm-history", "group-history", "groups-find", "groups-found", "groups-approved", "groups-joined", "group-categories", "dm-audience", "add-users", "growth-intelligence", "sessions", "billing", "refer-earn"]) {
+    assert(route.includes(`\"${child}\"`), `${child} needs a deterministic parent`);
+  }
+  assert(route.includes("Back to ${parentSections[section].label}"));
+});

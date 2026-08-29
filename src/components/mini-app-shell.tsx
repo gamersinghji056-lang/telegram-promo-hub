@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { BarChart3, Home, Megaphone, Settings, Users } from "lucide-react";
 import type { ReactNode } from "react";
+import { TelegramPromotionMark } from "@/components/telegram-promotion-mark";
 
 const primaryItems = [
   { slug: "dashboard", label: "Home", icon: Home },
@@ -50,12 +51,12 @@ export function MiniAppShell({ active, children }: { active: string; children: R
             to="/mini-app/$section"
             params={{ section: "dashboard" }}
             className="flex min-w-0 items-center gap-2.5 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            aria-label="WPAY Promotion home"
+            aria-label="Telegram Promotion home"
           >
-            <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary text-sm font-black tracking-tight text-primary-foreground shadow-sm">W</span>
+            <TelegramPromotionMark className="size-9 shrink-0 text-primary drop-shadow-sm" />
             <span className="min-w-0 leading-tight">
-              <span className="block truncate text-sm font-bold tracking-tight">WPAY Promotion</span>
-              <span className="block truncate text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">Promotion workspace</span>
+              <span className="block truncate text-sm font-bold tracking-tight">Telegram Promotion</span>
+              <span className="block truncate text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">PROMOTION WORKSPACE</span>
             </span>
           </Link>
           <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1 text-[10px] font-semibold text-muted-foreground">
@@ -80,7 +81,9 @@ export function MiniAppShell({ active, children }: { active: string; children: R
                 aria-current={selected ? "page" : undefined}
                 className={`flex min-w-0 flex-col items-center justify-center gap-1 rounded-lg px-1 text-[10px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${selected ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
               >
-                <Icon className="size-[18px] shrink-0" strokeWidth={selected ? 2.25 : 1.8} />
+                <span className={`grid size-7 place-items-center rounded-lg transition-colors ${selected ? "bg-primary text-primary-foreground shadow-sm" : "bg-transparent"}`}>
+                  <Icon className="size-[17px] shrink-0" strokeWidth={selected ? 2.3 : 1.9} />
+                </span>
                 <span className="w-full truncate text-center">{label}</span>
               </Link>
             );
