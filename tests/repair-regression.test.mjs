@@ -865,7 +865,8 @@ test("folder modal surfaces persisted Telegram results and safe real failures ab
 test("approved group primary actions intentionally distinguish import and folder export", () => {
   const route = read("src/routes/mini-app.$section.tsx");
   const groupList = route.slice(route.indexOf("function GroupList"), route.indexOf("function GroupRows"));
-  assert.equal((groupList.match(/bg-cyan-500 text-slate-950 hover:bg-cyan-400/g) ?? []).length >= 2, true);
+  assert(groupList.includes('<Button onClick={() => setModal("ADD")}'));
+  assert(groupList.includes('<Button onClick={() => setModal("IMPORT")}'));
   assert(groupList.includes('<Plus className="mr-2 size-4" /> IMPORT GROUPS'));
-  assert(groupList.includes("border-emerald-400/40 bg-emerald-500/15"));
+  assert(groupList.includes("border-primary/25 bg-primary/10"));
 });

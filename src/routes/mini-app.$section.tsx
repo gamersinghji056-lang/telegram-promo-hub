@@ -37,6 +37,7 @@ import {
   X,
 } from "lucide-react";
 import { MiniAppShell } from "@/components/mini-app-shell";
+import { ProductIcon, type ProductIconName } from "@/components/product-icon";
 import { TgsPlayer } from "@/components/tgs-player";
 import { Button } from "@/components/ui/button";
 import {
@@ -221,6 +222,14 @@ const sectionContext: Record<string, string> = {
   "growth-intelligence": "Real Telegram membership and engagement analytics",
   "refer-earn": "Direct referrals, rewards, and Coin activity",
   billing: "Plans, payments, Coins, credits, and add-ons",
+};
+
+const sectionVisual: Record<string, ProductIconName> = {
+  dashboard: "home", campaigns: "campaigns", audience: "audience", analytics: "analytics", settings: "settings",
+  sessions: "sessions", "groups-find": "search-groups", "groups-found": "groups", "groups-approved": "approved",
+  "groups-joined": "joined", "group-categories": "categories", "dm-audience": "search-users", "add-users": "audience",
+  "dm-create": "direct", "dm-history": "direct", "group-create": "groups", "group-history": "groups",
+  "growth-intelligence": "growth", "refer-earn": "referral", billing: "billing",
 };
 
 const AUTH_REQUIRED_MESSAGE = "Please login or register in @wpaypromotionbot first.";
@@ -796,8 +805,17 @@ function MiniAppSection() {
   }
 
   return (
-    <MiniAppShell active={section}>
-      <div className="mb-5 flex min-w-0 items-center justify-between gap-3 border-b border-border/70 pb-3">
+    <MiniAppShell
+      active={section}
+      headerActions={
+        <>
+          <Button size="icon" variant="ghost" className="size-8 min-h-8 rounded-full" aria-label="Refresh" onClick={() => load(true)} disabled={busy}><RefreshCw className={busy ? "animate-spin" : ""} /></Button>
+          <Button size="icon" variant="ghost" className="relative size-8 min-h-8 rounded-full" aria-label="Notifications" onClick={() => setShowNotifications(true)}><Bell />{unread ? <span className="absolute right-0 top-0 grid min-w-4 place-items-center rounded-full bg-primary px-1 text-[9px] text-primary-foreground">{unread}</span> : null}</Button>
+          <Button size="icon" variant="ghost" className="size-8 min-h-8 rounded-full" aria-label="Profile" onClick={() => setShowProfile(true)}><UserCircle /></Button>
+        </>
+      }
+    >
+      <div className="mb-5 flex min-w-0 items-center gap-3 border-b border-border/70 pb-3">
         <div className="flex min-w-0 items-center gap-2.5">
           {!primarySections.has(section) && parentSections[section] ? (
             <a
@@ -808,32 +826,11 @@ function MiniAppSection() {
               <ChevronLeft className="size-4" />
             </a>
           ) : null}
+          {sectionVisual[section] ? <ProductIcon name={sectionVisual[section]} className="hidden size-9 shrink-0 min-[380px]:block" /> : null}
           <div className="min-w-0">
             <h1 className="truncate text-xl font-bold tracking-tight sm:text-2xl">{miniT(appLanguage, titles[section] ?? section)}</h1>
             <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{sectionContext[section] ?? "Telegram promotion workspace"}</p>
           </div>
-        </div>
-        <div className="flex gap-2">
-          <Button size="icon" variant="secondary" aria-label="Refresh" onClick={() => load(true)} disabled={busy}>
-            <RefreshCw className={busy ? "animate-spin" : ""} />
-          </Button>
-          <Button
-            size="icon"
-            variant="secondary"
-            aria-label="Notifications"
-            className="relative"
-            onClick={() => setShowNotifications(true)}
-          >
-            <Bell />
-            {unread ? (
-              <span className="absolute -right-1 -top-1 min-w-5 border border-background bg-primary px-1 text-[10px] text-primary-foreground">
-                {unread}
-              </span>
-            ) : null}
-          </Button>
-          <Button size="icon" variant="secondary" aria-label="Profile" onClick={() => setShowProfile(true)}>
-            <UserCircle />
-          </Button>
         </div>
       </div>
       {notice ? (
@@ -1050,13 +1047,15 @@ function Dashboard({ data }: { data: any }) {
           </div>
         </section>
       ) : null}
-      <section className={panelClass("space-y-4")}>
+      <section className="relative overflow-hidden rounded-2xl border border-primary/15 bg-[linear-gradient(135deg,color-mix(in_oklch,var(--primary)_14%,var(--card)),color-mix(in_oklch,var(--chart-5)_7%,var(--card)))] p-4 shadow-[0_14px_36px_-24px_color-mix(in_oklch,var(--primary)_45%,transparent)] sm:p-5">
+        <span className="pointer-events-none absolute -right-8 -top-10 size-32 rounded-full bg-primary/10 blur-2xl" />
         <div className="flex items-center justify-between gap-4">
           <div>
-            <p className="text-sm text-muted-foreground">Current plan</p>
-            <p className="mt-1 text-xl font-semibold">{data?.subscription?.planName}</p>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">Current workspace</p>
+            <p className="mt-1 text-xl font-bold tracking-tight">{data?.subscription?.planName}</p>
+            <p className="mt-1 text-xs text-muted-foreground">Real account usage and promotion readiness</p>
           </div>
-          <Bell className="size-5 text-primary" />
+          <ProductIcon name="campaigns" className="size-14 shrink-0 drop-shadow-md" />
         </div>
         <div className="mt-5 h-2 overflow-hidden rounded-full bg-muted">
           <div
@@ -1070,7 +1069,8 @@ function Dashboard({ data }: { data: any }) {
           {data?.usage?.messagesUsed ?? 0} / {data?.usage?.messageLimit ?? 0} messages
         </p>
       </section>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+      <div><h2 className="text-sm font-bold">Operational overview</h2><p className="mb-2 text-xs text-muted-foreground">Live production totals</p></div>
+      <div className="-mt-2 grid grid-cols-2 gap-3 sm:grid-cols-3">
         {overview.map(([label, value, Icon]) => (
           <MetricCard key={String(label)} label={label as string} value={Number(value ?? 0)} icon={Icon as any} />
         ))}
@@ -1089,7 +1089,8 @@ function Dashboard({ data }: { data: any }) {
           }}
         />
       </section>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div><h2 className="text-sm font-bold">Quick actions</h2><p className="mb-2 text-xs text-muted-foreground">Start your next promotion workflow</p></div>
+      <div className="-mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
         {quick.map(([href, label, body, Icon]) => (
           <QuickLink key={String(href)} href={href as string} label={label as string} body={body as string} icon={Icon as any} />
         ))}
@@ -1099,11 +1100,12 @@ function Dashboard({ data }: { data: any }) {
 }
 
 function MetricCard({ label, value, icon: Icon }: { label: string; value: number | string; icon: any }) {
+  const visual = productVisual(label);
   return (
     <section className={panelClass("min-h-24") }>
       <div className="flex items-center justify-between gap-2">
         <p className="min-w-0 text-xs leading-4 text-muted-foreground">{label}</p>
-        <span className="relative grid size-8 shrink-0 place-items-center overflow-hidden rounded-lg bg-primary/12 text-primary"><span className="absolute -right-1 -top-1 size-3 rounded-full bg-primary/15" /><Icon className="relative size-4" strokeWidth={2.2} /></span>
+        {visual ? <ProductIcon name={visual} className="size-9 shrink-0" /> : <span className="relative grid size-8 shrink-0 place-items-center overflow-hidden rounded-lg bg-primary/12 text-primary"><span className="absolute -right-1 -top-1 size-3 rounded-full bg-primary/15" /><Icon className="relative size-4" strokeWidth={2.2} /></span>}
       </div>
       <p className="mt-2 text-2xl font-bold tracking-tight tabular-nums">{value}</p>
     </section>
@@ -1111,12 +1113,13 @@ function MetricCard({ label, value, icon: Icon }: { label: string; value: number
 }
 
 function QuickLink({ href, label, body, icon: Icon }: { href: string; label: string; body: string; icon: any }) {
+  const visual = productVisual(label);
   return (
     <a
       className="group flex min-h-24 min-w-0 items-start gap-3 rounded-xl border border-border/80 bg-card p-4 text-left shadow-[0_1px_2px_rgba(2,6,23,0.05)] outline-none transition-colors hover:border-primary/60 hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring"
       href={href}
     >
-      <span className="relative grid size-10 shrink-0 place-items-center overflow-hidden rounded-xl bg-primary/12 text-primary"><span className="absolute -bottom-1 -right-1 size-4 rounded-full bg-primary/15" /><Icon className="relative size-[18px]" strokeWidth={2.2} /></span>
+      {visual ? <ProductIcon name={visual} className="size-11 shrink-0 drop-shadow-sm" /> : <span className="relative grid size-10 shrink-0 place-items-center overflow-hidden rounded-xl bg-primary/12 text-primary"><span className="absolute -bottom-1 -right-1 size-4 rounded-full bg-primary/15" /><Icon className="relative size-[18px]" strokeWidth={2.2} /></span>}
       <span className="min-w-0 flex-1">
         <span className="block text-sm font-semibold text-foreground">{label}</span>
         <span className="mt-1 block text-xs leading-5 text-muted-foreground">{body}</span>
@@ -1788,13 +1791,13 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
             <p className="font-semibold">Total Approved Groups: {data?.groups?.length ?? 0}</p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button className="bg-cyan-500 text-slate-950 hover:bg-cyan-400" onClick={() => setModal("ADD")}>
+            <Button onClick={() => setModal("ADD")}>
               <Plus className="mr-2 size-4" /> ADD GROUP
             </Button>
-            <Button className="bg-cyan-500 text-slate-950 hover:bg-cyan-400" onClick={() => setModal("IMPORT")}>
+            <Button onClick={() => setModal("IMPORT")}>
               <Plus className="mr-2 size-4" /> IMPORT GROUPS
             </Button>
-            <Button className="border-emerald-400/40 bg-emerald-500/15 text-emerald-700 hover:bg-emerald-500/25 dark:text-emerald-200" variant="secondary" onClick={() => setModal("SHARE")}>
+            <Button className="border-primary/25 bg-primary/10 text-primary hover:bg-primary/15" variant="secondary" onClick={() => setModal("SHARE")}>
               <FolderOpen className="mr-2 size-4" /> CREATE SHAREABLE FOLDER LINK
             </Button>
           </div>
@@ -1971,7 +1974,7 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
                   <p className="border border-destructive/40 bg-destructive/10 p-3 text-sm font-semibold text-destructive">Reconnect required</p>
                 ) : null}
                 {actionBusy === "create-folder-link" ? (
-                  <div className="border border-cyan-400/50 bg-cyan-500/10 p-3 text-sm text-cyan-800 dark:text-cyan-100" role="status" aria-live="polite">
+                  <div className="rounded-lg border border-primary/30 bg-primary/10 p-3 text-sm text-primary" role="status" aria-live="polite">
                     <p className="flex items-center gap-2 font-semibold"><RefreshCw className="size-4 animate-spin" /> Creating Telegram folder link…</p>
                     <p className="mt-1 text-xs">Telegram is exporting the selected chats and the result will be saved here.</p>
                   </div>
@@ -1986,7 +1989,7 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
                   <div className="border border-success/50 bg-success/10 p-3 text-sm" aria-live="polite">
                     <p className="flex items-center gap-2 font-semibold text-success"><CheckCircle2 className="size-4 shrink-0" /> Telegram folder link created</p>
                     <p className="mt-2 text-xs font-semibold text-muted-foreground">Telegram folder link:</p>
-                    <a className="mt-1 block break-all font-semibold text-cyan-700 underline dark:text-cyan-200" href={latestFolderLink.url} target="_blank" rel="noreferrer">{latestFolderLink.url}</a>
+                    <a className="mt-1 block break-all font-semibold text-primary underline" href={latestFolderLink.url} target="_blank" rel="noreferrer">{latestFolderLink.url}</a>
                     <p className="mt-2 text-xs text-muted-foreground">
                       Created {new Date(latestFolderLink.created_at).toLocaleString()} | Session {folderAccountLabel(latestFolderLink)} | {(latestFolderLink.included_groups ?? []).length} groups
                     </p>
@@ -2007,7 +2010,7 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
                     <p className="font-semibold">Created Links</p>
                     {activeFolderLinks.map((link: any) => (
                       <div key={link.id} className="min-w-0 border-t border-border pt-2 first:border-t-0 first:pt-0">
-                        <p className="truncate text-xs font-semibold text-cyan-700 dark:text-cyan-200">{link.url}</p>
+                        <p className="truncate text-xs font-semibold text-primary">{link.url}</p>
                         <p className="text-[11px] text-muted-foreground">{new Date(link.created_at).toLocaleString()} | {(link.included_groups ?? []).length} groups</p>
                         <div className="mt-2 flex flex-wrap gap-1.5">
                           <Button type="button" size="sm" variant="secondary" className="h-8 px-2 text-[11px]" onClick={() => void copyText(link.url)}>Copy</Button>
@@ -2037,7 +2040,7 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
                 <div className="space-y-2">
                   {approvedGroups.map((group: any) => {
                     return (
-                      <label key={group.id} className={`flex gap-3 border p-3 text-sm transition-colors ${folderSelection.includes(group.id) ? "border-cyan-400 bg-cyan-500/10" : "border-border bg-background"}`}>
+                      <label key={group.id} className={`flex gap-3 border p-3 text-sm transition-colors ${folderSelection.includes(group.id) ? "border-primary/50 bg-primary/10" : "border-border bg-background"}`}>
                         <input
                           type="checkbox"
                           checked={folderSelection.includes(group.id)}
@@ -2062,7 +2065,7 @@ function GroupList({ auth, data, actions, reload, setNotice, actionBusy, runActi
             )}
             </div>
             <Button
-              className={`${modal === "SHARE" ? "sticky bottom-0 z-10 mt-0 shrink-0 border-t border-border bg-cyan-500 text-slate-950 hover:bg-cyan-400" : "w-full"}`}
+              className={`${modal === "SHARE" ? "sticky bottom-0 z-10 mt-0 shrink-0 border-t border-border" : "w-full"}`}
               type={modal === "SHARE" ? "button" : "submit"}
               onClick={
                 modal === "SHARE"
@@ -3207,7 +3210,7 @@ function AddUsersPage({ auth, data, actions, reload, setNotice, actionBusy, runA
             ["WITH_USERNAME", "With Username"],
             ["WITHOUT_USERNAME", "Without Username"],
           ].map(([value, label]) => (
-            <button key={value} type="button" className={`min-h-9 min-w-0 whitespace-normal break-words rounded px-1.5 text-[11px] font-semibold sm:px-2 sm:text-xs ${usernameFilter === value ? "bg-cyan-500 text-slate-950" : "text-muted-foreground"}`} onClick={() => { setUsernameFilter(value as any); void loadFilteredAudience(value as any, activityFilter); }}>
+            <button key={value} type="button" className={`min-h-9 min-w-0 whitespace-normal break-words rounded-lg px-1.5 text-[11px] font-semibold sm:px-2 sm:text-xs ${usernameFilter === value ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground"}`} onClick={() => { setUsernameFilter(value as any); void loadFilteredAudience(value as any, activityFilter); }}>
               {t(String(label))}
             </button>
           ))}
@@ -3220,7 +3223,7 @@ function AddUsersPage({ auth, data, actions, reload, setNotice, actionBusy, runA
             ["AROUND_MONTH", "Around a Month"],
             ["LONG_TIME_AGO", "Long Time Ago"],
           ].map(([value, label]) => (
-            <button key={value} type="button" className={`min-h-9 min-w-0 whitespace-normal break-words rounded px-1.5 text-[11px] font-semibold sm:px-2 sm:text-xs ${activityFilter === value ? "bg-cyan-500 text-slate-950" : "text-muted-foreground"}`} onClick={() => { setActivityFilter(value as any); void loadFilteredAudience(usernameFilter, value as any); }}>
+            <button key={value} type="button" className={`min-h-9 min-w-0 whitespace-normal break-words rounded-lg px-1.5 text-[11px] font-semibold sm:px-2 sm:text-xs ${activityFilter === value ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground"}`} onClick={() => { setActivityFilter(value as any); void loadFilteredAudience(usernameFilter, value as any); }}>
               {t(String(label))}
             </button>
           ))}
@@ -3261,7 +3264,7 @@ function AddUsersPage({ auth, data, actions, reload, setNotice, actionBusy, runA
           onChange={(event) => { setDestination(event.currentTarget.value); setDestinationCheck(null); }}
           placeholder="@groupname or https://t.me/channel"
         />
-        <Button type="button" className="w-full bg-cyan-500 font-semibold text-slate-950 hover:bg-cyan-400 disabled:border disabled:border-border disabled:bg-muted disabled:text-muted-foreground" disabled={!healthySession || !destination.trim() || actionBusy === "check-add-users-destination"} onClick={() => void checkDestination()}>
+        <Button type="button" className="w-full disabled:border disabled:border-border disabled:bg-muted disabled:text-muted-foreground" disabled={!healthySession || !destination.trim() || actionBusy === "check-add-users-destination"} onClick={() => void checkDestination()}>
           {actionBusy === "check-add-users-destination" ? t("Checking...") : t("RESOLVE / CHECK")}
         </Button>
         {!healthySession ? <p className="text-xs text-muted-foreground">{t("Select a connected, healthy Telegram session to resolve this destination.")}</p> : !destination.trim() ? <p className="text-xs text-muted-foreground">{t("Enter a group or channel username/link to continue.")}</p> : null}
@@ -3294,11 +3297,11 @@ function AddUsersPage({ auth, data, actions, reload, setNotice, actionBusy, runA
         </div>
         <div className="flex min-w-0 items-center justify-between gap-2">
           <p className="min-w-0 font-semibold">{t("Selected Users")}</p>
-          <span className="shrink-0 rounded-full bg-cyan-500 px-2.5 py-1 text-xs font-bold text-slate-950">{selected.length}</span>
+          <span className="shrink-0 rounded-full bg-primary px-2.5 py-1 text-xs font-bold text-primary-foreground">{selected.length}</span>
         </div>
         <div className="max-h-[44vh] min-w-0 space-y-2 overflow-y-auto overflow-x-hidden pr-1">
           {(audience.users ?? []).map((user: any) => (
-            <label key={user.id} className={`flex min-w-0 gap-3 border p-2.5 text-sm ${selected.includes(user.id) ? "border-cyan-400 bg-cyan-500/10" : "border-border bg-background"}`}>
+            <label key={user.id} className={`flex min-w-0 gap-3 border p-2.5 text-sm ${selected.includes(user.id) ? "border-primary/50 bg-primary/10" : "border-border bg-background"}`}>
               <input className="shrink-0" type="checkbox" checked={selected.includes(user.id)} onChange={() => toggleUser(user.id)} />
               <span className="min-w-0 flex-1 overflow-hidden">
                 <span className="block truncate font-semibold">{user.username ? `@${user.username}` : (user.display_name ?? user.telegram_user_id)}</span>
@@ -3349,7 +3352,7 @@ function AddUsersPage({ auth, data, actions, reload, setNotice, actionBusy, runA
           </div>
           <div className="grid grid-cols-2 gap-1 rounded-md border border-border bg-muted/40 p-1 min-[380px]:grid-cols-5">
             {(["ALL", "PENDING", "PROCESSING", "SUCCESSFUL", "FAILED"] as const).map((tab) => (
-              <button key={tab} type="button" className={`min-h-8 rounded px-1 text-[11px] font-semibold ${resultTab === tab ? "bg-cyan-500 text-slate-950" : "text-muted-foreground"}`} onClick={() => setResultTab(tab)}>
+              <button key={tab} type="button" className={`min-h-8 rounded-lg px-1 text-[11px] font-semibold ${resultTab === tab ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground"}`} onClick={() => setResultTab(tab)}>
                 {t(tab)}
               </button>
             ))}
@@ -3397,27 +3400,28 @@ function CampaignsPage({ auth, data, actions, reload, setNotice, actionBusy, run
   });
   return (
     <div className="space-y-6">
-      <section className={panelClass("space-y-3 bg-gradient-to-br from-primary/10 via-card to-card") }>
+      <section className="relative space-y-4 overflow-hidden rounded-2xl border border-primary/15 bg-[linear-gradient(135deg,color-mix(in_oklch,var(--primary)_13%,var(--card)),color-mix(in_oklch,var(--chart-5)_9%,var(--card)))] p-4 shadow-[0_16px_42px_-28px_color-mix(in_oklch,var(--primary)_55%,transparent)]">
+        <span className="pointer-events-none absolute -right-12 -top-12 size-40 rounded-full bg-chart-5/10 blur-3xl" />
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">Create a campaign</p>
           <h2 className="mt-1 text-xl font-bold tracking-tight">Who do you want to promote to?</h2>
         </div>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <QuickLink href="/mini-app/dm-create" label="Direct Users" body="Create a private DM Promotion campaign." icon={Send} />
-          <QuickLink href="/mini-app/group-create" label="Groups" body="Create a Group Promotion campaign." icon={Megaphone} />
+          <CampaignChoice href="/mini-app/dm-create" label="Direct Users" body="Create a private DM Promotion campaign." visual="direct" />
+          <CampaignChoice href="/mini-app/group-create" label="Groups" body="Create a Group Promotion campaign." visual="groups" />
         </div>
         <div className="flex flex-wrap gap-2 border-t border-border/70 pt-3 text-xs">
-          <a className="rounded-lg bg-secondary px-3 py-2 font-medium hover:bg-accent" href="/mini-app/dm-history">DM History</a>
-          <a className="rounded-lg bg-secondary px-3 py-2 font-medium hover:bg-accent" href="/mini-app/group-history">Group History</a>
+          <a className="inline-flex items-center gap-2 rounded-full border border-border bg-card/75 px-3 py-2 font-semibold shadow-sm hover:border-primary/30 hover:bg-card" href="/mini-app/dm-history"><Clock className="size-3.5 text-primary" /> DM History</a>
+          <a className="inline-flex items-center gap-2 rounded-full border border-border bg-card/75 px-3 py-2 font-semibold shadow-sm hover:border-primary/30 hover:bg-card" href="/mini-app/group-history"><Clock className="size-3.5 text-primary" /> Group History</a>
         </div>
       </section>
       <div>
         <h2 className="text-sm font-semibold">Campaign management</h2>
         <p className="mt-0.5 text-xs text-muted-foreground">Monitor and control existing DM and group campaigns.</p>
       </div>
-      <section className={panelClass("flex flex-wrap gap-2")}>
+      <section className="flex flex-wrap gap-1.5 rounded-xl border border-border bg-muted/35 p-1.5">
         {["ALL", "GROUP", "DM", "ACTIVE", "PAUSED", "COMPLETED"].map((f) => (
-          <Button key={f} size="sm" variant={filter === f ? "default" : "secondary"} onClick={() => setFilter(f)}>
+          <Button key={f} size="sm" className="rounded-full px-3 shadow-none" variant={filter === f ? "default" : "ghost"} onClick={() => setFilter(f)}>
             {f}
           </Button>
         ))}
@@ -3432,6 +3436,15 @@ function CampaignsPage({ auth, data, actions, reload, setNotice, actionBusy, run
         runAction={runAction}
       />
     </div>
+  );
+}
+
+function CampaignChoice({ href, label, body, visual }: { href: string; label: string; body: string; visual: ProductIconName }) {
+  return (
+    <a href={href} className="group relative flex min-h-36 min-w-0 items-center gap-4 overflow-hidden rounded-2xl border border-white/60 bg-card/80 p-4 shadow-[0_10px_28px_-22px_color-mix(in_oklch,var(--primary)_50%,transparent)] backdrop-blur transition-all hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:border-white/10 dark:bg-card/75">
+      <ProductIcon name={visual} className="size-20 shrink-0 drop-shadow-lg transition-transform duration-200 group-hover:scale-105" />
+      <span className="min-w-0"><span className="block text-base font-bold tracking-tight">{label}</span><span className="mt-1 block text-xs leading-5 text-muted-foreground">{body}</span><span className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-primary">Create campaign <ArrowRight className="size-3.5" /></span></span>
+    </a>
   );
 }
 
@@ -4945,6 +4958,24 @@ function GrowthIntelligence({ auth, data, actions, reload, runAction, actionBusy
   </div>;
 }
 
+function productVisual(label: string): ProductIconName | null {
+  const key = label.toLowerCase();
+  if (key.includes("direct") || key.includes("dm promotion")) return "direct";
+  if (key.includes("find users")) return "search-users";
+  if (key.includes("find groups") || key.includes("group discovery")) return "search-groups";
+  if (key.includes("approved")) return "approved";
+  if (key.includes("joined")) return "joined";
+  if (key.includes("categor")) return "categories";
+  if (key.includes("growth")) return "growth";
+  if (key.includes("billing") || key.includes("coin")) return "billing";
+  if (key.includes("refer")) return "referral";
+  if (key.includes("connected") || key.includes("session")) return "sessions";
+  if (key.includes("group")) return "groups";
+  if (key.includes("audience") || key.includes("user")) return "audience";
+  if (key.includes("campaign") || key.includes("promotion")) return "campaigns";
+  return null;
+}
+
 function ReferEarn({ data }: any) {
   const [copied, setCopied] = useState(false);
   const share = () => {
@@ -5236,20 +5267,22 @@ function Billing({ auth, data, actions, setNotice, actionBusy, runAction, reload
   const addUsersCredits = data?.addons?.addUsersCredits?.balance ?? {};
   return (
     <div className="space-y-3">
-      <section className="rounded-lg border border-cyan-400/20 bg-slate-950/70 p-4 shadow-sm">
+      <section className="relative overflow-hidden rounded-2xl border border-primary/20 bg-[linear-gradient(135deg,color-mix(in_oklch,var(--primary)_15%,var(--card)),color-mix(in_oklch,var(--chart-5)_8%,var(--card)))] p-4 shadow-[0_14px_36px_-25px_color-mix(in_oklch,var(--primary)_45%,transparent)]">
+        <span className="pointer-events-none absolute -right-8 -top-10 size-32 rounded-full bg-primary/10 blur-2xl" />
         <div className="flex items-start justify-between gap-3">
           <div>
-            <p className="text-xs font-medium text-cyan-300">Current Plan</p>
-            <h2 className="mt-1 text-xl font-semibold text-white">{currentPlan?.name ?? "TEST"}</h2>
-            <p className="mt-1 text-sm text-slate-300">
-              <span className="text-lg font-semibold text-white">${Number(currentPlan?.price_usd ?? 0)}</span> / month
+            <div className="flex items-center gap-3"><ProductIcon name="billing" className="size-12 shrink-0 drop-shadow-md" /><div><p className="text-xs font-semibold text-primary">Current Plan</p>
+            <h2 className="mt-1 text-xl font-bold tracking-tight text-foreground">{currentPlan?.name ?? "TEST"}</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              <span className="text-lg font-bold text-foreground">${Number(currentPlan?.price_usd ?? 0)}</span> / month
             </p>
+            </div></div>
           </div>
           <div className="text-right">
-            <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${usage.expired ? "bg-amber-400/15 text-amber-300" : "bg-emerald-400/15 text-emerald-300"}`}>
+            <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${usage.expired ? "bg-warning/15 text-warning" : "bg-success/15 text-success"}`}>
               {usage.expired ? "TEST limits" : "Active"}
             </span>
-            <p className="mt-2 text-xs text-slate-400">
+            <p className="mt-2 text-xs text-muted-foreground">
               Renews: {data?.tenant?.plan_expires_at ? new Date(data.tenant.plan_expires_at).toLocaleDateString() : "No expiry"}
             </p>
           </div>
@@ -5261,17 +5294,17 @@ function Billing({ auth, data, actions, setNotice, actionBusy, runAction, reload
         </div>
       </section>
       {!paymentsEnabled && (data?.plans ?? []).some((plan: any) => Number(plan.price_usd ?? 0) > 0) ? (
-        <div className="rounded-lg border border-cyan-400/20 bg-cyan-400/10 p-3 text-sm text-cyan-100">
+        <div className="rounded-xl border border-primary/20 bg-primary/10 p-3 text-sm text-primary">
           Online payments are not available yet. Contact support to activate paid plans.
         </div>
       ) : null}
       {invoice ? (
-        <section className="rounded-lg border border-emerald-400/30 bg-slate-950/80 p-4 shadow-sm">
+        <section className="rounded-2xl border border-success/25 bg-card p-4 shadow-[0_12px_34px_-26px_color-mix(in_oklch,var(--success)_45%,transparent)]">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <p className="text-xs font-semibold uppercase text-emerald-300">Active Invoice</p>
-              <h2 className="mt-1 text-lg font-semibold text-white">{invoice.product_code === "PREMIUM_EMOJI" ? "Premium Emoji" : invoice.product_code === "ADD_USERS_CREDITS" ? "Add Users Credits" : invoice.product_code}</h2>
-              <p className="mt-1 text-xs text-slate-400">Invoice ID: {invoice.invoice_number ?? invoice.id}</p>
+              <p className="text-xs font-semibold uppercase text-success">Active Invoice</p>
+              <h2 className="mt-1 text-lg font-semibold text-foreground">{invoice.product_code === "PREMIUM_EMOJI" ? "Premium Emoji" : invoice.product_code === "ADD_USERS_CREDITS" ? "Add Users Credits" : invoice.product_code}</h2>
+              <p className="mt-1 text-xs text-muted-foreground">Invoice ID: {invoice.invoice_number ?? invoice.id}</p>
             </div>
             <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${statusTone(invoice.status)}`}>{invoice.status}</span>
           </div>
@@ -5282,15 +5315,15 @@ function Billing({ auth, data, actions, setNotice, actionBusy, runAction, reload
               alt="USDT TRC20 payment QR"
             />
             <div className="space-y-2 text-sm">
-              <p className="font-semibold text-white">USDT TRC20</p>
-              <p className="text-slate-300">Exact Payable Amount</p>
-              <p className="break-all text-2xl font-semibold text-emerald-300">{exactAmount} USDT</p>
-              <p className="text-slate-300">Receiving Address</p>
-              <p className="break-all rounded-md border border-white/10 bg-white/[0.03] p-2 font-mono text-xs text-white">{invoice.receiving_address}</p>
-              <p className="text-slate-300">Countdown: <span className="font-semibold text-white">{invoice.status === "EXPIRED" ? "Expired" : countdownText}</span></p>
-              <p className="text-slate-300">Status: {invoice.status === "PENDING" ? "Waiting for payment..." : invoice.status}</p>
-              {invoice.status === "PENDING" && !invoice.coin_discount ? <div className="space-y-2 rounded-md border border-violet-400/30 p-3"><p className="text-xs text-violet-200">Coin Balance: {data?.coins?.balance ?? 0} · 100 Coins = 1 USDT</p><div className="flex min-w-0 flex-wrap gap-2"><input className={inputClass("min-w-0 flex-1 bg-slate-950 text-white")} inputMode="numeric" value={coinAmount} onChange={(event) => setCoinAmount(event.target.value.replace(/\D/g, ""))} placeholder="Coins to use"/><Button size="sm" disabled={!coinAmount || actionBusy === `use-coins-${invoice.id}`} onClick={() => void runAction(`use-coins-${invoice.id}`, async () => { const next = await actions.useCoinsForInvoice({ data: { auth, invoiceId: invoice.id, coins: Number(coinAmount) } }); setInvoice(next); setNotice("Coins applied as platform credit."); await reload(); })}>USE COINS</Button></div></div> : null}
-              {Number(invoice.coin_discount ?? 0) > 0 ? <p className="text-xs text-violet-200">Platform credit applied: {invoice.coin_discount} Coins = {(Number(invoice.coin_discount) / 100).toFixed(2)} USDT</p> : null}
+              <p className="font-semibold text-foreground">USDT TRC20</p>
+              <p className="text-muted-foreground">Exact Payable Amount</p>
+              <p className="break-all text-2xl font-bold text-success">{exactAmount} USDT</p>
+              <p className="text-muted-foreground">Receiving Address</p>
+              <p className="break-all rounded-lg border border-border bg-muted/35 p-2 font-mono text-xs text-foreground">{invoice.receiving_address}</p>
+              <p className="text-muted-foreground">Countdown: <span className="font-semibold text-foreground">{invoice.status === "EXPIRED" ? "Expired" : countdownText}</span></p>
+              <p className="text-muted-foreground">Status: {invoice.status === "PENDING" ? "Waiting for payment..." : invoice.status}</p>
+              {invoice.status === "PENDING" && !invoice.coin_discount ? <div className="space-y-2 rounded-lg border border-primary/25 bg-primary/5 p-3"><p className="text-xs text-primary">Coin Balance: {data?.coins?.balance ?? 0} · 100 Coins = 1 USDT</p><div className="flex min-w-0 flex-wrap gap-2"><input className={inputClass("min-w-0 flex-1")} inputMode="numeric" value={coinAmount} onChange={(event) => setCoinAmount(event.target.value.replace(/\D/g, ""))} placeholder="Coins to use"/><Button size="sm" disabled={!coinAmount || actionBusy === `use-coins-${invoice.id}`} onClick={() => void runAction(`use-coins-${invoice.id}`, async () => { const next = await actions.useCoinsForInvoice({ data: { auth, invoiceId: invoice.id, coins: Number(coinAmount) } }); setInvoice(next); setNotice("Coins applied as platform credit."); await reload(); })}>USE COINS</Button></div></div> : null}
+              {Number(invoice.coin_discount ?? 0) > 0 ? <p className="text-xs text-primary">Platform credit applied: {invoice.coin_discount} Coins = {(Number(invoice.coin_discount) / 100).toFixed(2)} USDT</p> : null}
               <div className="flex flex-wrap gap-2">
                 <Button
                   size="sm"

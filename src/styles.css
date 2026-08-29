@@ -64,20 +64,20 @@
 }
 
 :root {
-  --radius: 0.625rem;
-  --background: oklch(0.975 0.004 255);
+  --radius: 0.75rem;
+  --background: oklch(0.975 0.01 255);
   --foreground: oklch(0.2 0.035 263);
-  --card: oklch(0.995 0.002 255);
+  --card: oklch(0.995 0.006 255);
   --card-foreground: oklch(0.2 0.035 263);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.2 0.035 263);
   --primary: oklch(0.55 0.2 258);
   --primary-foreground: oklch(0.985 0.005 255);
-  --secondary: oklch(0.94 0.012 255);
+  --secondary: oklch(0.945 0.022 255);
   --secondary-foreground: oklch(0.27 0.04 263);
-  --muted: oklch(0.95 0.009 255);
+  --muted: oklch(0.952 0.015 255);
   --muted-foreground: oklch(0.52 0.028 260);
-  --accent: oklch(0.92 0.025 250);
+  --accent: oklch(0.925 0.038 250);
   --accent-foreground: oklch(0.28 0.07 257);
   --destructive: oklch(0.62 0.2 25);
   --destructive-foreground: oklch(0.97 0.01 250);
@@ -106,9 +106,9 @@
 }
 
 .dark {
-  --background: oklch(0.145 0.035 264);
+  --background: oklch(0.125 0.038 264);
   --foreground: oklch(0.96 0.008 255);
-  --card: oklch(0.19 0.034 263);
+  --card: oklch(0.185 0.04 263);
   --card-foreground: oklch(0.984 0.003 247.858);
   --popover: oklch(0.208 0.042 265.755);
   --popover-foreground: oklch(0.984 0.003 247.858);
@@ -163,6 +163,10 @@
     font-size: 14px;
     line-height: 1.5;
     --miniapp-bottom-nav-height: 4.75rem;
+    background-image:
+      radial-gradient(circle at 8% 5%, color-mix(in oklch, var(--primary) 8%, transparent), transparent 24rem),
+      radial-gradient(circle at 94% 28%, color-mix(in oklch, var(--chart-5) 5%, transparent), transparent 20rem);
+    background-attachment: fixed;
   }
 
   .mini-app-compact h1 {
@@ -176,7 +180,16 @@
   }
 
   .mini-app-compact .mini-panel {
+    box-shadow: 0 10px 30px -26px color-mix(in oklch, var(--foreground) 32%, transparent), 0 1px 2px color-mix(in oklch, var(--foreground) 6%, transparent);
     transition: border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
+  }
+
+  .mini-app-compact form.mini-panel {
+    background: linear-gradient(160deg, color-mix(in oklch, var(--card) 96%, var(--primary)), var(--card));
+  }
+
+  .mini-app-compact article.mini-panel:hover {
+    border-color: color-mix(in oklch, var(--primary) 24%, var(--border));
   }
 
   .mini-app-compact .settings-control-center > .mini-panel {

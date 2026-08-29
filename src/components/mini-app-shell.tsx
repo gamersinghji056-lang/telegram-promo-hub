@@ -1,14 +1,14 @@
 import { Link } from "@tanstack/react-router";
-import { BarChart3, Home, Megaphone, Settings, Users } from "lucide-react";
 import type { ReactNode } from "react";
+import { ProductIcon, type ProductIconName } from "@/components/product-icon";
 import { TelegramPromotionMark } from "@/components/telegram-promotion-mark";
 
 const primaryItems = [
-  { slug: "dashboard", label: "Home", icon: Home },
-  { slug: "campaigns", label: "Campaigns", icon: Megaphone },
-  { slug: "audience", label: "Audience", icon: Users },
-  { slug: "analytics", label: "Analytics", icon: BarChart3 },
-  { slug: "settings", label: "Settings", icon: Settings },
+  { slug: "dashboard", label: "Home", icon: "home" },
+  { slug: "campaigns", label: "Campaigns", icon: "campaigns" },
+  { slug: "audience", label: "Audience", icon: "audience" },
+  { slug: "analytics", label: "Analytics", icon: "analytics" },
+  { slug: "settings", label: "Settings", icon: "settings" },
 ] as const;
 
 const PRIMARY_SECTION_BY_ROUTE: Record<string, (typeof primaryItems)[number]["slug"]> = {
@@ -34,7 +34,7 @@ const PRIMARY_SECTION_BY_ROUTE: Record<string, (typeof primaryItems)[number]["sl
   "settings": "settings",
 };
 
-export function MiniAppShell({ active, children }: { active: string; children: ReactNode }) {
+export function MiniAppShell({ active, children, headerActions }: { active: string; children: ReactNode; headerActions?: ReactNode }) {
   const activePrimary = PRIMARY_SECTION_BY_ROUTE[active] ?? "dashboard";
 
   return (
@@ -59,9 +59,10 @@ export function MiniAppShell({ active, children }: { active: string; children: R
               <span className="block truncate text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">PROMOTION WORKSPACE</span>
             </span>
           </Link>
-          <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1 text-[10px] font-semibold text-muted-foreground">
-            <span className="size-1.5 rounded-full bg-success" aria-hidden="true" /> Live
-          </span>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <span className="hidden items-center gap-1.5 rounded-full border border-success/20 bg-success/10 px-2.5 py-1 text-[10px] font-semibold text-success min-[360px]:inline-flex"><span className="size-1.5 rounded-full bg-success shadow-[0_0_0_3px_color-mix(in_oklch,var(--success)_16%,transparent)]" aria-hidden="true" /> Live</span>
+            {headerActions}
+          </div>
         </div>
       </header>
       <main className="mx-auto w-full max-w-4xl p-3 sm:p-5">{children}</main>
@@ -71,7 +72,7 @@ export function MiniAppShell({ active, children }: { active: string; children: R
         style={{ transform: "translateY(var(--miniapp-nav-translate, 0px))", paddingBottom: "env(safe-area-inset-bottom)" }}
       >
         <div className="mx-auto grid h-[var(--miniapp-bottom-nav-height,4.75rem)] max-w-4xl grid-cols-5 px-1.5 py-1.5">
-          {primaryItems.map(({ slug, label, icon: Icon }) => {
+          {primaryItems.map(({ slug, label, icon }) => {
             const selected = activePrimary === slug;
             return (
               <Link
@@ -79,12 +80,13 @@ export function MiniAppShell({ active, children }: { active: string; children: R
                 to="/mini-app/$section"
                 params={{ section: slug }}
                 aria-current={selected ? "page" : undefined}
-                className={`flex min-w-0 flex-col items-center justify-center gap-1 rounded-lg px-1 text-[10px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${selected ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
+                className={`group relative flex min-w-0 flex-col items-center justify-center gap-0.5 rounded-xl px-1 text-[10px] font-medium outline-none transition-all focus-visible:ring-2 focus-visible:ring-ring ${selected ? "bg-primary/8 text-primary shadow-[inset_0_0_0_1px_color-mix(in_oklch,var(--primary)_12%,transparent)]" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
               >
-                <span className={`grid size-7 place-items-center rounded-lg transition-colors ${selected ? "bg-primary text-primary-foreground shadow-sm" : "bg-transparent"}`}>
-                  <Icon className="size-[17px] shrink-0" strokeWidth={selected ? 2.3 : 1.9} />
+                <span className={`grid size-8 place-items-center rounded-lg transition-transform ${selected ? "-translate-y-0.5 drop-shadow-sm" : "opacity-85"}`}>
+                  <ProductIcon name={icon as ProductIconName} className="size-7 shrink-0 transition-transform duration-150 group-active:scale-95" />
                 </span>
                 <span className="w-full truncate text-center">{label}</span>
+                {selected ? <span className="absolute bottom-0.5 h-0.5 w-4 rounded-full bg-primary" aria-hidden="true" /> : null}
               </Link>
             );
           })}
