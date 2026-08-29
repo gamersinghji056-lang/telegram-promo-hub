@@ -289,11 +289,11 @@ function telegramLanguageHint() {
 }
 
 function inputClass(extra = "") {
-  return `min-h-10 w-full min-w-0 rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground caret-foreground opacity-100 shadow-[inset_0_1px_1px_rgba(2,6,23,0.03)] outline-none transition-[border-color,box-shadow,background-color] placeholder:text-muted-foreground/80 focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:cursor-not-allowed disabled:bg-muted disabled:opacity-60 [-webkit-text-fill-color:currentColor] ${extra}`;
+  return `min-h-10 w-full min-w-0 rounded-lg border border-input bg-background px-3 py-1.5 text-[13px] text-foreground caret-foreground opacity-100 shadow-[inset_0_1px_1px_rgba(2,6,23,0.03)] outline-none transition-[border-color,box-shadow,background-color] placeholder:text-muted-foreground/80 focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:cursor-not-allowed disabled:bg-muted disabled:opacity-60 [-webkit-text-fill-color:currentColor] ${extra}`;
 }
 
 function panelClass(extra = "") {
-  return `mini-panel min-w-0 rounded-xl border border-border/80 bg-card p-4 shadow-[0_1px_2px_rgba(2,6,23,0.06)] ${extra}`;
+  return `mini-panel min-w-0 rounded-xl border border-border/80 bg-card p-3 shadow-[0_1px_2px_rgba(2,6,23,0.06)] ${extra}`;
 }
 
 function statusTone(status?: string) {
@@ -811,24 +811,24 @@ function MiniAppSection() {
         <>
           <Button size="icon" variant="ghost" className="size-8 min-h-8 rounded-full" aria-label="Refresh" onClick={() => load(true)} disabled={busy}><RefreshCw className={busy ? "animate-spin" : ""} /></Button>
           <Button size="icon" variant="ghost" className="relative size-8 min-h-8 rounded-full" aria-label="Notifications" onClick={() => setShowNotifications(true)}><Bell />{unread ? <span className="absolute right-0 top-0 grid min-w-4 place-items-center rounded-full bg-primary px-1 text-[9px] text-primary-foreground">{unread}</span> : null}</Button>
-          <Button size="icon" variant="ghost" className="size-8 min-h-8 rounded-full" aria-label="Profile" onClick={() => setShowProfile(true)}><UserCircle /></Button>
+          <Button size="icon" variant="ghost" className="relative size-8 min-h-8 rounded-full p-0" aria-label="Profile" onClick={() => setShowProfile(true)}><ProductIcon name="avatar" className="size-7" /></Button>
         </>
       }
     >
-      <div className="mb-5 flex min-w-0 items-center gap-3 border-b border-border/70 pb-3">
+      <div className="mb-4 flex min-w-0 items-center gap-2.5 border-b border-border/70 pb-2.5">
         <div className="flex min-w-0 items-center gap-2.5">
           {!primarySections.has(section) && parentSections[section] ? (
             <a
               href={`/mini-app/${parentSections[section].section}`}
               aria-label={`Back to ${parentSections[section].label}`}
-              className="grid size-9 shrink-0 place-items-center rounded-lg border border-border bg-card text-muted-foreground shadow-sm outline-none transition-colors hover:border-primary/40 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring"
+              className="grid size-8 shrink-0 place-items-center rounded-lg border border-border bg-card text-muted-foreground shadow-sm outline-none transition-colors hover:border-primary/40 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring"
             >
               <ChevronLeft className="size-4" />
             </a>
           ) : null}
-          {sectionVisual[section] ? <ProductIcon name={sectionVisual[section]} className="hidden size-9 shrink-0 min-[380px]:block" /> : null}
+          {sectionVisual[section] ? <ProductIcon name={sectionVisual[section]} className="hidden size-8 shrink-0 min-[390px]:block" /> : null}
           <div className="min-w-0">
-            <h1 className="truncate text-xl font-bold tracking-tight sm:text-2xl">{miniT(appLanguage, titles[section] ?? section)}</h1>
+            <h1 className="truncate text-lg font-semibold tracking-tight sm:text-xl">{miniT(appLanguage, titles[section] ?? section)}</h1>
             <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{sectionContext[section] ?? "Telegram promotion workspace"}</p>
           </div>
         </div>
@@ -903,10 +903,11 @@ function MiniAppSection() {
                 <X className="size-4" />
               </button>
             </div>
-            <div className="space-y-1 text-sm">
-              <p className="font-semibold">{profile?.name ?? "User001"}</p>
-              <p className="text-muted-foreground">{profile?.email ?? ""}</p>
-              <p className="text-xs uppercase text-primary">{profile?.status ?? "ACTIVE"}</p>
+            <div className="flex min-w-0 items-center gap-3 rounded-lg bg-muted/40 p-2.5 text-sm">
+              <ProductIcon name="avatar" className="size-10 shrink-0" />
+              <div className="min-w-0 space-y-0.5"><p className="truncate font-semibold">{profile?.name ?? "User001"}</p>
+              <p className="truncate text-xs text-muted-foreground">{profile?.email ?? ""}</p>
+              <p className="text-[10px] font-semibold uppercase text-primary">{profile?.status ?? "ACTIVE"}</p></div>
             </div>
             <a
               href="/mini-app/settings"
@@ -976,7 +977,7 @@ type HubItem = { href: string; label: string; body: string; icon: any };
 
 function HubSection({ title, description, items }: { title: string; description: string; items: HubItem[] }) {
   return (
-    <section className="space-y-3">
+    <section className="space-y-2">
       <div>
         <h2 className="text-sm font-semibold tracking-tight">{title}</h2>
         <p className="mt-0.5 text-xs leading-5 text-muted-foreground">{description}</p>
@@ -990,11 +991,11 @@ function HubSection({ title, description, items }: { title: string; description:
 
 function AudienceHub() {
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <section className={panelClass("bg-gradient-to-br from-primary/10 via-card to-card") }>
         <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">Audience workspace</p>
-        <h2 className="mt-2 text-xl font-bold tracking-tight">Find, organize, and grow your reach</h2>
-        <p className="mt-1 max-w-xl text-sm leading-6 text-muted-foreground">Move from group discovery to qualified users without losing any step in your existing workflow.</p>
+        <h2 className="mt-1 text-base font-semibold tracking-tight">Find, organize, and grow your reach</h2>
+        <p className="mt-1 max-w-xl text-xs leading-5 text-muted-foreground">Move from group discovery to qualified users without losing any step in your existing workflow.</p>
       </section>
       <HubSection title="Groups" description="Discover, review, approve, join, and organize Telegram groups." items={[
         { href: "/mini-app/groups-find", label: "Find Groups", body: "Run keyword-based group discovery.", icon: Search },
@@ -1047,17 +1048,17 @@ function Dashboard({ data }: { data: any }) {
           </div>
         </section>
       ) : null}
-      <section className="relative overflow-hidden rounded-2xl border border-primary/15 bg-[linear-gradient(135deg,color-mix(in_oklch,var(--primary)_14%,var(--card)),color-mix(in_oklch,var(--chart-5)_7%,var(--card)))] p-4 shadow-[0_14px_36px_-24px_color-mix(in_oklch,var(--primary)_45%,transparent)] sm:p-5">
+      <section className="relative overflow-hidden rounded-xl border border-primary/15 bg-[linear-gradient(135deg,color-mix(in_oklch,var(--primary)_14%,var(--card)),color-mix(in_oklch,var(--chart-5)_7%,var(--card)))] p-3 shadow-[0_12px_30px_-24px_color-mix(in_oklch,var(--primary)_45%,transparent)]">
         <span className="pointer-events-none absolute -right-8 -top-10 size-32 rounded-full bg-primary/10 blur-2xl" />
         <div className="flex items-center justify-between gap-4">
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">Current workspace</p>
-            <p className="mt-1 text-xl font-bold tracking-tight">{data?.subscription?.planName}</p>
+            <p className="mt-0.5 text-lg font-semibold tracking-tight">{data?.subscription?.planName}</p>
             <p className="mt-1 text-xs text-muted-foreground">Real account usage and promotion readiness</p>
           </div>
-          <ProductIcon name="campaigns" className="size-14 shrink-0 drop-shadow-md" />
+          <ProductIcon name="campaigns" className="size-11 shrink-0 drop-shadow-sm" />
         </div>
-        <div className="mt-5 h-2 overflow-hidden rounded-full bg-muted">
+        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-muted">
           <div
             className="h-full bg-primary"
             style={{
@@ -1070,7 +1071,7 @@ function Dashboard({ data }: { data: any }) {
         </p>
       </section>
       <div><h2 className="text-sm font-bold">Operational overview</h2><p className="mb-2 text-xs text-muted-foreground">Live production totals</p></div>
-      <div className="-mt-2 grid grid-cols-2 gap-3 sm:grid-cols-3">
+      <div className="-mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
         {overview.map(([label, value, Icon]) => (
           <MetricCard key={String(label)} label={label as string} value={Number(value ?? 0)} icon={Icon as any} />
         ))}
@@ -1090,7 +1091,7 @@ function Dashboard({ data }: { data: any }) {
         />
       </section>
       <div><h2 className="text-sm font-bold">Quick actions</h2><p className="mb-2 text-xs text-muted-foreground">Start your next promotion workflow</p></div>
-      <div className="-mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div className="-mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
         {quick.map(([href, label, body, Icon]) => (
           <QuickLink key={String(href)} href={href as string} label={label as string} body={body as string} icon={Icon as any} />
         ))}
@@ -1102,12 +1103,12 @@ function Dashboard({ data }: { data: any }) {
 function MetricCard({ label, value, icon: Icon }: { label: string; value: number | string; icon: any }) {
   const visual = productVisual(label);
   return (
-    <section className={panelClass("min-h-24") }>
+    <section className={panelClass("min-h-[4.75rem]") }>
       <div className="flex items-center justify-between gap-2">
         <p className="min-w-0 text-xs leading-4 text-muted-foreground">{label}</p>
-        {visual ? <ProductIcon name={visual} className="size-9 shrink-0" /> : <span className="relative grid size-8 shrink-0 place-items-center overflow-hidden rounded-lg bg-primary/12 text-primary"><span className="absolute -right-1 -top-1 size-3 rounded-full bg-primary/15" /><Icon className="relative size-4" strokeWidth={2.2} /></span>}
+        {visual ? <ProductIcon name={visual} className="size-7 shrink-0" /> : <span className="relative grid size-7 shrink-0 place-items-center overflow-hidden rounded-lg bg-primary/12 text-primary"><span className="absolute -right-1 -top-1 size-3 rounded-full bg-primary/15" /><Icon className="relative size-3.5" strokeWidth={2.2} /></span>}
       </div>
-      <p className="mt-2 text-2xl font-bold tracking-tight tabular-nums">{value}</p>
+      <p className="mt-1 text-xl font-semibold tracking-tight tabular-nums">{value}</p>
     </section>
   );
 }
@@ -1116,13 +1117,13 @@ function QuickLink({ href, label, body, icon: Icon }: { href: string; label: str
   const visual = productVisual(label);
   return (
     <a
-      className="group flex min-h-24 min-w-0 items-start gap-3 rounded-xl border border-border/80 bg-card p-4 text-left shadow-[0_1px_2px_rgba(2,6,23,0.05)] outline-none transition-colors hover:border-primary/60 hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring"
+      className="group flex min-h-[4.75rem] min-w-0 items-center gap-2.5 rounded-xl border border-border/80 bg-card p-3 text-left shadow-[0_1px_2px_rgba(2,6,23,0.05)] outline-none transition-colors hover:border-primary/60 hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring"
       href={href}
     >
-      {visual ? <ProductIcon name={visual} className="size-11 shrink-0 drop-shadow-sm" /> : <span className="relative grid size-10 shrink-0 place-items-center overflow-hidden rounded-xl bg-primary/12 text-primary"><span className="absolute -bottom-1 -right-1 size-4 rounded-full bg-primary/15" /><Icon className="relative size-[18px]" strokeWidth={2.2} /></span>}
+      {visual ? <ProductIcon name={visual} className="size-9 shrink-0 drop-shadow-sm" /> : <span className="relative grid size-8 shrink-0 place-items-center overflow-hidden rounded-lg bg-primary/12 text-primary"><span className="absolute -bottom-1 -right-1 size-3 rounded-full bg-primary/15" /><Icon className="relative size-4" strokeWidth={2.2} /></span>}
       <span className="min-w-0 flex-1">
         <span className="block text-sm font-semibold text-foreground">{label}</span>
-        <span className="mt-1 block text-xs leading-5 text-muted-foreground">{body}</span>
+        <span className="mt-0.5 block text-xs leading-4 text-muted-foreground">{body}</span>
       </span>
       <ArrowRight className="mt-1 size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-primary" />
     </a>
@@ -3399,20 +3400,20 @@ function CampaignsPage({ auth, data, actions, reload, setNotice, actionBusy, run
     return c.status === filter;
   });
   return (
-    <div className="space-y-6">
-      <section className="relative space-y-4 overflow-hidden rounded-2xl border border-primary/15 bg-[linear-gradient(135deg,color-mix(in_oklch,var(--primary)_13%,var(--card)),color-mix(in_oklch,var(--chart-5)_9%,var(--card)))] p-4 shadow-[0_16px_42px_-28px_color-mix(in_oklch,var(--primary)_55%,transparent)]">
+    <div className="space-y-4">
+      <section className="relative space-y-3 overflow-hidden rounded-xl border border-primary/15 bg-[linear-gradient(135deg,color-mix(in_oklch,var(--primary)_13%,var(--card)),color-mix(in_oklch,var(--chart-5)_9%,var(--card)))] p-3 shadow-[0_12px_32px_-26px_color-mix(in_oklch,var(--primary)_55%,transparent)]">
         <span className="pointer-events-none absolute -right-12 -top-12 size-40 rounded-full bg-chart-5/10 blur-3xl" />
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">Create a campaign</p>
-          <h2 className="mt-1 text-xl font-bold tracking-tight">Who do you want to promote to?</h2>
+          <h2 className="mt-1 text-base font-semibold tracking-tight">Who do you want to promote to?</h2>
         </div>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <CampaignChoice href="/mini-app/dm-create" label="Direct Users" body="Create a private DM Promotion campaign." visual="direct" />
           <CampaignChoice href="/mini-app/group-create" label="Groups" body="Create a Group Promotion campaign." visual="groups" />
         </div>
-        <div className="flex flex-wrap gap-2 border-t border-border/70 pt-3 text-xs">
-          <a className="inline-flex items-center gap-2 rounded-full border border-border bg-card/75 px-3 py-2 font-semibold shadow-sm hover:border-primary/30 hover:bg-card" href="/mini-app/dm-history"><Clock className="size-3.5 text-primary" /> DM History</a>
-          <a className="inline-flex items-center gap-2 rounded-full border border-border bg-card/75 px-3 py-2 font-semibold shadow-sm hover:border-primary/30 hover:bg-card" href="/mini-app/group-history"><Clock className="size-3.5 text-primary" /> Group History</a>
+        <div className="flex flex-wrap gap-1.5 border-t border-border/70 pt-2.5 text-xs">
+          <a className="inline-flex min-h-9 items-center gap-1.5 rounded-full border border-border bg-card/75 px-3 py-1.5 font-medium shadow-sm hover:border-primary/30 hover:bg-card" href="/mini-app/dm-history"><Clock className="size-3.5 text-primary" /> DM History</a>
+          <a className="inline-flex min-h-9 items-center gap-1.5 rounded-full border border-border bg-card/75 px-3 py-1.5 font-medium shadow-sm hover:border-primary/30 hover:bg-card" href="/mini-app/group-history"><Clock className="size-3.5 text-primary" /> Group History</a>
         </div>
       </section>
       <div>
@@ -3421,7 +3422,7 @@ function CampaignsPage({ auth, data, actions, reload, setNotice, actionBusy, run
       </div>
       <section className="flex flex-wrap gap-1.5 rounded-xl border border-border bg-muted/35 p-1.5">
         {["ALL", "GROUP", "DM", "ACTIVE", "PAUSED", "COMPLETED"].map((f) => (
-          <Button key={f} size="sm" className="rounded-full px-3 shadow-none" variant={filter === f ? "default" : "ghost"} onClick={() => setFilter(f)}>
+          <Button key={f} size="sm" className="min-h-8 h-8 rounded-full px-2.5 text-[11px] shadow-none" variant={filter === f ? "default" : "ghost"} onClick={() => setFilter(f)}>
             {f}
           </Button>
         ))}
@@ -3441,9 +3442,9 @@ function CampaignsPage({ auth, data, actions, reload, setNotice, actionBusy, run
 
 function CampaignChoice({ href, label, body, visual }: { href: string; label: string; body: string; visual: ProductIconName }) {
   return (
-    <a href={href} className="group relative flex min-h-36 min-w-0 items-center gap-4 overflow-hidden rounded-2xl border border-white/60 bg-card/80 p-4 shadow-[0_10px_28px_-22px_color-mix(in_oklch,var(--primary)_50%,transparent)] backdrop-blur transition-all hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:border-white/10 dark:bg-card/75">
-      <ProductIcon name={visual} className="size-20 shrink-0 drop-shadow-lg transition-transform duration-200 group-hover:scale-105" />
-      <span className="min-w-0"><span className="block text-base font-bold tracking-tight">{label}</span><span className="mt-1 block text-xs leading-5 text-muted-foreground">{body}</span><span className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-primary">Create campaign <ArrowRight className="size-3.5" /></span></span>
+    <a href={href} className="group relative flex min-h-24 min-w-0 items-center gap-3 overflow-hidden rounded-xl border border-white/60 bg-card/80 p-3 shadow-[0_8px_24px_-22px_color-mix(in_oklch,var(--primary)_50%,transparent)] backdrop-blur transition-all hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:border-white/10 dark:bg-card/75">
+      <ProductIcon name={visual} className="size-14 shrink-0 drop-shadow-md transition-transform duration-200 group-hover:scale-105" />
+      <span className="min-w-0"><span className="block text-sm font-semibold tracking-tight">{label}</span><span className="mt-0.5 block text-xs leading-4 text-muted-foreground">{body}</span><span className="mt-2 inline-flex items-center gap-1 text-[11px] font-semibold text-primary">Create campaign <ArrowRight className="size-3" /></span></span>
     </a>
   );
 }
@@ -5271,7 +5272,7 @@ function Billing({ auth, data, actions, setNotice, actionBusy, runAction, reload
         <span className="pointer-events-none absolute -right-8 -top-10 size-32 rounded-full bg-primary/10 blur-2xl" />
         <div className="flex items-start justify-between gap-3">
           <div>
-            <div className="flex items-center gap-3"><ProductIcon name="billing" className="size-12 shrink-0 drop-shadow-md" /><div><p className="text-xs font-semibold text-primary">Current Plan</p>
+            <div className="flex items-center gap-2.5"><ProductIcon name="billing" className="size-9 shrink-0 drop-shadow-sm" /><div><p className="text-[11px] font-semibold text-primary">Current Plan</p>
             <h2 className="mt-1 text-xl font-bold tracking-tight text-foreground">{currentPlan?.name ?? "TEST"}</h2>
             <p className="mt-1 text-sm text-muted-foreground">
               <span className="text-lg font-bold text-foreground">${Number(currentPlan?.price_usd ?? 0)}</span> / month
@@ -5299,11 +5300,11 @@ function Billing({ auth, data, actions, setNotice, actionBusy, runAction, reload
         </div>
       ) : null}
       {invoice ? (
-        <section className="rounded-2xl border border-success/25 bg-card p-4 shadow-[0_12px_34px_-26px_color-mix(in_oklch,var(--success)_45%,transparent)]">
+        <section className="rounded-xl border border-success/25 bg-card p-3 shadow-[0_10px_28px_-24px_color-mix(in_oklch,var(--success)_45%,transparent)]">
           <div className="flex items-start justify-between gap-3">
             <div>
               <p className="text-xs font-semibold uppercase text-success">Active Invoice</p>
-              <h2 className="mt-1 text-lg font-semibold text-foreground">{invoice.product_code === "PREMIUM_EMOJI" ? "Premium Emoji" : invoice.product_code === "ADD_USERS_CREDITS" ? "Add Users Credits" : invoice.product_code}</h2>
+              <h2 className="mt-1 text-base font-semibold text-foreground">{invoice.product_code === "PREMIUM_EMOJI" ? "Premium Emoji" : invoice.product_code === "ADD_USERS_CREDITS" ? "Add Users Credits" : invoice.product_code}</h2>
               <p className="mt-1 text-xs text-muted-foreground">Invoice ID: {invoice.invoice_number ?? invoice.id}</p>
             </div>
             <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${statusTone(invoice.status)}`}>{invoice.status}</span>
@@ -5317,7 +5318,7 @@ function Billing({ auth, data, actions, setNotice, actionBusy, runAction, reload
             <div className="space-y-2 text-sm">
               <p className="font-semibold text-foreground">USDT TRC20</p>
               <p className="text-muted-foreground">Exact Payable Amount</p>
-              <p className="break-all text-2xl font-bold text-success">{exactAmount} USDT</p>
+              <p className="break-all text-xl font-semibold text-success">{exactAmount} USDT</p>
               <p className="text-muted-foreground">Receiving Address</p>
               <p className="break-all rounded-lg border border-border bg-muted/35 p-2 font-mono text-xs text-foreground">{invoice.receiving_address}</p>
               <p className="text-muted-foreground">Countdown: <span className="font-semibold text-foreground">{invoice.status === "EXPIRED" ? "Expired" : countdownText}</span></p>
@@ -5421,7 +5422,7 @@ function Billing({ auth, data, actions, setNotice, actionBusy, runAction, reload
           const isCurrent = String(plan.code) === String(currentCode);
           const accent = planAccent(plan.code);
           return (
-            <article key={plan.id} className={`rounded-xl border ${accent.border} bg-card p-4 shadow-sm`}>
+            <article key={plan.id} className={`rounded-xl border ${accent.border} bg-card p-3 shadow-sm`}>
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="flex items-center gap-2">
@@ -5431,7 +5432,7 @@ function Billing({ auth, data, actions, setNotice, actionBusy, runAction, reload
                   <p className="mt-1 text-xs text-muted-foreground">{plan.description || planDescription(plan.code)}</p>
                 </div>
                 <div className="text-right">
-                  <p className="text-3xl font-bold tracking-tight text-foreground">${Number(plan.price_usd ?? 0)}</p>
+                  <p className="text-2xl font-semibold tracking-tight text-foreground">${Number(plan.price_usd ?? 0)}</p>
                   <p className="text-xs text-muted-foreground">/ month</p>
                 </div>
               </div>

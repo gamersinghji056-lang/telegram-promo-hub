@@ -42,21 +42,21 @@ export function MiniAppShell({ active, children, headerActions }: { active: stri
       className="mini-app-compact min-h-screen overflow-x-clip bg-background text-foreground"
       style={{
         paddingBottom:
-          "calc(var(--miniapp-bottom-nav-height, 4.75rem) + var(--miniapp-keyboard-inset, 0px) + env(safe-area-inset-bottom))",
+          "calc(var(--miniapp-bottom-nav-height, 4.375rem) + var(--miniapp-keyboard-inset, 0px) + env(safe-area-inset-bottom))",
       }}
     >
-      <header className="sticky top-0 z-20 border-b border-border/80 bg-background/90 px-3 py-2 backdrop-blur-xl supports-[backdrop-filter]:bg-background/75">
-        <div className="mx-auto flex max-w-4xl items-center justify-between gap-3">
+      <header className="sticky top-0 z-20 border-b border-border/70 bg-background/90 px-3 py-1.5 backdrop-blur-xl supports-[backdrop-filter]:bg-background/75">
+        <div className="mx-auto flex min-h-10 max-w-4xl items-center justify-between gap-2">
           <Link
             to="/mini-app/$section"
             params={{ section: "dashboard" }}
-            className="flex min-w-0 items-center gap-2.5 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex min-w-0 items-center gap-2 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring"
             aria-label="Telegram Promotion home"
           >
-            <TelegramPromotionMark className="size-9 shrink-0 text-primary drop-shadow-sm" />
+            <TelegramPromotionMark className="size-8 shrink-0 text-primary drop-shadow-sm" />
             <span className="min-w-0 leading-tight">
-              <span className="block truncate text-sm font-bold tracking-tight">Telegram Promotion</span>
-              <span className="block truncate text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">PROMOTION WORKSPACE</span>
+              <span className="block truncate text-[13px] font-semibold tracking-tight">Telegram Promotion</span>
+              <span className="block whitespace-nowrap text-[8px] font-medium uppercase tracking-[0.12em] text-muted-foreground">PROMOTION WORKSPACE</span>
             </span>
           </Link>
           <div className="flex shrink-0 items-center gap-1.5">
@@ -65,13 +65,13 @@ export function MiniAppShell({ active, children, headerActions }: { active: stri
           </div>
         </div>
       </header>
-      <main className="mx-auto w-full max-w-4xl p-3 sm:p-5">{children}</main>
+      <main className="mx-auto w-full max-w-4xl p-3 sm:p-4">{children}</main>
       <nav
         aria-label="Primary navigation"
         className="fixed inset-x-0 bottom-0 z-30 border-t border-border/80 bg-card/95 shadow-[0_-8px_30px_rgba(2,6,23,0.12)] backdrop-blur-xl transition-transform"
         style={{ transform: "translateY(var(--miniapp-nav-translate, 0px))", paddingBottom: "env(safe-area-inset-bottom)" }}
       >
-        <div className="mx-auto grid h-[var(--miniapp-bottom-nav-height,4.75rem)] max-w-4xl grid-cols-5 px-1.5 py-1.5">
+        <div className="mx-auto grid h-[var(--miniapp-bottom-nav-height,4.375rem)] max-w-4xl grid-cols-5 px-1.5 py-1">
           {primaryItems.map(({ slug, label, icon }) => {
             const selected = activePrimary === slug;
             return (
@@ -80,10 +80,10 @@ export function MiniAppShell({ active, children, headerActions }: { active: stri
                 to="/mini-app/$section"
                 params={{ section: slug }}
                 aria-current={selected ? "page" : undefined}
-                className={`group relative flex min-w-0 flex-col items-center justify-center gap-0.5 rounded-xl px-1 text-[10px] font-medium outline-none transition-all focus-visible:ring-2 focus-visible:ring-ring ${selected ? "bg-primary/8 text-primary shadow-[inset_0_0_0_1px_color-mix(in_oklch,var(--primary)_12%,transparent)]" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
+                className={`group relative flex min-w-0 flex-col items-center justify-center gap-0.5 rounded-lg px-1 text-[9px] font-medium outline-none transition-all focus-visible:ring-2 focus-visible:ring-ring ${selected ? "bg-primary/8 text-primary shadow-[inset_0_0_0_1px_color-mix(in_oklch,var(--primary)_12%,transparent)]" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
               >
-                <span className={`grid size-8 place-items-center rounded-lg transition-transform ${selected ? "-translate-y-0.5 drop-shadow-sm" : "opacity-85"}`}>
-                  <ProductIcon name={icon as ProductIconName} className="size-7 shrink-0 transition-transform duration-150 group-active:scale-95" />
+                <span className={`grid size-7 place-items-center rounded-lg transition-transform ${selected ? "-translate-y-0.5 drop-shadow-sm" : "opacity-85"}`}>
+                  <ProductIcon name={icon as ProductIconName} className="size-6 shrink-0 transition-transform duration-150 group-active:scale-95" />
                 </span>
                 <span className="w-full truncate text-center">{label}</span>
                 {selected ? <span className="absolute bottom-0.5 h-0.5 w-4 rounded-full bg-primary" aria-hidden="true" /> : null}

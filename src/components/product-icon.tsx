@@ -3,7 +3,7 @@ import type { SVGProps } from "react";
 export type ProductIconName =
   | "home" | "campaigns" | "audience" | "analytics" | "settings"
   | "direct" | "groups" | "search-users" | "search-groups" | "approved"
-  | "joined" | "categories" | "growth" | "billing" | "referral" | "sessions";
+  | "joined" | "categories" | "growth" | "billing" | "referral" | "sessions" | "avatar";
 
 const tones: Record<ProductIconName, [string, string, string]> = {
   home: ["#4f7cff", "#7658e8", "#dbe7ff"], campaigns: ["#ff7a59", "#ff4d8d", "#ffe1d9"],
@@ -14,9 +14,11 @@ const tones: Record<ProductIconName, [string, string, string]> = {
   joined: ["#3b82f6", "#6366f1", "#dbeafe"], categories: ["#f59e0b", "#fb7185", "#fff0c7"],
   growth: ["#16a677", "#38bdf8", "#d8f8e8"], billing: ["#4f7cff", "#8b5cf6", "#e4e7ff"],
   referral: ["#ec4899", "#8b5cf6", "#fce7f3"], sessions: ["#06b6d4", "#4f7cff", "#d6f7ff"],
+  avatar: ["#38bdf8", "#6366f1", "#dbeafe"],
 };
 
 function Glyph({ name }: { name: ProductIconName }) {
+  if (name === "avatar") return <><circle cx="24" cy="17" r="7" fill="white"/><path d="M12 35c1-8 5-11 12-11s11 3 12 11H12Z" fill="white"/><path d="M32 11.5c2.5 1.5 4 4 4 6.5" stroke="white" strokeWidth="2" strokeLinecap="round" opacity=".55"/></>;
   if (name === "home") return <path d="M14 26V15.8l10-8 10 8V26a3 3 0 0 1-3 3h-4.5v-7h-5v7H17a3 3 0 0 1-3-3Z" fill="white" />;
   if (name === "campaigns") return <><path d="M12 17.5 27 11v17L12 21.5v-4Z" fill="white"/><path d="m16 22 2.5 8h5l-3-6.6L16 22Z" fill="white" opacity=".78"/><path d="M30 15c2 1.4 2 7.6 0 9" stroke="white" strokeWidth="2.4" strokeLinecap="round"/></>;
   if (["audience","groups","search-groups"].includes(name)) return <><circle cx="24" cy="15" r="5" fill="white"/><circle cx="14.5" cy="18" r="3.5" fill="white" opacity=".76"/><circle cx="33.5" cy="18" r="3.5" fill="white" opacity=".76"/><path d="M14 31c.8-6 4-9 10-9s9.2 3 10 9H14Z" fill="white"/><path d="M8.5 29c.4-4 2.4-6.2 6-6.5-1.2 1.7-2 3.8-2.3 6.5H8.5Zm27.3 0c-.3-2.7-1.1-4.8-2.3-6.5 3.6.3 5.6 2.5 6 6.5h-3.7Z" fill="white" opacity=".72"/></>;

@@ -79,3 +79,18 @@ test("premium product icons stay local and campaign chooser stays on the hub onl
   assert(route.slice(hubStart, dmStart).includes("Who do you want to promote to?"));
   assert(!route.slice(dmStart, groupStart).includes("Who do you want to promote to?"));
 });
+
+test("final Mini App density keeps compact shared cards, icons, avatar, and navigation", () => {
+  const icons = read("src/components/product-icon.tsx");
+  const route = read("src/routes/mini-app.$section.tsx");
+  const shell = read("src/components/mini-app-shell.tsx");
+  const styles = read("src/styles.css");
+  assert(icons.includes('"avatar"'));
+  assert(route.includes('<ProductIcon name="avatar" className="size-7"'));
+  assert(route.includes('min-h-[4.75rem]'));
+  assert(route.includes('className="size-14 shrink-0'));
+  assert(!route.includes('className="size-20 shrink-0'));
+  assert(shell.includes("--miniapp-bottom-nav-height, 4.375rem"));
+  assert(shell.includes('className="size-6 shrink-0'));
+  assert(styles.includes("--miniapp-bottom-nav-height: 4.375rem"));
+});
