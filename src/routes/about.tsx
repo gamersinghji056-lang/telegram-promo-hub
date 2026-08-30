@@ -1,0 +1,2 @@
+import { createFileRoute } from "@tanstack/react-router"; import { PublicPage } from "@/components/public-site"; import { publicPageHead } from "@/lib/public-meta";
+export const Route = createFileRoute("/about")({ head:()=>publicPageHead("About","MARK8BOT is a Telegram-first software ecosystem built around useful automation and contextual intelligence.","/about"), component:()=> <PublicPage page="about"/> });

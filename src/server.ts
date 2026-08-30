@@ -3,8 +3,11 @@ import "./lib/error-capture";
 import { startBackgroundWorkers } from "./lib/background-workers.server";
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
+import { runtimeRole, shouldRunPromotionWorkers } from "./lib/runtime-role.server";
 
-startBackgroundWorkers();
+const role = runtimeRole();
+if (shouldRunPromotionWorkers(role)) startBackgroundWorkers();
+console.info(JSON.stringify({ event: "mark8bot_runtime_started", role, promotion_workers: shouldRunPromotionWorkers(role) }));
 
 type ServerEntry = {
   fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> | Response;

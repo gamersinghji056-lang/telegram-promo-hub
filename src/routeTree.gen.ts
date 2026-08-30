@@ -10,14 +10,29 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AboutRouteImport } from './routes/about'
+import { Route as AcceptableUseRouteImport } from './routes/acceptable-use'
 import { Route as AdminRouteImport } from './routes/admin'
+import { Route as ContactRouteImport } from './routes/contact'
+import { Route as FaqRouteImport } from './routes/faq'
+import { Route as GuidesRouteImport } from './routes/guides'
+import { Route as MarkRouteImport } from './routes/mark'
 import { Route as MiniAppRouteImport } from './routes/mini-app'
+import { Route as PrivacyRouteImport } from './routes/privacy'
+import { Route as PromotionRouteImport } from './routes/promotion'
+import { Route as SecurityRouteImport } from './routes/security'
+import { Route as TermsRouteImport } from './routes/terms'
+import { Route as AdminIndexRouteImport } from './routes/admin.index'
 import { Route as AdminSectionRouteImport } from './routes/admin.$section'
 import { Route as AdminLoginRouteImport } from './routes/admin.login'
+import { Route as GuidesMarkRouteImport } from './routes/guides.mark'
+import { Route as GuidesPromotionRouteImport } from './routes/guides.promotion'
+import { Route as MarkAppRouteImport } from './routes/mark.app'
 import { Route as MiniAppIndexRouteImport } from './routes/mini-app.index'
 import { Route as MiniAppSectionRouteImport } from './routes/mini-app.$section'
 import { Route as MiniAppLoginRouteImport } from './routes/mini-app.login'
 import { Route as MiniAppRegisterRouteImport } from './routes/mini-app.register'
+import { Route as PromotionAppRouteImport } from './routes/promotion.app'
 import { Route as ApiInternalCampaignWorkerRouteImport } from './routes/api/internal/campaign-worker'
 import { Route as ApiInternalEntitySendTestRouteImport } from './routes/api/internal/entity-send-test'
 import { Route as ApiPublicTelegramWebhookRouteImport } from './routes/api/public/telegram/webhook'
@@ -27,15 +42,70 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AboutRoute = AboutRouteImport.update({
+  id: '/about',
+  path: '/about',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AcceptableUseRoute = AcceptableUseRouteImport.update({
+  id: '/acceptable-use',
+  path: '/acceptable-use',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdminRoute = AdminRouteImport.update({
   id: '/admin',
   path: '/admin',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ContactRoute = ContactRouteImport.update({
+  id: '/contact',
+  path: '/contact',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const FaqRoute = FaqRouteImport.update({
+  id: '/faq',
+  path: '/faq',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const GuidesRoute = GuidesRouteImport.update({
+  id: '/guides',
+  path: '/guides',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MarkRoute = MarkRouteImport.update({
+  id: '/mark',
+  path: '/mark',
   getParentRoute: () => rootRouteImport,
 } as any)
 const MiniAppRoute = MiniAppRouteImport.update({
   id: '/mini-app',
   path: '/mini-app',
   getParentRoute: () => rootRouteImport,
+} as any)
+const PrivacyRoute = PrivacyRouteImport.update({
+  id: '/privacy',
+  path: '/privacy',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PromotionRoute = PromotionRouteImport.update({
+  id: '/promotion',
+  path: '/promotion',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SecurityRoute = SecurityRouteImport.update({
+  id: '/security',
+  path: '/security',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TermsRoute = TermsRouteImport.update({
+  id: '/terms',
+  path: '/terms',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminIndexRoute = AdminIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AdminRoute,
 } as any)
 const AdminSectionRoute = AdminSectionRouteImport.update({
   id: '/$section',
@@ -46,6 +116,21 @@ const AdminLoginRoute = AdminLoginRouteImport.update({
   id: '/login',
   path: '/login',
   getParentRoute: () => AdminRoute,
+} as any)
+const GuidesMarkRoute = GuidesMarkRouteImport.update({
+  id: '/mark',
+  path: '/mark',
+  getParentRoute: () => GuidesRoute,
+} as any)
+const GuidesPromotionRoute = GuidesPromotionRouteImport.update({
+  id: '/promotion',
+  path: '/promotion',
+  getParentRoute: () => GuidesRoute,
+} as any)
+const MarkAppRoute = MarkAppRouteImport.update({
+  id: '/app',
+  path: '/app',
+  getParentRoute: () => MarkRoute,
 } as any)
 const MiniAppIndexRoute = MiniAppIndexRouteImport.update({
   id: '/',
@@ -66,6 +151,11 @@ const MiniAppRegisterRoute = MiniAppRegisterRouteImport.update({
   id: '/register',
   path: '/register',
   getParentRoute: () => MiniAppRoute,
+} as any)
+const PromotionAppRoute = PromotionAppRouteImport.update({
+  id: '/app',
+  path: '/app',
+  getParentRoute: () => PromotionRoute,
 } as any)
 const ApiInternalCampaignWorkerRoute =
   ApiInternalCampaignWorkerRouteImport.update({
@@ -88,13 +178,28 @@ const ApiPublicTelegramWebhookRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/about': typeof AboutRoute
+  '/acceptable-use': typeof AcceptableUseRoute
   '/admin': typeof AdminRouteWithChildren
+  '/contact': typeof ContactRoute
+  '/faq': typeof FaqRoute
+  '/guides': typeof GuidesRouteWithChildren
+  '/mark': typeof MarkRouteWithChildren
   '/mini-app': typeof MiniAppRouteWithChildren
+  '/privacy': typeof PrivacyRoute
+  '/promotion': typeof PromotionRouteWithChildren
+  '/security': typeof SecurityRoute
+  '/terms': typeof TermsRoute
   '/admin/$section': typeof AdminSectionRoute
   '/admin/login': typeof AdminLoginRoute
+  '/guides/mark': typeof GuidesMarkRoute
+  '/guides/promotion': typeof GuidesPromotionRoute
+  '/mark/app': typeof MarkAppRoute
   '/mini-app/$section': typeof MiniAppSectionRoute
   '/mini-app/login': typeof MiniAppLoginRoute
   '/mini-app/register': typeof MiniAppRegisterRoute
+  '/promotion/app': typeof PromotionAppRoute
+  '/admin/': typeof AdminIndexRoute
   '/mini-app/': typeof MiniAppIndexRoute
   '/api/internal/campaign-worker': typeof ApiInternalCampaignWorkerRoute
   '/api/internal/entity-send-test': typeof ApiInternalEntitySendTestRoute
@@ -102,12 +207,26 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/admin': typeof AdminRouteWithChildren
+  '/about': typeof AboutRoute
+  '/acceptable-use': typeof AcceptableUseRoute
+  '/contact': typeof ContactRoute
+  '/faq': typeof FaqRoute
+  '/guides': typeof GuidesRouteWithChildren
+  '/mark': typeof MarkRouteWithChildren
+  '/privacy': typeof PrivacyRoute
+  '/promotion': typeof PromotionRouteWithChildren
+  '/security': typeof SecurityRoute
+  '/terms': typeof TermsRoute
   '/admin/$section': typeof AdminSectionRoute
   '/admin/login': typeof AdminLoginRoute
+  '/guides/mark': typeof GuidesMarkRoute
+  '/guides/promotion': typeof GuidesPromotionRoute
+  '/mark/app': typeof MarkAppRoute
   '/mini-app/$section': typeof MiniAppSectionRoute
   '/mini-app/login': typeof MiniAppLoginRoute
   '/mini-app/register': typeof MiniAppRegisterRoute
+  '/promotion/app': typeof PromotionAppRoute
+  '/admin': typeof AdminIndexRoute
   '/mini-app': typeof MiniAppIndexRoute
   '/api/internal/campaign-worker': typeof ApiInternalCampaignWorkerRoute
   '/api/internal/entity-send-test': typeof ApiInternalEntitySendTestRoute
@@ -116,13 +235,28 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/about': typeof AboutRoute
+  '/acceptable-use': typeof AcceptableUseRoute
   '/admin': typeof AdminRouteWithChildren
+  '/contact': typeof ContactRoute
+  '/faq': typeof FaqRoute
+  '/guides': typeof GuidesRouteWithChildren
+  '/mark': typeof MarkRouteWithChildren
   '/mini-app': typeof MiniAppRouteWithChildren
+  '/privacy': typeof PrivacyRoute
+  '/promotion': typeof PromotionRouteWithChildren
+  '/security': typeof SecurityRoute
+  '/terms': typeof TermsRoute
   '/admin/$section': typeof AdminSectionRoute
   '/admin/login': typeof AdminLoginRoute
+  '/guides/mark': typeof GuidesMarkRoute
+  '/guides/promotion': typeof GuidesPromotionRoute
+  '/mark/app': typeof MarkAppRoute
   '/mini-app/$section': typeof MiniAppSectionRoute
   '/mini-app/login': typeof MiniAppLoginRoute
   '/mini-app/register': typeof MiniAppRegisterRoute
+  '/promotion/app': typeof PromotionAppRoute
+  '/admin/': typeof AdminIndexRoute
   '/mini-app/': typeof MiniAppIndexRoute
   '/api/internal/campaign-worker': typeof ApiInternalCampaignWorkerRoute
   '/api/internal/entity-send-test': typeof ApiInternalEntitySendTestRoute
@@ -132,13 +266,28 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/about'
+    | '/acceptable-use'
     | '/admin'
+    | '/contact'
+    | '/faq'
+    | '/guides'
+    | '/mark'
     | '/mini-app'
+    | '/privacy'
+    | '/promotion'
+    | '/security'
+    | '/terms'
     | '/admin/$section'
     | '/admin/login'
+    | '/guides/mark'
+    | '/guides/promotion'
+    | '/mark/app'
     | '/mini-app/$section'
     | '/mini-app/login'
     | '/mini-app/register'
+    | '/promotion/app'
+    | '/admin/'
     | '/mini-app/'
     | '/api/internal/campaign-worker'
     | '/api/internal/entity-send-test'
@@ -146,12 +295,26 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
-    | '/admin'
+    | '/about'
+    | '/acceptable-use'
+    | '/contact'
+    | '/faq'
+    | '/guides'
+    | '/mark'
+    | '/privacy'
+    | '/promotion'
+    | '/security'
+    | '/terms'
     | '/admin/$section'
     | '/admin/login'
+    | '/guides/mark'
+    | '/guides/promotion'
+    | '/mark/app'
     | '/mini-app/$section'
     | '/mini-app/login'
     | '/mini-app/register'
+    | '/promotion/app'
+    | '/admin'
     | '/mini-app'
     | '/api/internal/campaign-worker'
     | '/api/internal/entity-send-test'
@@ -159,13 +322,28 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/about'
+    | '/acceptable-use'
     | '/admin'
+    | '/contact'
+    | '/faq'
+    | '/guides'
+    | '/mark'
     | '/mini-app'
+    | '/privacy'
+    | '/promotion'
+    | '/security'
+    | '/terms'
     | '/admin/$section'
     | '/admin/login'
+    | '/guides/mark'
+    | '/guides/promotion'
+    | '/mark/app'
     | '/mini-app/$section'
     | '/mini-app/login'
     | '/mini-app/register'
+    | '/promotion/app'
+    | '/admin/'
     | '/mini-app/'
     | '/api/internal/campaign-worker'
     | '/api/internal/entity-send-test'
@@ -174,8 +352,18 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AboutRoute: typeof AboutRoute
+  AcceptableUseRoute: typeof AcceptableUseRoute
   AdminRoute: typeof AdminRouteWithChildren
+  ContactRoute: typeof ContactRoute
+  FaqRoute: typeof FaqRoute
+  GuidesRoute: typeof GuidesRouteWithChildren
+  MarkRoute: typeof MarkRouteWithChildren
   MiniAppRoute: typeof MiniAppRouteWithChildren
+  PrivacyRoute: typeof PrivacyRoute
+  PromotionRoute: typeof PromotionRouteWithChildren
+  SecurityRoute: typeof SecurityRoute
+  TermsRoute: typeof TermsRoute
   ApiInternalCampaignWorkerRoute: typeof ApiInternalCampaignWorkerRoute
   ApiInternalEntitySendTestRoute: typeof ApiInternalEntitySendTestRoute
   ApiPublicTelegramWebhookRoute: typeof ApiPublicTelegramWebhookRoute
@@ -190,11 +378,53 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/about': {
+      id: '/about'
+      path: '/about'
+      fullPath: '/about'
+      preLoaderRoute: typeof AboutRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/acceptable-use': {
+      id: '/acceptable-use'
+      path: '/acceptable-use'
+      fullPath: '/acceptable-use'
+      preLoaderRoute: typeof AcceptableUseRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin': {
       id: '/admin'
       path: '/admin'
       fullPath: '/admin'
       preLoaderRoute: typeof AdminRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/contact': {
+      id: '/contact'
+      path: '/contact'
+      fullPath: '/contact'
+      preLoaderRoute: typeof ContactRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/faq': {
+      id: '/faq'
+      path: '/faq'
+      fullPath: '/faq'
+      preLoaderRoute: typeof FaqRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/guides': {
+      id: '/guides'
+      path: '/guides'
+      fullPath: '/guides'
+      preLoaderRoute: typeof GuidesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/mark': {
+      id: '/mark'
+      path: '/mark'
+      fullPath: '/mark'
+      preLoaderRoute: typeof MarkRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/mini-app': {
@@ -203,6 +433,41 @@ declare module '@tanstack/react-router' {
       fullPath: '/mini-app'
       preLoaderRoute: typeof MiniAppRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/privacy': {
+      id: '/privacy'
+      path: '/privacy'
+      fullPath: '/privacy'
+      preLoaderRoute: typeof PrivacyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/promotion': {
+      id: '/promotion'
+      path: '/promotion'
+      fullPath: '/promotion'
+      preLoaderRoute: typeof PromotionRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/security': {
+      id: '/security'
+      path: '/security'
+      fullPath: '/security'
+      preLoaderRoute: typeof SecurityRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/terms': {
+      id: '/terms'
+      path: '/terms'
+      fullPath: '/terms'
+      preLoaderRoute: typeof TermsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/': {
+      id: '/admin/'
+      path: '/'
+      fullPath: '/admin/'
+      preLoaderRoute: typeof AdminIndexRouteImport
+      parentRoute: typeof AdminRoute
     }
     '/admin/$section': {
       id: '/admin/$section'
@@ -217,6 +482,27 @@ declare module '@tanstack/react-router' {
       fullPath: '/admin/login'
       preLoaderRoute: typeof AdminLoginRouteImport
       parentRoute: typeof AdminRoute
+    }
+    '/guides/mark': {
+      id: '/guides/mark'
+      path: '/mark'
+      fullPath: '/guides/mark'
+      preLoaderRoute: typeof GuidesMarkRouteImport
+      parentRoute: typeof GuidesRoute
+    }
+    '/guides/promotion': {
+      id: '/guides/promotion'
+      path: '/promotion'
+      fullPath: '/guides/promotion'
+      preLoaderRoute: typeof GuidesPromotionRouteImport
+      parentRoute: typeof GuidesRoute
+    }
+    '/mark/app': {
+      id: '/mark/app'
+      path: '/app'
+      fullPath: '/mark/app'
+      preLoaderRoute: typeof MarkAppRouteImport
+      parentRoute: typeof MarkRoute
     }
     '/mini-app/': {
       id: '/mini-app/'
@@ -246,6 +532,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MiniAppRegisterRouteImport
       parentRoute: typeof MiniAppRoute
     }
+    '/promotion/app': {
+      id: '/promotion/app'
+      path: '/app'
+      fullPath: '/promotion/app'
+      preLoaderRoute: typeof PromotionAppRouteImport
+      parentRoute: typeof PromotionRoute
+    }
     '/api/internal/campaign-worker': {
       id: '/api/internal/campaign-worker'
       path: '/api/internal/campaign-worker'
@@ -273,14 +566,39 @@ declare module '@tanstack/react-router' {
 interface AdminRouteChildren {
   AdminSectionRoute: typeof AdminSectionRoute
   AdminLoginRoute: typeof AdminLoginRoute
+  AdminIndexRoute: typeof AdminIndexRoute
 }
 
 const AdminRouteChildren: AdminRouteChildren = {
   AdminSectionRoute: AdminSectionRoute,
   AdminLoginRoute: AdminLoginRoute,
+  AdminIndexRoute: AdminIndexRoute,
 }
 
 const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
+
+interface GuidesRouteChildren {
+  GuidesMarkRoute: typeof GuidesMarkRoute
+  GuidesPromotionRoute: typeof GuidesPromotionRoute
+}
+
+const GuidesRouteChildren: GuidesRouteChildren = {
+  GuidesMarkRoute: GuidesMarkRoute,
+  GuidesPromotionRoute: GuidesPromotionRoute,
+}
+
+const GuidesRouteWithChildren =
+  GuidesRoute._addFileChildren(GuidesRouteChildren)
+
+interface MarkRouteChildren {
+  MarkAppRoute: typeof MarkAppRoute
+}
+
+const MarkRouteChildren: MarkRouteChildren = {
+  MarkAppRoute: MarkAppRoute,
+}
+
+const MarkRouteWithChildren = MarkRoute._addFileChildren(MarkRouteChildren)
 
 interface MiniAppRouteChildren {
   MiniAppSectionRoute: typeof MiniAppSectionRoute
@@ -299,10 +617,32 @@ const MiniAppRouteChildren: MiniAppRouteChildren = {
 const MiniAppRouteWithChildren =
   MiniAppRoute._addFileChildren(MiniAppRouteChildren)
 
+interface PromotionRouteChildren {
+  PromotionAppRoute: typeof PromotionAppRoute
+}
+
+const PromotionRouteChildren: PromotionRouteChildren = {
+  PromotionAppRoute: PromotionAppRoute,
+}
+
+const PromotionRouteWithChildren = PromotionRoute._addFileChildren(
+  PromotionRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AboutRoute: AboutRoute,
+  AcceptableUseRoute: AcceptableUseRoute,
   AdminRoute: AdminRouteWithChildren,
+  ContactRoute: ContactRoute,
+  FaqRoute: FaqRoute,
+  GuidesRoute: GuidesRouteWithChildren,
+  MarkRoute: MarkRouteWithChildren,
   MiniAppRoute: MiniAppRouteWithChildren,
+  PrivacyRoute: PrivacyRoute,
+  PromotionRoute: PromotionRouteWithChildren,
+  SecurityRoute: SecurityRoute,
+  TermsRoute: TermsRoute,
   ApiInternalCampaignWorkerRoute: ApiInternalCampaignWorkerRoute,
   ApiInternalEntitySendTestRoute: ApiInternalEntitySendTestRoute,
   ApiPublicTelegramWebhookRoute: ApiPublicTelegramWebhookRoute,

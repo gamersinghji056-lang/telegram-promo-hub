@@ -12,3 +12,9 @@ Allow: /
 
 User-agent: *
 Allow: /
+Disallow: /admin
+Disallow: /mini-app
+Disallow: /promotion/app
+Disallow: /mark/app
+
+Sitemap: https://tg.mark8bot.com/sitemap.xml

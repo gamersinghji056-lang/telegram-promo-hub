@@ -1,0 +1,2 @@
+import { createFileRoute } from "@tanstack/react-router"; import { PublicPage } from "@/components/public-site"; import { publicPageHead } from "@/lib/public-meta";
+export const Route=createFileRoute("/acceptable-use")({head:()=>publicPageHead("Acceptable Use","Responsible, permission-aware use of MARK8BOT Telegram products.","/acceptable-use"),component:()=> <PublicPage page="acceptable-use"/>});

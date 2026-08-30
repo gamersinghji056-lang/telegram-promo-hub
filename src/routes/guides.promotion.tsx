@@ -1,0 +1,2 @@
+import { createFileRoute } from "@tanstack/react-router"; import { PublicPage } from "@/components/public-site"; import { publicPageHead } from "@/lib/public-meta";
+export const Route = createFileRoute("/guides/promotion")({ head:()=>publicPageHead("Telegram Promotion Guide","Follow the live journey from bot registration and session linking through campaigns, analytics and settings.","/guides/promotion"), component:()=> <PublicPage page="guide-promotion"/> });

@@ -8,6 +8,7 @@ export const Route = createFileRoute("/admin")({
     { property: "og:description", content: "Secure platform operations and Telegram bot health." },
     { property: "og:type", content: "website" },
     { name: "twitter:card", content: "summary" },
+    { name: "robots", content: "noindex, nofollow" },
   ] }),
   component: Outlet,
 });

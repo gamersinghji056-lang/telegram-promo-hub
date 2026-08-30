@@ -1,0 +1,2 @@
+import { createFileRoute } from "@tanstack/react-router"; import { PublicPage } from "@/components/public-site"; import { publicPageHead } from "@/lib/public-meta";
+export const Route = createFileRoute("/guides/mark")({ head:()=>publicPageHead("How MARK Will Work","Explore the planned MARK knowledge, instruction, context and conversation workflow.","/guides/mark"), component:()=> <PublicPage page="guide-mark"/> });
