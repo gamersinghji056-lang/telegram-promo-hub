@@ -220,8 +220,8 @@ test("telegram bot uses selected language for commands, keyboards, and post-logi
   assert(webhook.includes('unknownCommand: "我没有识别此命令'));
   assert(webhook.includes("async function openMiniAppKeyboard(language?: string | null"));
   assert(webhook.includes('bt(language, "openMiniAppButton")'));
-  assert(webhook.includes("sendOpenMiniApp(chatId, language, bt(language, \"registrationOpenMiniApp\"), sessionToken)"));
-  assert(webhook.includes("sendOpenMiniApp(chatId, language, bt(language, \"loginOpenMiniApp\"), result.token)"));
+  assert(webhook.includes("sendOpenMiniApp(chatId, language, bt(language, \"registrationOpenMiniApp\"), sessionToken, \"registration_success\")"));
+  assert(webhook.includes("sendOpenMiniApp(chatId, language, bt(language, \"loginOpenMiniApp\"), result.token, \"login_success\")"));
   assert(webhook.includes('await send(chatId, bt(language, "unknownCommand"))'));
   assert(!webhook.includes('bt("en", "miniAppMissing")'));
 });
@@ -790,12 +790,30 @@ test("every Telegram Mini App entry point uses one canonical PUBLIC_APP_URL orig
   assert(telegram.includes("export function canonicalMiniAppUrl"));
   assert(telegram.includes('new URL("/mini-app"'));
   assert(telegram.includes('.endsWith(".railway.internal")'));
-  assert(webhook.includes("return canonicalMiniAppUrl()"));
-  assert(webhook.includes("openMiniAppKeyboard(language, sessionToken)"));
-  assert(webhook.includes("sendOpenMiniApp(chatId, language, bt(language, \"registrationOpenMiniApp\"), sessionToken)"));
-  assert(webhook.includes("sendOpenMiniApp(chatId, language, bt(language, \"loginOpenMiniApp\"), result.token)"));
+  assert(webhook.includes("const value = canonicalMiniAppUrl()"));
+  assert(webhook.includes("openMiniAppKeyboard(language, sessionToken, source)"));
+  assert(webhook.includes("sendOpenMiniApp(chatId, language, bt(language, \"registrationOpenMiniApp\"), sessionToken, \"registration_success\")"));
+  assert(webhook.includes("sendOpenMiniApp(chatId, language, bt(language, \"loginOpenMiniApp\"), result.token, \"login_success\")"));
   assert(!webhook.includes("s.mini_app_url"));
   assert(admin.includes("requested !== canonical"));
+});
+
+test("Telegram Mini App menu self-heals to the canonical URL without user-specific logic", () => {
+  const telegram = read("src/lib/telegram.server.ts");
+  const webhook = read("src/routes/api/public/telegram/webhook.ts");
+  const runtime = `${telegram}\n${webhook}`;
+  assert(telegram.includes("export async function syncMiniAppMenuButton"));
+  assert(telegram.includes('callBot<boolean>("setChatMenuButton"'));
+  assert(telegram.includes('type: "web_app"'));
+  assert(telegram.includes("web_app: { url }"));
+  assert(telegram.includes('>("getChatMenuButton", {})'));
+  assert(telegram.includes("await syncMiniAppMenuButton(true)"));
+  assert(webhook.includes('miniAppUrl("start_menu")'));
+  assert(webhook.includes("await syncMiniAppMenuButton()"));
+  assert(webhook.includes('"registration_success"'));
+  assert(webhook.includes('"login_success"'));
+  assert(webhook.includes("target.hash = `sess=${encodeURIComponent(sessionToken)}`"));
+  assert(!runtime.toLowerCase().includes("nazaraxnova"));
 });
 
 test("folder export reuses the selected account's suitable chatlist and records exact MTProto failures", () => {

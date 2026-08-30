@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { db, getSetting, logSystem } from "@/lib/db.server";
 import { deriveWebhookSecret, hashPassword, safeEqual, verifyPassword } from "@/lib/security.server";
-import { botToken, callBot, canonicalMiniAppUrl } from "@/lib/telegram.server";
+import { botToken, callBot, canonicalMiniAppUrl, syncMiniAppMenuButton } from "@/lib/telegram.server";
 import {
   clearTelegramFlow,
   createCustomerSessionForCustomer,
@@ -122,8 +122,11 @@ function updateChatId(update: Update) {
   );
 }
 
-async function miniAppUrl() {
-  return canonicalMiniAppUrl();
+async function miniAppUrl(source: string) {
+  const value = canonicalMiniAppUrl();
+  const url = new URL(value);
+  diagnostic("mini_app_url", { source, origin: url.origin, path: url.pathname });
+  return value;
 }
 
 async function setState(
@@ -204,16 +207,16 @@ function miniAppUrlWithSession(url: string, sessionToken?: string) {
   return target.toString();
 }
 
-async function openMiniAppKeyboard(language?: string | null, sessionToken?: string) {
-  const url = await miniAppUrl();
+async function openMiniAppKeyboard(language?: string | null, sessionToken?: string, source = "open") {
+  const url = await miniAppUrl(source);
   if (!url) return null;
   return {
     inline_keyboard: [[{ text: bt(language, "openMiniAppButton").toUpperCase(), web_app: { url: miniAppUrlWithSession(url, sessionToken) } }]],
   };
 }
 
-async function sendOpenMiniApp(chatId: number, language: string | null | undefined, text: string, sessionToken?: string) {
-  const keyboard = await openMiniAppKeyboard(language, sessionToken);
+async function sendOpenMiniApp(chatId: number, language: string | null | undefined, text: string, sessionToken?: string, source = "open") {
+  const keyboard = await openMiniAppKeyboard(language, sessionToken, source);
   await send(
     chatId,
     keyboard
@@ -265,7 +268,9 @@ async function persistBotLanguage(userId: number, language: string) {
 
 async function mainMenu(chatId: number, user: TgUser) {
   const language = await botLanguage(user);
-  const url = await miniAppUrl();
+  const url = await miniAppUrl("start_menu");
+  const menuSync = await syncMiniAppMenuButton();
+  if (!menuSync.ok) diagnostic("mini_app_menu_sync_failed", { error: menuSync.error });
   const { data: customer } = await db()
     .from("customers")
     .select("id")
@@ -447,7 +452,7 @@ async function handlePrivateText(msg: TgMessage) {
       customerId: result.customerId,
       tenantId: result.tenantId,
     });
-    await sendOpenMiniApp(chatId, language, bt(language, "registrationOpenMiniApp"), sessionToken);
+    await sendOpenMiniApp(chatId, language, bt(language, "registrationOpenMiniApp"), sessionToken, "registration_success");
     return;
   }
 
@@ -492,7 +497,7 @@ async function handlePrivateText(msg: TgMessage) {
       },
       { language },
     );
-    await sendOpenMiniApp(chatId, language, bt(language, "loginOpenMiniApp"), result.token);
+    await sendOpenMiniApp(chatId, language, bt(language, "loginOpenMiniApp"), result.token, "login_success");
     return;
   }
 

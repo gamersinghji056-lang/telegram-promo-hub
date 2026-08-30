@@ -165,6 +165,38 @@ export function canonicalMiniAppUrl(): string {
   return new URL("/mini-app", `${canonicalPublicAppOrigin()}/`).toString().replace(/\/$/, "");
 }
 
+let miniAppMenuSyncedAt = 0;
+
+export async function syncMiniAppMenuButton(force = false) {
+  const url = canonicalMiniAppUrl();
+  if (!force && Date.now() - miniAppMenuSyncedAt < 10 * 60_000) {
+    return { ok: true as const, url, cached: true };
+  }
+  const target = new URL(url);
+  const result = await callBot<boolean>("setChatMenuButton", {
+    menu_button: {
+      type: "web_app",
+      text: "Open Mini App",
+      web_app: { url },
+    },
+  });
+  console.info(JSON.stringify({
+    event: "telegram_mini_app_menu_sync",
+    origin: target.origin,
+    path: target.pathname,
+    ok: result.ok,
+    error: result.ok ? null : result.error,
+  }));
+  if (!result.ok) return result;
+  const verification = await callBot<{ type: string; text?: string; web_app?: { url?: string } }>("getChatMenuButton", {});
+  if (!verification.ok) return verification;
+  if (verification.result.type !== "web_app" || verification.result.web_app?.url !== url) {
+    return { ok: false as const, error: "Telegram menu button did not retain the canonical Mini App URL" };
+  }
+  miniAppMenuSyncedAt = Date.now();
+  return { ok: true as const, url, cached: false };
+}
+
 function configuredWebhookUrl(): string | null {
   try {
     return new URL("/api/public/telegram/webhook", `${canonicalPublicAppOrigin()}/`).toString();
@@ -223,6 +255,8 @@ export async function registerWebhook() {
     allowed_updates: ["message", "edited_message", "callback_query"],
   });
   if (!registration.ok) return registration;
+  const menu = await syncMiniAppMenuButton(true);
+  if (!menu.ok) return menu;
   const verification = await checkWebhook();
   if (!verification.ok) return verification;
   if (verification.result.url !== url) {
@@ -238,6 +272,8 @@ export async function registerWebhook() {
 export async function syncBotIdentity() {
   const res = await callBot<{ username: string; first_name: string; id: number }>("getMe", {});
   if (!res.ok) return res;
+  const menu = await syncMiniAppMenuButton(true);
+  if (!menu.ok) return menu;
   const current = await getSetting<Record<string, unknown>>("telegram");
   await db()
     .from("system_settings")
