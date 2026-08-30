@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { db, getSetting, logSystem } from "@/lib/db.server";
 import { deriveWebhookSecret, hashPassword, safeEqual, verifyPassword } from "@/lib/security.server";
-import { botToken, callBot, canonicalMiniAppUrl, syncMiniAppMenuButton } from "@/lib/telegram.server";
+import { botToken, callBot, canonicalMiniAppUrl, checkMiniAppOriginHealth, syncMiniAppMenuButton } from "@/lib/telegram.server";
 import {
   clearTelegramFlow,
   createCustomerSessionForCustomer,
@@ -216,7 +216,23 @@ async function openMiniAppKeyboard(language?: string | null, sessionToken?: stri
 }
 
 async function sendOpenMiniApp(chatId: number, language: string | null | undefined, text: string, sessionToken?: string, source = "open") {
+  const health = await checkMiniAppOriginHealth();
+  if (!health.ok) throw new Error(`Canonical Mini App endpoint is unavailable: ${health.error ?? "health check failed"}`);
   const keyboard = await openMiniAppKeyboard(language, sessionToken, source);
+  const buttonUrl = keyboard?.inline_keyboard[0]?.[0]?.web_app.url;
+  if (!buttonUrl) throw new Error("Canonical Mini App button URL could not be generated");
+  const parsed = new URL(buttonUrl);
+  if (parsed.protocol !== "https:" || parsed.pathname !== "/mini-app") {
+    throw new Error("Canonical Mini App button URL failed validation");
+  }
+  diagnostic("webapp_button_generated", {
+    source,
+    protocol: parsed.protocol,
+    hostname: parsed.hostname,
+    port: parsed.port || null,
+    pathname: parsed.pathname,
+    has_session_fragment: parsed.hash.startsWith("#sess=") && parsed.hash.length > 6,
+  });
   await send(
     chatId,
     keyboard
@@ -224,6 +240,7 @@ async function sendOpenMiniApp(chatId: number, language: string | null | undefin
       : `${text}\n\n${bt(language, "miniAppMissing")}`,
     keyboard ?? undefined,
   );
+  diagnostic("webapp_button_sent", { source, method: "sendMessage", ok: true });
 }
 
 async function botLanguage(user: TgUser) {

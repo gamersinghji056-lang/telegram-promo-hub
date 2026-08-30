@@ -816,6 +816,24 @@ test("Telegram Mini App menu self-heals to the canonical URL without user-specif
   assert(!runtime.toLowerCase().includes("nazaraxnova"));
 });
 
+test("login-success Web App payload is health-checked and logged without exposing its session", () => {
+  const telegram = read("src/lib/telegram.server.ts");
+  const webhook = read("src/routes/api/public/telegram/webhook.ts");
+  const admin = read("src/lib/admin-data.server.ts");
+  assert(telegram.includes("export async function checkMiniAppOriginHealth"));
+  assert(telegram.includes('redirect: "manual"'));
+  assert(telegram.includes("Date.now() - miniAppHealthCheckedAt < 5 * 60_000"));
+  assert(telegram.includes("export async function miniAppRuntimeDiagnostics"));
+  assert(admin.includes("miniAppRuntimeDiagnostics()"));
+  assert(webhook.includes("const health = await checkMiniAppOriginHealth()"));
+  assert(webhook.includes('diagnostic("webapp_button_generated"'));
+  assert(webhook.includes("hostname: parsed.hostname"));
+  assert(webhook.includes("pathname: parsed.pathname"));
+  assert(webhook.includes('has_session_fragment: parsed.hash.startsWith("#sess=")'));
+  assert(webhook.includes('diagnostic("webapp_button_sent", { source, method: "sendMessage", ok: true })'));
+  assert(!webhook.includes("session_fragment: parsed.hash,"));
+});
+
 test("folder export reuses the selected account's suitable chatlist and records exact MTProto failures", () => {
   const funcs = read("src/lib/customer.functions.ts");
   const data = read("src/lib/customer-data.server.ts");

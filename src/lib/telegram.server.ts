@@ -165,7 +165,68 @@ export function canonicalMiniAppUrl(): string {
   return new URL("/mini-app", `${canonicalPublicAppOrigin()}/`).toString().replace(/\/$/, "");
 }
 
+let miniAppHealthCheckedAt = 0;
+let miniAppHealthResult: { ok: boolean; status: number | null; error: string | null } | null = null;
+
+export async function checkMiniAppOriginHealth(force = false) {
+  const url = canonicalMiniAppUrl();
+  if (!force && miniAppHealthResult && Date.now() - miniAppHealthCheckedAt < 5 * 60_000) {
+    return { ...miniAppHealthResult, url, cached: true };
+  }
+  let result: { ok: boolean; status: number | null; error: string | null };
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      redirect: "manual",
+      signal: AbortSignal.timeout(5_000),
+      headers: { "User-Agent": "telegram-promo-hub-origin-health/1.0" },
+    });
+    result = {
+      ok: response.status >= 200 && response.status < 400,
+      status: response.status,
+      error: response.status >= 200 && response.status < 400 ? null : `Mini App endpoint returned HTTP ${response.status}`,
+    };
+  } catch (error) {
+    result = { ok: false, status: null, error: error instanceof Error ? error.message : "Mini App endpoint check failed" };
+  }
+  miniAppHealthCheckedAt = Date.now();
+  miniAppHealthResult = result;
+  const target = new URL(url);
+  console.info(JSON.stringify({
+    event: "telegram_mini_app_origin_health",
+    origin: target.origin,
+    path: target.pathname,
+    ok: result.ok,
+    status: result.status,
+    error: result.error,
+  }));
+  return { ...result, url, cached: false };
+}
+
 let miniAppMenuSyncedAt = 0;
+
+export async function checkMiniAppMenuButton() {
+  const url = canonicalMiniAppUrl();
+  const verification = await callBot<{ type: string; text?: string; web_app?: { url?: string } }>("getChatMenuButton", {});
+  if (!verification.ok) return verification;
+  if (verification.result.type !== "web_app" || verification.result.web_app?.url !== url) {
+    return { ok: false as const, error: "Telegram menu button does not match the canonical Mini App URL" };
+  }
+  return { ok: true as const, url };
+}
+
+export async function miniAppRuntimeDiagnostics() {
+  const [originHealth, menuHealth] = await Promise.all([
+    checkMiniAppOriginHealth(),
+    checkMiniAppMenuButton(),
+  ]);
+  return {
+    canonical_origin: originHealth.ok ? "OK" : "FAILED",
+    mini_app_endpoint: originHealth.ok ? "OK" : "FAILED",
+    mini_app_endpoint_http_status: originHealth.status,
+    telegram_menu_sync: menuHealth.ok ? "OK" : "FAILED",
+  };
+}
 
 export async function syncMiniAppMenuButton(force = false) {
   const url = canonicalMiniAppUrl();
@@ -188,11 +249,8 @@ export async function syncMiniAppMenuButton(force = false) {
     error: result.ok ? null : result.error,
   }));
   if (!result.ok) return result;
-  const verification = await callBot<{ type: string; text?: string; web_app?: { url?: string } }>("getChatMenuButton", {});
+  const verification = await checkMiniAppMenuButton();
   if (!verification.ok) return verification;
-  if (verification.result.type !== "web_app" || verification.result.web_app?.url !== url) {
-    return { ok: false as const, error: "Telegram menu button did not retain the canonical Mini App URL" };
-  }
   miniAppMenuSyncedAt = Date.now();
   return { ok: true as const, url, cached: false };
 }

@@ -7,6 +7,7 @@ import {
   syncBotIdentity,
   telegramSettings,
   canonicalMiniAppUrl,
+  miniAppRuntimeDiagnostics,
 } from "./telegram.server";
 import type { MessagePayload } from "./telegram.server";
 import { sendDiagnosticCampaignMessage, type DiagnosticTargetType } from "./campaign-worker.server";
@@ -900,6 +901,7 @@ export type PlatformSettings = {
   discovery: { provider_url?: string; provider_key?: string };
   monitor?: Awaited<ReturnType<typeof tronMonitorHealth>>;
   telegramDiagnostics?: Awaited<ReturnType<typeof adminTelegramDiagnosticsStatus>>;
+  miniAppDiagnostics?: Awaited<ReturnType<typeof miniAppRuntimeDiagnostics>>;
 };
 
 export async function adminTelegramDiagnosticsStatus() {
@@ -925,7 +927,7 @@ export async function adminTelegramDiagnosticsStatus() {
 }
 
 export async function adminSettings(): Promise<PlatformSettings> {
-  const [general, registration, payments, notifications, telegram, discovery, monitor, telegramDiagnostics] = await Promise.all([
+  const [general, registration, payments, notifications, telegram, discovery, monitor, telegramDiagnostics, miniAppDiagnostics] = await Promise.all([
     getSetting<PlatformSettings["general"]>("general"),
     getSetting<PlatformSettings["registration"]>("registration"),
     getSetting<PlatformSettings["payments"]>("payments").then((settings) => normalizePaymentSettings(settings)),
@@ -934,8 +936,9 @@ export async function adminSettings(): Promise<PlatformSettings> {
     getSetting<PlatformSettings["discovery"]>("discovery"),
     tronMonitorHealth(),
     adminTelegramDiagnosticsStatus(),
+    miniAppRuntimeDiagnostics(),
   ]);
-  return { general, registration, payments, notifications, telegram, discovery, monitor, telegramDiagnostics };
+  return { general, registration, payments, notifications, telegram, discovery, monitor, telegramDiagnostics, miniAppDiagnostics };
 }
 
 export async function adminRegistration() {

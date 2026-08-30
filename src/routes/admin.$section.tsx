@@ -1434,6 +1434,7 @@ function AdminTable({ rows, columns, render }: { rows: AnyData[]; columns: strin
 function TelegramHealth({ data, reload }: { data: any; reload: () => Promise<void> }) {
   const tg = data?.telegram ?? {};
   const diagnostics = data?.telegramDiagnostics ?? {};
+  const miniAppDiagnostics = data?.miniAppDiagnostics ?? {};
   const healthy = tg.webhook_status === "HEALTHY";
   const [result, setResult] = useState("");
   const [miniAppUrl, setMiniAppUrl] = useState(String(tg.mini_app_url ?? ""));
@@ -1498,6 +1499,9 @@ function TelegramHealth({ data, reload }: { data: any; reload: () => Promise<voi
           {[
             ["Bot token", tg.token_configured ? "Configured" : "Missing"],
             ["Webhook", tg.webhook_status],
+            ["Canonical Mini App origin", miniAppDiagnostics.canonical_origin ?? "NOT CHECKED"],
+            ["Mini App /mini-app endpoint", miniAppDiagnostics.mini_app_endpoint ?? "NOT CHECKED"],
+            ["Telegram menu sync", miniAppDiagnostics.telegram_menu_sync ?? "NOT CHECKED"],
             ["Pending updates", tg.webhook_pending_updates],
             [
               "Last successful update",
