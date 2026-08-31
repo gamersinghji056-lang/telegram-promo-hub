@@ -122,3 +122,25 @@ test("final Mini App density keeps compact shared cards, icons, avatar, and navi
   assert(shell.includes('className="size-6 shrink-0'));
   assert(styles.includes("--miniapp-bottom-nav-height: 4.375rem"));
 });
+
+test("Mini App supports direct login while preserving Telegram session handoff", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  const functions = read("src/lib/customer.functions.ts");
+  assert(functions.includes("directMiniAppLogin"));
+  assert(functions.includes("loginCustomer({ email: i.email, password: i.password })"));
+  assert(route.includes("DirectMiniAppLogin"));
+  assert(route.includes('sessionStorage.setItem("customer-session", result.token)'));
+  assert(route.includes("Bot sessions continue automatically."));
+  assert(route.includes('return `tma ${telegram.initData}`'));
+  assert(route.includes('return `sess ${session}`'));
+});
+
+test("Promotion Mini App uses LARA helper only", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  const shell = read("src/components/mini-app-shell.tsx");
+  const assistant = read("src/lib/assistant-knowledge.ts");
+  assert(shell.includes('<FloatingAssistant config={promotionAssistant}'));
+  assert(route.includes('<FloatingAssistant config={promotionAssistant} pageContext="login: Promotion Mini App access"'));
+  assert(assistant.includes('scope: "promotion-mini-app"'));
+  assert(assistant.includes("does not answer as the public website assistant"));
+});

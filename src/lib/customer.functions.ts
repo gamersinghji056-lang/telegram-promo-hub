@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import {
   changeCustomerPassword,
   getCustomerAccountSettings,
+  loginCustomer,
   loginCustomerFromFlow,
   logoutCustomer,
   registerCustomerFromFlow,
@@ -33,6 +34,14 @@ export const completeRegistration = createServerFn({ method: "POST" })
 export const completeLogin = createServerFn({ method: "POST" })
   .inputValidator((i: { flowToken: string; email: string; password: string }) => i)
   .handler(async ({ data: i }) => loginCustomerFromFlow(i));
+
+export const directMiniAppLogin = createServerFn({ method: "POST" })
+  .inputValidator((i: { email: string; password: string }) => i)
+  .handler(async ({ data: i }) => {
+    const result = await loginCustomer({ email: i.email, password: i.password });
+    if (!result.ok) throw new Error(result.error);
+    return { token: result.token, customerId: result.customerId, tenantId: result.tenantId };
+  });
 
 export const logout = createServerFn({ method: "POST" })
   .inputValidator((i: Auth) => i)

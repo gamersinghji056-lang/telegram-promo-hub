@@ -37,6 +37,7 @@ import {
   X,
 } from "lucide-react";
 import { MiniAppShell } from "@/components/mini-app-shell";
+import { FloatingAssistant } from "@/components/floating-assistant";
 import { ProductIcon, type ProductIconName } from "@/components/product-icon";
 import { TgsPlayer } from "@/components/tgs-player";
 import { Button } from "@/components/ui/button";
@@ -128,12 +129,14 @@ import {
   updateCampaign,
   updateAccountName,
   changeAccountPassword,
+  directMiniAppLogin,
   verifyConnectionCode,
   verifyConnectionPassword,
   testWritableGroups,
   verifyWritableGroups,
 } from "@/lib/customer.functions";
 import { applyThemePreference } from "@/lib/theme";
+import { promotionAssistant } from "@/lib/assistant-knowledge";
 import { MINI_LANGUAGE_LABELS, applyMiniAppTranslations, miniT, normalizeMiniLanguage } from "@/lib/mini-i18n";
 
 const valid = new Set([
@@ -242,7 +245,7 @@ const sectionVisual: Record<string, ProductIconName> = {
   "growth-intelligence": "growth", "refer-earn": "referral", billing: "billing",
 };
 
-const AUTH_REQUIRED_MESSAGE = "Please login or register in @wpaypromotionbot first.";
+const AUTH_REQUIRED_MESSAGE = "Login to continue inside Telegram Promotion.";
 
 export const Route = createFileRoute("/mini-app/$section")({
   head: ({ params }: { params: { section: string } }) => ({
@@ -363,6 +366,67 @@ function healthColor(score: number) {
   return `hsl(${Math.round(clamped * 1.2)}, 78%, 45%)`;
 }
 
+function DirectMiniAppLogin({
+  login,
+  onSuccess,
+}: {
+  login: (email: string, password: string) => Promise<{ token: string }>;
+  onSuccess: (token: string) => void;
+}) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const result = await login(email, password);
+      sessionStorage.setItem("customer-session", result.token);
+      onSuccess(result.token);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Login failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className="mini-app-compact grid min-h-screen place-items-center bg-background p-4 text-foreground">
+      <section className={panelClass("w-full max-w-sm space-y-4")}>
+        <div className="flex items-center gap-3">
+          <ProductIcon name="avatar" className="size-11 shrink-0" />
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-primary">Telegram Promotion</p>
+            <h1 className="text-lg font-semibold">Login to the Mini App</h1>
+          </div>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Bot sessions continue automatically. If no valid bot session is present, use your existing customer account here.
+        </p>
+        <form className="space-y-3" onSubmit={submit}>
+          <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
+            Email
+            <input className={inputClass()} type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} />
+          </label>
+          <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
+            Password
+            <input className={inputClass()} type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} />
+          </label>
+          {error ? <p className="rounded-lg border border-destructive/30 bg-destructive/10 p-2 text-xs text-destructive">{error}</p> : null}
+          <Button className="w-full" type="submit" disabled={busy}>{busy ? "Logging in..." : "LOGIN"}</Button>
+        </form>
+        <p className="text-xs text-muted-foreground">
+          New users can still register through the Promotion bot. Support: <a className="font-semibold text-primary" href="https://t.me/laura_luxee" target="_blank" rel="noreferrer">@laura_luxee</a>.
+        </p>
+      </section>
+      <FloatingAssistant config={promotionAssistant} pageContext="login: Promotion Mini App access" />
+    </main>
+  );
+}
+
 function MiniAppSection() {
   const { section } = Route.useParams();
   const dashboardFn = useServerFn(getDashboard);
@@ -385,6 +449,7 @@ function MiniAppSection() {
   const audienceFn = useServerFn(findAudience);
   const audienceDiscoveryFn = useServerFn(getAudienceDiscoveryState);
   const bulkJoinStateFn = useServerFn(getBulkJoinState);
+  const directLoginFn = useServerFn(directMiniAppLogin);
 
   const actions = {
     addConnection: useServerFn(addConnection),
@@ -652,7 +717,7 @@ function MiniAppSection() {
     setData(null);
     setProfile(null);
     cacheRef.current.clear();
-    setError("You have signed out. Return to the bot to open a secure session.");
+    setError(AUTH_REQUIRED_MESSAGE);
   }
 
   async function runAction(label: string, fn: () => Promise<void>) {
@@ -811,9 +876,14 @@ function MiniAppSection() {
 
   if (error === AUTH_REQUIRED_MESSAGE) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-background p-5 text-center text-foreground">
-        <p className="max-w-xs text-base font-medium">{AUTH_REQUIRED_MESSAGE}</p>
-      </main>
+      <DirectMiniAppLogin
+        login={(email, password) => directLoginFn({ data: { email, password } })}
+        onSuccess={(token) => {
+          setAuth(`sess ${token}`);
+          setError("");
+          void load(true);
+        }}
+      />
     );
   }
 

@@ -22,11 +22,26 @@ test("product availability is centralized and MARK never exposes a fake launch d
   const config = read("src/lib/public-site.functions.ts");
   assert(publicSite.includes('promotion: "live"'));
   assert(publicSite.includes('mark: "coming_soon"'));
-  assert(publicSite.includes("MARK is coming soon"));
   assert(publicSite.includes("The MARK Intelligence workspace is currently in development."));
+  assert(publicSite.includes("MARK - Intelligence built around your business."));
+  assert(!read("src/routes/mark.tsx").includes("Coming Soon"));
   assert(!config.includes("MARK_BOT_USERNAME"));
   assert(!publicSite.includes("Open MARK Bot"));
   assert(!publicSite.includes("https://t.me/mark"));
+});
+
+test("public website has MARK8LARA only and keeps assistant knowledge separate", () => {
+  const shell = read("src/components/public-site.tsx");
+  const assistant = read("src/lib/assistant-knowledge.ts");
+  const miniShell = read("src/components/mini-app-shell.tsx");
+  assert(shell.includes("websiteAssistant"));
+  assert(shell.includes("<FloatingAssistant config={websiteAssistant}"));
+  assert(assistant.includes('name: "MARK8LARA"'));
+  assert(assistant.includes('name: "LARA"'));
+  assert(assistant.includes("MARK8LARA is the public MARK8BOT website guide"));
+  assert(assistant.includes("LARA is only the Telegram Promotion Mini App helper"));
+  assert(miniShell.includes("promotionAssistant"));
+  assert(!miniShell.includes("websiteAssistant"));
 });
 
 test("Promotion bot destination comes from current Telegram settings without a username fallback", () => {
@@ -84,6 +99,8 @@ test("homepage explains real Promotion workflows and official support without fa
   assert(publicSite.includes("HOW TO USE TELEGRAM PROMOTION"));
   assert(publicSite.includes("Audience / Groups / Categories"));
   assert(publicSite.includes("Sessions and health"));
+  assert(publicSite.includes("Meet LARA - your in-workspace Promotion assistant."));
+  assert(publicSite.includes("Voice-driven workflow control is planned for the future."));
   assert(publicSite.includes("@laura_luxee"));
   assert(config.includes('"laura_luxee"'));
   assert(!publicSite.includes("99.9%"));

@@ -1,7 +1,9 @@
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
+import { FloatingAssistant } from "@/components/floating-assistant";
 import { ProductIcon, type ProductIconName } from "@/components/product-icon";
 import { TelegramPromotionMark } from "@/components/telegram-promotion-mark";
+import { promotionAssistant } from "@/lib/assistant-knowledge";
 
 const primaryItems = [
   { slug: "dashboard", label: "Home", icon: "home" },
@@ -66,6 +68,7 @@ export function MiniAppShell({ active, children, headerActions }: { active: stri
         </div>
       </header>
       <main className="mx-auto w-full max-w-4xl p-3 sm:p-4">{children}</main>
+      <FloatingAssistant config={promotionAssistant} pageContext={`${active}: ${activePrimary} workspace`} />
       <nav
         aria-label="Primary navigation"
         className="fixed inset-x-0 bottom-0 z-30 border-t border-border/80 bg-card/95 shadow-[0_-8px_30px_rgba(2,6,23,0.12)] backdrop-blur-xl transition-transform"
