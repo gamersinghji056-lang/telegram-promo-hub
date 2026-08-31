@@ -26,7 +26,7 @@ test("product availability is centralized and MARK never exposes a fake launch d
   assert(publicSite.includes("The MARK Intelligence workspace is currently in development."));
   assert(!config.includes("MARK_BOT_USERNAME"));
   assert(!publicSite.includes("Open MARK Bot"));
-  assert(!publicSite.includes("Try MARK"));
+  assert(!publicSite.includes("https://t.me/mark"));
 });
 
 test("Promotion bot destination comes from current Telegram settings without a username fallback", () => {
@@ -49,16 +49,45 @@ test("Promotion route compatibility preserves the live Mini App query and sessio
 test("worker roles preserve combined production behavior and keep MARK foundation inert", () => {
   const role = read("src/lib/runtime-role.server.ts");
   const server = read("src/server.ts");
+  const workers = read("src/lib/background-workers.server.ts");
   const markWorker = read("workers/mark-intelligence-worker.mjs");
   const pkg = JSON.parse(read("package.json"));
   assert(role.includes('return "combined"'));
+  assert(role.includes('"telegram-worker"'));
+  assert(role.includes('"blockchain-worker"'));
+  assert(role.includes('"order-worker"'));
+  assert(role.includes('"promotion-bot"'));
+  assert(role.includes('"mark-ai"'));
   assert(server.includes("shouldRunPromotionWorkers(role)"));
+  assert(server.includes("shouldRunOrderWorkers(role)"));
+  assert(server.includes("shouldRunBlockchainWorkers(role)"));
+  assert(server.includes("shouldRunTelegramWorkers(role)"));
+  assert(workers.includes("runOrders"));
+  assert(workers.includes("runBlockchain"));
+  assert(workers.includes("runTelegram"));
   assert(pkg.scripts["start:promotion-worker"].includes("telegram-promotion-worker"));
-  assert(pkg.scripts["start:mark-worker"].includes("mark-intelligence-worker"));
+  assert(pkg.scripts["start:telegram-worker"].includes("telegram-worker"));
+  assert(pkg.scripts["start:blockchain-worker"].includes("blockchain-worker"));
+  assert(pkg.scripts["start:order-worker"].includes("order-worker"));
+  assert(pkg.scripts["start:promotion-bot"].includes("promotion-bot"));
+  assert(pkg.scripts["start:mark-worker"].includes("mark-ai"));
   assert(markWorker.includes('request.url === "/health"'));
   assert(markWorker.includes('status: "coming_soon"'));
   assert(!markWorker.includes("TELEGRAM_BOT_TOKEN"));
   assert(!markWorker.toLowerCase().includes("openai"));
+});
+
+test("homepage explains real Promotion workflows and official support without fake proof", () => {
+  const publicSite = read("src/components/public-site.tsx");
+  const config = read("src/lib/public-site.functions.ts");
+  assert(publicSite.includes("Connect sessions, discover audiences, organize groups, prepare campaigns"));
+  assert(publicSite.includes("HOW TO USE TELEGRAM PROMOTION"));
+  assert(publicSite.includes("Audience / Groups / Categories"));
+  assert(publicSite.includes("Sessions and health"));
+  assert(publicSite.includes("@laura_luxee"));
+  assert(config.includes('"laura_luxee"'));
+  assert(!publicSite.includes("99.9%"));
+  assert(!publicSite.includes("testimonial"));
 });
 
 test("sitemap indexes only public marketing routes and robots protects operational paths", () => {

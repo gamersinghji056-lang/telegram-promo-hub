@@ -1,8 +1,8 @@
 import { createServer } from "node:http";
 
 const role = process.env.MARK8BOT_RUNTIME_ROLE?.trim();
-if (role !== "mark-intelligence-worker") {
-  throw new Error("MARK Intelligence worker requires MARK8BOT_RUNTIME_ROLE=mark-intelligence-worker");
+if (role !== "mark-ai" && role !== "mark-intelligence-worker") {
+  throw new Error("MARK Intelligence worker requires MARK8BOT_RUNTIME_ROLE=mark-ai");
 }
 
 const port = Number(process.env.PORT ?? 8080);

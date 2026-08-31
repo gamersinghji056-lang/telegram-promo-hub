@@ -5,6 +5,7 @@ import { telegramSettings } from "./telegram.server";
 export const getPublicProductConfig = createServerFn({ method: "GET" }).handler(async () => {
   const [telegram, support] = await Promise.all([telegramSettings(), supportSettings()]);
   const username = telegram.bot_username.replace(/^@/, "").trim();
+  const supportUsername = support.telegramUsername || "laura_luxee";
   return {
     promotion: {
       status: "live" as const,
@@ -12,7 +13,8 @@ export const getPublicProductConfig = createServerFn({ method: "GET" }).handler(
     },
     mark: { status: "coming_soon" as const },
     support: {
-      telegramUrl: support.telegramUrl || null,
+      telegramUsername: supportUsername,
+      telegramUrl: `https://t.me/${supportUsername}`,
       email: support.email || null,
     },
   };
