@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" role="img" aria-label="MARK8LARA assistant avatar">
+  <defs>
+    <radialGradient id="bg" cx="34%" cy="22%" r="80%">
+      <stop offset="0" stop-color="#8db5ff"/>
+      <stop offset=".42" stop-color="#5948d9"/>
+      <stop offset="1" stop-color="#111827"/>
+    </radialGradient>
+    <linearGradient id="hair" x1="33" x2="126" y1="25" y2="125">
+      <stop offset="0" stop-color="#21142f"/>
+      <stop offset=".55" stop-color="#40205b"/>
+      <stop offset="1" stop-color="#0f172a"/>
+    </linearGradient>
+    <linearGradient id="skin" x1="64" x2="104" y1="47" y2="116">
+      <stop offset="0" stop-color="#ffd5bf"/>
+      <stop offset="1" stop-color="#d8957d"/>
+    </linearGradient>
+    <linearGradient id="suit" x1="34" x2="128" y1="104" y2="154">
+      <stop offset="0" stop-color="#1d4ed8"/>
+      <stop offset=".55" stop-color="#6d28d9"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+  </defs>
+  <circle cx="80" cy="80" r="78" fill="url(#bg)"/>
+  <circle cx="80" cy="80" r="73" fill="none" stroke="#b7d2ff" stroke-opacity=".22" stroke-width="2"/>
+  <path fill="url(#hair)" d="M35 78c0-34 19-55 46-55 28 0 47 21 47 55 0 27-12 48-26 57H58C44 126 35 105 35 78Z"/>
+  <path fill="url(#suit)" d="M29 150c6-28 25-43 51-43s45 15 51 43H29Z"/>
+  <path fill="#eef6ff" d="m66 111 14 24 15-24c-10 7-20 7-29 0Z" opacity=".88"/>
+  <path fill="url(#skin)" d="M52 77c0-25 11-42 29-42s29 17 29 42c0 23-13 42-29 42S52 100 52 77Z"/>
+  <path fill="#2b1838" d="M51 69c23-6 37-17 45-34 12 7 19 19 20 34-7-26-24-40-36-40-16 0-28 13-29 40Z"/>
+  <circle cx="68" cy="80" r="3" fill="#1f2937"/>
+  <circle cx="94" cy="80" r="3" fill="#1f2937"/>
+  <path fill="none" stroke="#8b4a5d" stroke-linecap="round" stroke-width="3" d="M72 98c6 5 13 5 19 0"/>
+  <path fill="#7dd3fc" d="M121 55c10 4 15 11 15 22s-5 18-15 22v-9c5-3 8-7 8-13s-3-10-8-13v-9Z"/>
+  <path fill="#c084fc" d="M39 55c-10 4-15 11-15 22s5 18 15 22v-9c-5-3-8-7-8-13s3-10 8-13v-9Z"/>
+</svg>

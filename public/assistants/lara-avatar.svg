@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" role="img" aria-label="LARA promotion assistant avatar">
+  <defs>
+    <radialGradient id="bg" cx="68%" cy="20%" r="82%">
+      <stop offset="0" stop-color="#67e8f9"/>
+      <stop offset=".46" stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#061525"/>
+    </radialGradient>
+    <linearGradient id="hair" x1="44" x2="116" y1="23" y2="124">
+      <stop offset="0" stop-color="#10243f"/>
+      <stop offset=".5" stop-color="#164e86"/>
+      <stop offset="1" stop-color="#111827"/>
+    </linearGradient>
+    <linearGradient id="skin" x1="57" x2="106" y1="43" y2="118">
+      <stop offset="0" stop-color="#ffd9c7"/>
+      <stop offset="1" stop-color="#c98270"/>
+    </linearGradient>
+    <linearGradient id="suit" x1="24" x2="136" y1="108" y2="154">
+      <stop offset="0" stop-color="#06b6d4"/>
+      <stop offset=".52" stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#8b5cf6"/>
+    </linearGradient>
+  </defs>
+  <circle cx="80" cy="80" r="78" fill="url(#bg)"/>
+  <path fill="#dff9ff" fill-opacity=".22" d="M21 109c22 16 52 22 86 14 19-5 31-13 39-24-3 28-28 50-64 55-27 3-50-4-61-45Z"/>
+  <path fill="url(#hair)" d="M38 78c0-33 18-55 44-55 25 0 43 21 43 53 0 29-10 51-28 61H61C45 127 38 106 38 78Z"/>
+  <path fill="url(#suit)" d="M27 151c7-29 25-45 54-45 28 0 46 16 53 45H27Z"/>
+  <path fill="#e6fbff" d="m65 110 16 19 15-19c-10 6-21 6-31 0Z" opacity=".9"/>
+  <path fill="url(#skin)" d="M52 75c0-24 11-40 29-40s29 16 29 40c0 24-13 43-29 43S52 99 52 75Z"/>
+  <path fill="#11324f" d="M52 67c20-3 34-12 43-29 11 8 17 17 20 29-4-27-18-40-34-40-17 0-29 14-29 40Z"/>
+  <circle cx="69" cy="80" r="3" fill="#0f172a"/>
+  <circle cx="95" cy="80" r="3" fill="#0f172a"/>
+  <path fill="none" stroke="#814052" stroke-linecap="round" stroke-width="3" d="M72 98c6 5 13 5 19 0"/>
+  <path fill="#22d3ee" d="M123 59c9 5 13 11 13 21s-4 16-13 21v-10c4-2 6-6 6-11s-2-9-6-12v-9Z"/>
+  <path fill="#a78bfa" d="M38 59c-9 5-13 11-13 21s4 16 13 21V91c-4-2-6-6-6-11s2-9 6-12v-9Z"/>
+</svg>

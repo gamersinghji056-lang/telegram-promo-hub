@@ -195,7 +195,16 @@ function ProductFrame({ kind = "promotion", mode = "overview" }: { kind?: "promo
   return <div className="product-frame product-frame-real" aria-label={`${mode} Telegram Promotion interface preview`}>
     <div className="product-frame-bar"><i /><i /><i /><span>Telegram Promotion workspace</span></div>
     <div className="preview-shell">
-      <aside><BrandMark compact /><span className="active" /><span /><span /><span /></aside>
+      <aside className="preview-nav">
+        <BrandMark compact />
+        {[
+          [BarChart3, "Overview"],
+          [Send, "Campaigns"],
+          [Users, "Groups"],
+          [Bot, "Sessions"],
+          [Gauge, "Growth"],
+        ].map(([Icon, label], index) => <span key={String(label)} className={index === 0 ? "active" : ""}><RichIcon icon={Icon as LucideIcon} /><em>{String(label)}</em></span>)}
+      </aside>
       <section>
         <div className="preview-head"><div><strong>{previewTitle(mode)}</strong><small>{previewSubtitle(mode)}</small></div><b>LIVE</b></div>
         {mode === "campaigns" ? <CampaignPreview /> : mode === "audience" ? <AudiencePreview /> : mode === "sessions" ? <SessionsPreview /> : mode === "analytics" ? <AnalyticsPreview /> : mode === "growth" ? <GrowthPreview /> : mode === "activity" ? <ActivityPreview /> : <OverviewPreview />}
@@ -213,7 +222,7 @@ function previewSubtitle(mode: string) {
 }
 
 function OverviewPreview() {
-  return <><div className="preview-metrics">{previewMetrics.map(([Icon, label, detail]) => <article key={label}><Icon /><span>{label}</span><small>{detail}</small></article>)}</div><div className="preview-chart"><b /><b /><b /><b /><b /><b /></div><PreviewRows rows={["Campaign ready for review", "Writable groups verified", "Growth collection updated"]} /></>;
+  return <><div className="preview-metrics">{previewMetrics.map(([Icon, label, detail]) => <article key={label}><Icon /><span>{label}</span><small>{detail}</small></article>)}</div><div className="preview-dashboard-grid"><div className="preview-line-chart"><svg viewBox="0 0 220 92" aria-hidden="true"><path d="M8 76 C42 62 48 35 78 44 S126 86 154 45 190 28 212 18" /><path d="M8 84 C46 76 62 62 91 65 S128 76 160 54 194 51 214 39" /></svg></div><div className="preview-mini-table"><p><span>Category</span><b>Status</b></p><p><span>Approved</span><b>Ready</b></p><p><span>Writable</span><b>Checked</b></p><p><span>Growth</span><b>Updated</b></p></div></div><PreviewRows rows={["Campaign ready for review", "Writable groups verified", "Growth collection updated"]} /></>;
 }
 
 function CampaignPreview() {
@@ -256,7 +265,7 @@ const promotionCapabilities = [
 function HomePage() {
   return <MarketingShell>{({ showChooser, showMark, config }) => <>
     <section className="public-hero"><div className="public-container public-hero-grid">
-      <div><p className="public-eyebrow">TELEGRAM-FIRST SOFTWARE</p><h1>MARK8BOT</h1><p className="public-lead">MARK8BOT builds Telegram products for promotion, organization and intelligence, starting with a live Promotion workspace and a separate MARK assistant in development.</p><div className="public-actions"><button className="public-button public-button-primary" onClick={showChooser}>Explore Products <ArrowRight /></button><a className="public-button public-button-secondary" href="/guides/promotion">How Telegram Promotion Works</a></div><div className="public-trust-strip"><span><Check /> Telegram Promotion is live</span><span><Sparkles /> MARK is being built separately</span><span><ShieldCheck /> Customer-controlled workflows</span></div></div>
+      <div><p className="public-eyebrow">TELEGRAM-FIRST SOFTWARE</p><h1>MARK8BOT <span>Promotion Command Center</span></h1><p className="public-lead">Run Telegram promotion from a polished workspace built for sessions, groups, audiences, campaigns, billing, Analytics and Growth Intelligence, with MARK kept as a separate intelligence product.</p><div className="public-actions"><button className="public-button public-button-primary" onClick={showChooser}>Explore Products <ArrowRight /></button><a className="public-button public-button-secondary" href="/guides/promotion">How Telegram Promotion Works</a></div><div className="hero-product-strip"><span>Find Groups</span><span>DM Campaigns</span><span>Group Campaigns</span><span>Session Health</span><span>Growth Intelligence</span><span>Add Users</span></div><div className="public-trust-strip"><span><Check /> Telegram Promotion is live</span><span><Sparkles /> MARK is being built separately</span><span><ShieldCheck /> Customer-controlled workflows</span></div></div>
       <div className="hero-composition"><ProductFrame mode="overview" /><div className="hero-mark-card"><div className="public-mark-symbol"><BrainCircuit /></div><strong>MARK</strong><span>Intelligence built around your business.</span><button onClick={showMark}>Start MARK</button></div></div>
     </div></section>
     <section className="public-section" id="products"><div className="public-container"><SectionHeading eyebrow="OUR PRODUCTS" title="Two products with separate product boundaries." copy="Telegram Promotion is live today. MARK is the separate intelligence product built around business context." />

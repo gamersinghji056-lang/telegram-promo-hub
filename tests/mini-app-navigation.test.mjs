@@ -139,8 +139,26 @@ test("Promotion Mini App uses LARA helper only", () => {
   const route = read("src/routes/mini-app.$section.tsx");
   const shell = read("src/components/mini-app-shell.tsx");
   const assistant = read("src/lib/assistant-knowledge.ts");
+  const floating = read("src/components/floating-assistant.tsx");
   assert(shell.includes('<FloatingAssistant config={promotionAssistant}'));
   assert(route.includes('<FloatingAssistant config={promotionAssistant} pageContext="login: Promotion Mini App access"'));
   assert(assistant.includes('scope: "promotion-mini-app"'));
   assert(assistant.includes("does not answer as the public website assistant"));
+  assert(assistant.includes("Campaigns are split into DM Promotion and Group Promotion"));
+  assert(assistant.includes('avatarSrc: "/assistants/lara-avatar.svg"'));
+  assert(floating.includes("speechSynthesis.speak"));
+  assert(floating.includes("panelPlacement"));
+  assert(!route.includes("Meet MARK"));
+  assert(!route.includes("MARK - Intelligence built around your business"));
+});
+
+test("Promotion dashboard keeps real-data visuals without MARK product cards", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  assert(route.includes("Promotion pulse"));
+  assert(route.includes("Campaign and audience movement"));
+  assert(route.includes("DashboardSignalCard"));
+  assert(route.includes("MiniDashboardLine"));
+  assert(route.includes("Visualized from current workspace totals."));
+  assert(!route.includes("hero-mark-card"));
+  assert(!route.includes("ProductFrame kind=\"mark\""));
 });

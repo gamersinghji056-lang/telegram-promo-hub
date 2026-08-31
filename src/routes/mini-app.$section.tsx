@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, react-hooks/exhaustive-deps */
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import {
   AlertTriangle,
@@ -1173,6 +1173,44 @@ function Dashboard({ data }: { data: any }) {
           }}
         />
       </section>
+      <section className={panelClass("space-y-3 bg-[radial-gradient(circle_at_top_right,color-mix(in_oklch,var(--chart-2)_16%,transparent),transparent_45%),linear-gradient(135deg,color-mix(in_oklch,var(--primary)_8%,var(--card)),var(--card))]")}>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">Promotion pulse</p>
+            <h2 className="mt-1 text-base font-semibold tracking-tight">Campaign and audience movement</h2>
+            <p className="mt-1 text-xs text-muted-foreground">Visualized from current workspace totals.</p>
+          </div>
+          <MiniProgressRing
+            label="Sent"
+            value={Number(messageStats.sent_messages ?? 0)}
+            total={Number(messageStats.total_messages ?? 0)}
+          />
+        </div>
+        <MiniDashboardLine
+          sent={Number(messageStats.sent_messages ?? 0)}
+          pending={Number(messageStats.pending_messages ?? 0)}
+          failed={Number(messageStats.failed_messages ?? 0)}
+          audience={Number(data?.audience?.total ?? 0)}
+          groups={Number(data?.groups?.approved ?? 0)}
+        />
+      </section>
+      <div className="grid gap-2 sm:grid-cols-3">
+        <DashboardSignalCard title="Audience / Groups" icon={Users} rows={[
+          ["Found", data?.groups?.found ?? 0],
+          ["Approved", data?.groups?.approved ?? 0],
+          ["Joined", data?.groups?.joined ?? 0],
+        ]} />
+        <DashboardSignalCard title="Session Health" icon={ShieldCheck} rows={[
+          ["Connected", data?.connections?.active ?? 0],
+          ["Total", data?.connections?.total ?? 0],
+          ["Writable", data?.groups?.writable ?? 0],
+        ]} />
+        <DashboardSignalCard title="Growth Intelligence" icon={BarChart3} rows={[
+          ["Members tracked", data?.growth?.members ?? 0],
+          ["Signals", data?.growth?.events ?? 0],
+          ["Reports", data?.analytics?.reports ?? 0],
+        ]} />
+      </div>
       <div><h2 className="text-sm font-bold">Quick actions</h2><p className="mb-2 text-xs text-muted-foreground">Start your next promotion workflow</p></div>
       <div className="-mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
         {quick.map(([href, label, body, Icon]) => (
@@ -1180,6 +1218,57 @@ function Dashboard({ data }: { data: any }) {
         ))}
       </div>
     </div>
+  );
+}
+
+function MiniProgressRing({ value, total, label }: { value: number; total: number; label: string }) {
+  const pct = total > 0 ? Math.round((value / total) * 100) : 0;
+  return (
+    <div className="grid size-16 shrink-0 place-items-center rounded-full bg-[conic-gradient(var(--success)_0_calc(var(--pct)*1%),color-mix(in_oklch,var(--muted)_80%,transparent)_0)] p-1.5" style={{ "--pct": pct } as CSSProperties & Record<"--pct", number>}>
+      <div className="grid size-full place-items-center rounded-full bg-card text-center">
+        <span className="text-sm font-bold tabular-nums">{pct}%</span>
+        <span className="-mt-1 text-[9px] uppercase text-muted-foreground">{label}</span>
+      </div>
+    </div>
+  );
+}
+
+function MiniDashboardLine({ sent, pending, failed, audience, groups }: { sent: number; pending: number; failed: number; audience: number; groups: number }) {
+  const values = [groups, audience, pending, sent, sent + groups, sent + audience - failed].map((value) => Math.max(0, Number(value || 0)));
+  const max = Math.max(1, ...values);
+  const points = values.map((value, index) => `${12 + index * 55},${86 - (value / max) * 64}`).join(" ");
+  return (
+    <div className="h-32 rounded-xl border border-border/80 bg-background/60 p-2">
+      <svg className="h-full w-full overflow-visible" viewBox="0 0 292 104" role="img" aria-label="Campaign and audience movement chart">
+        {[20, 46, 72, 98].map((y) => <line key={y} x1="8" x2="284" y1={y} y2={y} stroke="var(--border)" strokeDasharray="4 5" />)}
+        <polyline points={points} fill="none" stroke="var(--chart-2)" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+        <polyline points={points} fill="none" stroke="var(--primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" opacity=".7" transform="translate(0 8)" />
+        {values.map((value, index) => {
+          const x = 12 + index * 55;
+          const y = 86 - (value / max) * 64;
+          return <circle key={`${value}-${index}`} cx={x} cy={y} r="3.5" fill="var(--chart-2)" />;
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function DashboardSignalCard({ title, icon: Icon, rows }: { title: string; icon: any; rows: [string, unknown][] }) {
+  return (
+    <section className={panelClass("space-y-2")}>
+      <div className="flex items-center gap-2">
+        <span className="grid size-8 place-items-center rounded-lg bg-primary/10 text-primary"><Icon className="size-4" /></span>
+        <h2 className="text-sm font-semibold">{title}</h2>
+      </div>
+      <div className="space-y-1.5">
+        {rows.map(([label, value]) => (
+          <div key={label} className="flex items-center justify-between rounded-lg bg-muted/35 px-2.5 py-2 text-xs">
+            <span className="text-muted-foreground">{label}</span>
+            <span className="font-semibold tabular-nums">{Number(value ?? 0).toLocaleString()}</span>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 

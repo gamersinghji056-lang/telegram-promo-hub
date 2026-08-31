@@ -34,12 +34,19 @@ test("public website has MARK8LARA only and keeps assistant knowledge separate",
   const shell = read("src/components/public-site.tsx");
   const assistant = read("src/lib/assistant-knowledge.ts");
   const miniShell = read("src/components/mini-app-shell.tsx");
+  const floating = read("src/components/floating-assistant.tsx");
   assert(shell.includes("websiteAssistant"));
   assert(shell.includes("<FloatingAssistant config={websiteAssistant}"));
   assert(assistant.includes('name: "MARK8LARA"'));
   assert(assistant.includes('name: "LARA"'));
+  assert(assistant.includes('avatarSrc: "/assistants/mark8lara-avatar.svg"'));
+  assert(assistant.includes('avatarSrc: "/assistants/lara-avatar.svg"'));
   assert(assistant.includes("MARK8LARA is the public MARK8BOT website guide"));
   assert(assistant.includes("LARA is only the Telegram Promotion Mini App helper"));
+  assert(floating.includes("SpeechRecognition"));
+  assert(floating.includes("speechSynthesis"));
+  assert(floating.includes("panel-up"));
+  assert(floating.includes("setPointerCapture"));
   assert(miniShell.includes("promotionAssistant"));
   assert(!miniShell.includes("websiteAssistant"));
 });
@@ -95,16 +102,32 @@ test("worker roles preserve combined production behavior and keep MARK foundatio
 test("homepage explains real Promotion workflows and official support without fake proof", () => {
   const publicSite = read("src/components/public-site.tsx");
   const config = read("src/lib/public-site.functions.ts");
+  const styles = read("src/styles.css");
   assert(publicSite.includes("Connect sessions, discover audiences, organize groups, prepare campaigns"));
+  assert(publicSite.includes("MARK8BOT <span>Promotion Command Center</span>"));
+  assert(publicSite.includes("Find Groups"));
+  assert(publicSite.includes("Growth Intelligence"));
   assert(publicSite.includes("HOW TO USE TELEGRAM PROMOTION"));
   assert(publicSite.includes("Audience / Groups / Categories"));
   assert(publicSite.includes("Sessions and health"));
   assert(publicSite.includes("Meet LARA - your in-workspace Promotion assistant."));
   assert(publicSite.includes("Voice-driven workflow control is planned for the future."));
   assert(publicSite.includes("@laura_luxee"));
+  assert(styles.includes(".preview-dashboard-grid"));
+  assert(styles.includes(".hero-product-strip"));
   assert(config.includes('"laura_luxee"'));
   assert(!publicSite.includes("99.9%"));
   assert(!publicSite.includes("testimonial"));
+});
+
+test("assistant avatar assets are local and distinct", () => {
+  const mark8lara = read("public/assistants/mark8lara-avatar.svg");
+  const lara = read("public/assistants/lara-avatar.svg");
+  assert(mark8lara.includes("MARK8LARA assistant avatar"));
+  assert(lara.includes("LARA promotion assistant avatar"));
+  assert.notEqual(mark8lara, lara);
+  assert(!/href=["']https?:\/\//.test(mark8lara));
+  assert(!/href=["']https?:\/\//.test(lara));
 });
 
 test("sitemap indexes only public marketing routes and robots protects operational paths", () => {
