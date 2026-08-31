@@ -227,7 +227,7 @@ export function answerAssistantQuestion(config: AssistantContext, question: stri
     .filter((item) => item.score > 0)
     .sort((a, b) => b.score - a.score);
   const topIntent = scored[0]?.intent;
-  const answer = topIntent?.localized?.[language] ?? topIntent?.answer ?? localizedFallback(config, language);
+  const answer = topIntent ? localizedIntentAnswer(config.scope, topIntent.id, language, topIntent.localized?.[language] ?? topIntent.answer) : localizedFallback(config, language);
   if (config.scope === "promotion-mini-app") {
     return withPromotionContext(answer, topIntent?.id, pageContext);
   }
@@ -297,6 +297,96 @@ const sectionIntentHints: Record<string, string[]> = {
   sessions: ["sessions"],
   billing: ["billing"],
   settings: ["billing", "support"],
+};
+
+function localizedIntentAnswer(scope: AssistantScope, intentId: string, language: AssistantLanguage, fallback: string) {
+  return intentTranslations[`${scope}:${intentId}`]?.[language] ?? fallback;
+}
+
+const intentTranslations: Partial<Record<`${AssistantScope}:${string}`, Partial<Record<AssistantLanguage, string>>>> = {
+  "website:mark8bot": {
+    "hi-IN": "MARK8BOT Telegram-first product platform hai. Telegram Promotion live hai campaigns, audience, groups, sessions, analytics aur billing ke liye. MARK alag intelligence product hai jo business context ke around build ho raha hai. Next: Products open karke compare karein.",
+    "ru-RU": "MARK8BOT - Telegram-first платформа продуктов. Telegram Promotion уже работает для кампаний, аудиторий, групп, сессий, аналитики и биллинга. MARK - отдельный интеллектуальный продукт вокруг бизнес-контекста.",
+    "zh-CN": "MARK8BOT 是 Telegram-first 产品平台。Telegram Promotion 已上线，用于活动、受众、群组、会话、分析和账单。MARK 是围绕业务上下文构建的独立智能产品。",
+    "fa-IR": "MARK8BOT یک پلتفرم محصول Telegram-first است. Telegram Promotion برای کمپین، مخاطب، گروه، سشن، Analytics و billing فعال است. MARK محصول جداگانه هوشمندی بر پایه زمینه کسب و کار است.",
+  },
+  "website:promotion": {
+    "ru-RU": "Telegram Promotion - рабочее пространство для повторяемого продвижения в Telegram: сессии, поиск групп, approve/join, категории, DM audiences, DM/group campaigns, history, billing, Analytics и Growth Intelligence.",
+    "zh-CN": "Telegram Promotion 是可重复 Telegram 推广工作区：连接 sessions、查找 groups、approve/join、管理 categories、准备 DM audience、运行 DM 或 group campaigns，并查看 history、billing、Analytics 和 Growth Intelligence。",
+    "fa-IR": "Telegram Promotion فضای کاری فعال برای تبلیغ تکرارپذیر تلگرام است: اتصال session، پیدا کردن گروه، approve/join، دسته بندی، DM audience، کمپین DM یا group، history، billing، Analytics و Growth Intelligence.",
+  },
+  "website:mark": {
+    "hi-IN": "MARK ka presentation hai: MARK - Intelligence built around your business. Ye Telegram Promotion se alag hai aur operational workspace abhi live nahi hai. Start/Open/Try/Use par coming-soon access state dikhta hai.",
+    "ru-RU": "MARK представлен как: MARK - Intelligence built around your business. Это отдельный от Telegram Promotion продукт; рабочий доступ пока не запущен, поэтому Start/Open/Try/Use показывает coming-soon состояние.",
+    "zh-CN": "MARK 的定位是：MARK - Intelligence built around your business。它独立于 Telegram Promotion，当前操作工作区尚未上线，所以 Start/Open/Try/Use 会显示 coming-soon 状态。",
+    "fa-IR": "MARK با پیام MARK - Intelligence built around your business معرفی می شود. از Telegram Promotion جداست و workspace عملیاتی هنوز live نیست، بنابراین Start/Open/Try/Use حالت coming-soon را نشان می دهد.",
+  },
+  "website:start": {
+    "hi-IN": "Telegram Promotion start karne ke liye Promotion bot ya Mini App login use karke existing customer account se sign in karein. Bot sessions automatic continue hote hain. MARK explore karne ke liye MARK page open karein.",
+    "ru-RU": "Чтобы начать Telegram Promotion, используйте Promotion bot или Mini App login и войдите в существующий customer account. Bot sessions продолжаются автоматически. MARK смотрите на публичной MARK странице.",
+    "zh-CN": "开始 Telegram Promotion：使用 Promotion bot，或打开 Mini App login 并用现有 customer account 登录。Bot sessions 会自动继续。了解 MARK 请打开 MARK 页面。",
+    "fa-IR": "برای شروع Telegram Promotion از Promotion bot یا Mini App login با حساب مشتری فعلی وارد شوید. Bot sessions خودکار ادامه پیدا می کنند. برای MARK صفحه MARK را باز کنید.",
+  },
+  "website:plans": {
+    "hi-IN": "Plans, invoices, Coins, Add Users credits aur add-ons Promotion Billing ke andar manage hote hain. Standard/Premium active plan aur credits par depend karte hain.",
+    "ru-RU": "Планы, invoices, Coins, Add Users credits и add-ons управляются внутри Promotion Billing. Standard/Premium зависят от активного плана и доступных credits.",
+    "zh-CN": "Plans、invoices、Coins、Add Users credits 和 add-ons 在 Promotion Billing 中管理。Standard/Premium 能力取决于当前计划和可用 credits。",
+    "fa-IR": "Plans، invoices، Coins، Add Users credits و add-ons داخل Promotion Billing مدیریت می شوند. Standard/Premium به plan فعال و credits موجود بستگی دارد.",
+  },
+  "website:lara": {
+    "hi-IN": "MARK8LARA website guide hai. Telegram Promotion ke andar alag LARA helper hai jo workspace pages aur features samjhati hai. Dono abhi informational hain; voice workflow control future capability hai.",
+    "ru-RU": "MARK8LARA помогает на публичном сайте. В Telegram Promotion есть отдельная LARA для вопросов внутри workspace. Сейчас обе помощницы только объясняют; voice workflow control запланирован на будущее.",
+    "zh-CN": "MARK8LARA 是网站向导。Telegram Promotion 内有独立的 LARA，用于解释 workspace 页面和功能。目前两者只提供信息；语音控制工作流是未来能力。",
+    "fa-IR": "MARK8LARA راهنمای website است. داخل Telegram Promotion دستیار جداگانه LARA فقط workspace و features را توضیح می دهد. هر دو فعلا informational هستند؛ voice workflow control قابلیت آینده است.",
+  },
+  "website:navigation": {
+    "hi-IN": "Products me Telegram Promotion aur MARK milenge, Guides walkthroughs ke liye, FAQ quick answers ke liye, About company context ke liye, aur Contact support ke liye.",
+    "ru-RU": "Products ведет к Telegram Promotion и MARK, Guides - к инструкциям, FAQ - к быстрым ответам, About - к контексту компании, Contact - к поддержке.",
+    "zh-CN": "Products 用于 Telegram Promotion 和 MARK，Guides 用于教程，FAQ 用于快速答案，About 用于公司介绍，Contact 用于支持。",
+    "fa-IR": "Products برای Telegram Promotion و MARK است، Guides برای آموزش، FAQ برای پاسخ سریع، About برای معرفی شرکت، و Contact برای پشتیبانی.",
+  },
+  "promotion-mini-app:current": {
+    "hi-IN": "Main visible Promotion controls, page data aur workflow se pehle check karne wali cheezen samjha sakti hoon. Main abhi click ya data change nahi karti.",
+    "ru-RU": "Я могу объяснить видимые controls Promotion, какие данные показаны и что проверить перед workflow. Я не нажимаю кнопки и не меняю данные.",
+    "zh-CN": "我可以解释当前 Promotion 控件、页面数据，以及使用 workflow 前要检查的内容。目前我不会点击控件或修改数据。",
+    "fa-IR": "می توانم controls قابل مشاهده Promotion، داده های صفحه و مواردی که قبل از workflow باید بررسی شوند را توضیح بدهم. فعلا کلیک یا تغییر داده انجام نمی دهم.",
+  },
+  "promotion-mini-app:campaigns": {
+    "hi-IN": "Campaigns DM Promotion aur Group Promotion me split hain. Group promotion ke liye healthy Telegram session connect karein, groups approve/join karein, categories banayein, writable/sendable checks dekhein, phir campaign create karke history monitor karein.",
+    "ru-RU": "Campaigns делятся на DM Promotion и Group Promotion. Для group promotion подключите healthy Telegram session, approve/join target groups, разложите их по categories, проверьте writable/sendable и затем смотрите history/status.",
+    "zh-CN": "Campaigns 分为 DM Promotion 和 Group Promotion。Group promotion 需要先连接 healthy Telegram session，approve/join target groups，整理 categories，检查 writable/sendable，然后创建 campaign 并查看 history/status。",
+    "fa-IR": "Campaigns به DM Promotion و Group Promotion تقسیم می شود. برای group promotion ابتدا healthy Telegram session وصل کنید، target groups را approve/join کنید، categories بسازید، writable/sendable را بررسی کنید و سپس history/status را ببینید.",
+  },
+  "promotion-mini-app:groups": {
+    "hi-IN": "Groups discovery se Found review, approval, joining aur categories tak move hote hain. Approved aur sendable groups group campaigns ke liye best candidates hain.",
+    "ru-RU": "Groups проходят discovery, found review, approval, joining и categories. Approved и sendable groups лучше всего подходят для group campaigns.",
+    "zh-CN": "Groups 会经过 discovery、found review、approval、joining 和 categories。Approved 且 sendable 的 groups 更适合 group campaigns。",
+    "fa-IR": "Groups از discovery به found review، approval، joining و categories می روند. گروه های approved و sendable بهترین گزینه برای group campaigns هستند.",
+  },
+  "promotion-mini-app:audience": {
+    "hi-IN": "Audience tools permitted users ko organize karte hain. DM Audience DM campaigns ke contacts prepare karta hai, aur Add Users sessions, destination checks, jobs aur credits use karta hai.",
+    "ru-RU": "Audience tools организуют eligible users. DM Audience готовит contacts для DM campaigns, а Add Users использует sessions, destination checks, tracked jobs и credits.",
+    "zh-CN": "Audience tools 用于整理允许范围内的 eligible users。DM Audience 准备 DM campaigns 的 contacts；Add Users 使用 sessions、destination checks、tracked jobs 和 credits。",
+    "fa-IR": "Audience tools کاربران مجاز را organize می کند. DM Audience contacts را برای DM campaigns آماده می کند و Add Users از sessions، destination checks، jobs و credits استفاده می کند.",
+  },
+  "promotion-mini-app:sessions": {
+    "hi-IN": "Sessions customer-linked Telegram accounts hain. Health, reconnect state, access, Premium/Standard visibility aur selected-session requirements check karein.",
+    "ru-RU": "Sessions - customer-linked Telegram accounts. Проверьте health, reconnect state, access, Premium/Standard visibility и selected-session requirements.",
+    "zh-CN": "Sessions 是客户连接的 Telegram accounts。请检查 health、reconnect state、access、Premium/Standard visibility 和 selected-session requirements。",
+    "fa-IR": "Sessions حساب های Telegram متصل به مشتری هستند. health، reconnect state، access، Premium/Standard visibility و selected-session requirements را بررسی کنید.",
+  },
+  "promotion-mini-app:analytics": {
+    "hi-IN": "Analytics campaign aur workspace data report karta hai. Growth Intelligence stored snapshots aur Telegram membership signals use karta hai jab authorized session ke paas access ho.",
+    "ru-RU": "Analytics показывает campaign и workspace data. Growth Intelligence использует stored snapshots и Telegram membership signals, когда authorized session имеет доступ.",
+    "zh-CN": "Analytics 报告 campaign 和 workspace data。Growth Intelligence 在 authorized session 有足够访问权限时使用 stored snapshots 和 Telegram membership signals。",
+    "fa-IR": "Analytics داده های campaign و workspace را گزارش می کند. Growth Intelligence از stored snapshots و Telegram membership signals در صورت دسترسی authorized session استفاده می کند.",
+  },
+  "promotion-mini-app:billing": {
+    "hi-IN": "Billing me plans, invoices, Coins, Add Users credits aur add-ons dikhte hain. Settings me account, language, appearance, password aur support access hai.",
+    "ru-RU": "Billing показывает plans, invoices, Coins, Add Users credits и add-ons. Settings содержит account, language, appearance, password и support access.",
+    "zh-CN": "Billing 显示 plans、invoices、Coins、Add Users credits 和 add-ons。Settings 包含 account、language、appearance、password 和 support access。",
+    "fa-IR": "Billing شامل plans، invoices، Coins، Add Users credits و add-ons است. Settings شامل account، language، appearance، password و support access است.",
+  },
 };
 
 function localizedFallback(config: AssistantContext, language: AssistantLanguage) {
