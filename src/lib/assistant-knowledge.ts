@@ -210,15 +210,35 @@ export function normalizeLanguage(language?: string | null): AssistantLanguage |
 }
 
 export function inferAssistantLanguage(text: string, languageHint?: string | null): AssistantLanguage {
+  const requestedLanguage = detectRequestedLanguage(text);
+  if (requestedLanguage) return requestedLanguage;
   const scriptLanguage = detectLanguageFromText(text);
   if (scriptLanguage) return scriptLanguage;
   return normalizeLanguage(languageHint) ?? "en-US";
+}
+
+export function detectRequestedLanguage(text: string): AssistantLanguage | null {
+  const normalized = normalizeQuestion(text);
+  if (!normalized) return null;
+  const source = text.normalize("NFC");
+  if (/[\u0900-\u097f]/.test(source) && /(\u0939\u093f\u0902\u0926\u0940|\u0939\u093f\u0928\u094d\u0926\u0940)/i.test(source)) return "hi-IN";
+  if (/[\u0400-\u04ff]/.test(source) && /(\u0440\u0443\u0441\u0441\u043a|\u0433\u043e\u0432\u043e\u0440\u0438|\u044f\u0437\u044b\u043a)/i.test(source)) return "ru-RU";
+  if (/(\u4e2d\u6587|\u6c49\u8bed|\u6f22\u8a9e|\u7528\u4e2d\u6587|\u8bf4\u4e2d\u6587|\u7b80\u4f53\u4e2d\u6587)/.test(source)) return "zh-CN";
+  if (/(\u0641\u0627\u0631\u0633\u06cc|\u0641\u0627\u0631\u0633\u064a|\u067e\u0627\u0631\u0633\u06cc|\u0628\u0647 \u0641\u0627\u0631\u0633\u06cc|\u0641\u0627\u0631\u0633\u06cc \u0635\u062d\u0628\u062a)/.test(source)) return "fa-IR";
+  if (/\b(hindi|hinglish|hindi me|hindi mein|hindi mai|hindi bol|hindi bolo|hindi baat|hindi language|hindi mein baat|hindi me baat|baat karo|hin me|roman hindi)\b/.test(normalized)) return "hi-IN";
+  if (/\b(english|angrezi|english me|en me|speak english|talk english|use english)\b/.test(normalized)) return "en-US";
+  if (/\b(russian|russki|russky|russkij|po russki|speak russian|talk russian|use russian)\b/.test(normalized)) return "ru-RU";
+  if (/\b(chinese|mandarin|zhongwen|simplified chinese|speak chinese|talk chinese|use chinese)\b/.test(normalized)) return "zh-CN";
+  if (/\b(farsi|persian|parsi|speak farsi|talk farsi|use farsi|speak persian|talk persian)\b/.test(normalized)) return "fa-IR";
+  return null;
 }
 
 export function answerAssistantQuestion(config: AssistantContext, question: string, pageContext?: string, languageHint?: string | null) {
   const normalized = normalizeQuestion(question);
   if (!normalized) return config.greeting;
   const language = inferAssistantLanguage(question, languageHint);
+  const requestedLanguage = detectRequestedLanguage(question);
+  if (requestedLanguage) return languageSwitchAnswer(config, requestedLanguage);
   const scored = config.intents
     .map((intent) => ({
       intent,
@@ -232,6 +252,14 @@ export function answerAssistantQuestion(config: AssistantContext, question: stri
     return withPromotionContext(answer, topIntent?.id, pageContext);
   }
   return answer;
+}
+
+function languageSwitchAnswer(config: AssistantContext, language: AssistantLanguage) {
+  if (language === "hi-IN") return `Theek hai, ab main Hindi/Hinglish me baat karungi. ${config.scope === "website" ? "Aap MARK8BOT, Telegram Promotion, MARK, plans ya support ke baare me pooch sakte hain." : "Aap Promotion campaigns, groups, sessions, analytics, Add Users ya billing ke baare me pooch sakte hain."}`;
+  if (language === "ru-RU") return `Хорошо, теперь я буду отвечать по-русски. ${config.scope === "website" ? "Можете спросить про MARK8BOT, Telegram Promotion, MARK, планы или поддержку." : "Можете спросить про Promotion campaigns, groups, sessions, analytics, Add Users или billing."}`;
+  if (language === "zh-CN") return `好的，我现在用中文回答。${config.scope === "website" ? "你可以询问 MARK8BOT、Telegram Promotion、MARK、计划或支持。" : "你可以询问 Promotion campaigns、groups、sessions、analytics、Add Users 或 billing。"}`;
+  if (language === "fa-IR") return `باشه، از حالا فارسی پاسخ می دهم. ${config.scope === "website" ? "می توانید درباره MARK8BOT، Telegram Promotion، MARK، پلن ها یا پشتیبانی بپرسید." : "می توانید درباره campaigns، groups، sessions، analytics، Add Users یا billing در Promotion بپرسید."}`;
+  return `Sure, I will use English now. ${config.scope === "website" ? "Ask me about MARK8BOT, Telegram Promotion, MARK, plans or support." : "Ask me about Promotion campaigns, groups, sessions, analytics, Add Users or billing."}`;
 }
 
 function detectLanguageFromText(text: string): AssistantLanguage | null {

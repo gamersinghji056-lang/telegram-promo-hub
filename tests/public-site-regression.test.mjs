@@ -45,7 +45,9 @@ test("public website has MARK8LARA only and keeps assistant knowledge separate",
   assert(assistant.includes("LARA is only the Telegram Promotion Mini App helper"));
   assert(floating.includes("SpeechRecognition"));
   assert(floating.includes("speechSynthesis"));
-  assert(floating.includes("panel-up"));
+  assert(floating.includes("assistant-full-view"));
+  assert(floating.includes("voice-${voiceState}"));
+  assert(!floating.includes("panelPlacement"));
   assert(floating.includes("setPointerCapture"));
   assert(miniShell.includes("promotionAssistant"));
   assert(!miniShell.includes("websiteAssistant"));

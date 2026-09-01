@@ -147,7 +147,8 @@ test("Promotion Mini App uses LARA helper only", () => {
   assert(assistant.includes("Campaigns are split into DM Promotion and Group Promotion"));
   assert(assistant.includes('avatarSrc: "/assistants/lara-avatar.svg"'));
   assert(floating.includes("speechSynthesis.speak"));
-  assert(floating.includes("panelPlacement"));
+  assert(floating.includes("assistant-full-view"));
+  assert(!floating.includes("panelPlacement"));
   assert(!route.includes("Meet MARK"));
   assert(!route.includes("MARK - Intelligence built around your business"));
 });

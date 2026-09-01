@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type PointerEvent as ReactPointerEvent } from "react";
-import { MessageCircle, Mic, PauseCircle, Send, Volume2, X } from "lucide-react";
+import { ArrowLeft, MessageCircle, PauseCircle, Send, Volume2 } from "lucide-react";
 import {
   ASSISTANT_LANGUAGES,
   answerAssistantQuestion,
+  detectRequestedLanguage,
   inferAssistantLanguage,
   normalizeLanguage,
   type AssistantContext,
@@ -32,15 +33,12 @@ type SpeechRecognitionLike = {
 
 const DOCK_WIDTH = 78;
 const DOCK_HEIGHT = 105;
-const PANEL_WIDTH = 336;
-const PANEL_HEIGHT = 430;
 const DRAG_THRESHOLD = 6;
 
 export function FloatingAssistant({ config, pageContext }: { config: AssistantContext; pageContext?: string }) {
   const languageStorageKey = `${config.storageKey}-language`;
   const historyStorageKey = `${config.storageKey}-chat-history`;
   const [position, setPosition] = useState<Position | null>(null);
-  const [open, setOpen] = useState(false);
   const [fullOpen, setFullOpen] = useState(false);
   const [input, setInput] = useState("");
   const [listening, setListening] = useState(false);
@@ -57,6 +55,7 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const recognitionStartingRef = useRef(false);
   const voiceModeRef = useRef(false);
+  const languageRef = useRef<AssistantLanguage>("en-US");
   const canListen = useMemo(() => typeof window !== "undefined" && Boolean((window as SpeechWindow).SpeechRecognition || (window as SpeechWindow).webkitSpeechRecognition), []);
   const canSpeak = useMemo(() => typeof window !== "undefined" && "speechSynthesis" in window && "SpeechSynthesisUtterance" in window, []);
 
@@ -80,8 +79,9 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
   }, [clamp]);
 
   useEffect(() => {
-    const savedLanguage = normalizeLanguage(localStorage.getItem(languageStorageKey));
-    setLanguage(savedLanguage ?? inferAssistantLanguage("", selectedLanguage()));
+    const savedLanguage = normalizeLanguage(localStorage.getItem(languageStorageKey)) ?? inferAssistantLanguage("", selectedLanguage());
+    languageRef.current = savedLanguage;
+    setLanguage(savedLanguage);
   }, [languageStorageKey]);
 
   useEffect(() => {
@@ -98,6 +98,7 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
 
   useEffect(() => {
     localStorage.setItem(languageStorageKey, language);
+    languageRef.current = language;
   }, [language, languageStorageKey]);
 
   useEffect(() => {
@@ -158,6 +159,7 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
     setVoiceNotice("");
     if (!canSpeak) {
       setVoiceNotice("Voice output is unavailable in this browser, so I showed the answer as text.");
+      if (continueConversation) stopVoice();
       setVoiceState("idle");
       return;
     }
@@ -170,6 +172,7 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
       const notice = `No installed ${languageLabel(language)} speech voice is available on this device. I showed the answer as text.`;
       setVoiceNotice(notice);
       setSpeaking(false);
+      if (continueConversation) stopVoice();
       setVoiceState("idle");
       return;
     }
@@ -190,7 +193,7 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
     utterance.onerror = () => {
       setSpeaking(false);
       setVoiceState("idle");
-      if (continueConversation && voiceModeRef.current) startListening(true);
+      if (continueConversation && voiceModeRef.current) stopVoice();
     };
     window.speechSynthesis.speak(utterance);
   }
@@ -199,8 +202,12 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
     const value = text.trim();
     if (!value) return;
     if (voice) setVoiceState("processing");
-    const responseLanguage = inferAssistantLanguage(value, language);
-    if (responseLanguage !== language) setLanguage(responseLanguage);
+    const requestedLanguage = detectRequestedLanguage(value);
+    const responseLanguage = requestedLanguage ?? inferAssistantLanguage(value, languageRef.current);
+    if (responseLanguage !== languageRef.current) {
+      languageRef.current = responseLanguage;
+      setLanguage(responseLanguage);
+    }
     const answer = answerAssistantQuestion(config, value, pageContext, responseLanguage);
     setMessages((current) => [
       ...current,
@@ -224,29 +231,25 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
     recognitionRef.current = null;
     recognitionStartingRef.current = false;
     setListening(false);
+    setVoiceNotice("");
     window.speechSynthesis?.cancel();
     setSpeaking(false);
     setVoiceState("idle");
   }
 
-  function startVoice(event?: ReactPointerEvent<HTMLButtonElement>) {
-    event?.stopPropagation();
-    setOpen(true);
+  function startVoiceConversation() {
+    setFullOpen(false);
     setVoiceNotice("");
-    if (listening) {
+    if (voiceModeRef.current) {
       stopVoice();
       return;
     }
-    startListening(false);
-  }
-
-  function startVoiceConversation() {
-    setOpen(true);
-    setVoiceNotice("");
     if (!canListen) {
       const notice = "Hands-free voice input is not available in this browser or WebView. Use the full chat view instead.";
       setVoiceNotice(notice);
       setMessages((current) => [...current, { role: "assistant", text: notice }]);
+      setVoiceMode(false);
+      voiceModeRef.current = false;
       return;
     }
     voiceModeRef.current = true;
@@ -258,7 +261,7 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
       startListening(true);
       return;
     }
-    speak(voiceGreeting(config.name, language), language, true);
+    speak(voiceGreeting(config.name, languageRef.current), languageRef.current, true);
   }
 
   function startListening(continueConversation: boolean) {
@@ -267,6 +270,8 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
       const notice = "Voice input is not available in this browser. Use chat instead.";
       setVoiceNotice(notice);
       setMessages((current) => [...current, { role: "assistant", text: notice }]);
+      setVoiceMode(false);
+      voiceModeRef.current = false;
       setVoiceState("idle");
       return;
     }
@@ -276,13 +281,17 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
     let receivedResult = false;
     recognition.continuous = false;
     recognition.interimResults = false;
-    recognition.lang = language;
+    recognition.lang = languageRef.current;
     recognition.onresult = (eventResult) => {
       receivedResult = true;
       const transcript = eventResult.results[0]?.[0]?.transcript ?? "";
       recognitionRef.current = null;
       recognitionStartingRef.current = false;
       setListening(false);
+      if (!transcript.trim()) {
+        stopVoice();
+        return;
+      }
       ask(transcript, true, continueConversation);
     };
     recognition.onerror = (eventError) => {
@@ -290,6 +299,8 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
       setVoiceNotice(notice);
       setListening(false);
       setVoiceState("idle");
+      voiceModeRef.current = false;
+      setVoiceMode(false);
       recognitionRef.current = null;
       recognitionStartingRef.current = false;
     };
@@ -298,12 +309,7 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
       recognitionRef.current = null;
       recognitionStartingRef.current = false;
       if (!receivedResult) {
-        if (voiceModeRef.current) {
-          setVoiceState("listening");
-          window.setTimeout(() => startListening(true), 160);
-        } else {
-          setVoiceState("idle");
-        }
+        stopVoice();
       }
     };
     recognitionRef.current = recognition;
@@ -314,11 +320,13 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
       recognition.start();
       recognitionStartingRef.current = false;
     } catch {
-      const notice = `${languageLabel(language)} voice input could not start in this browser. Use chat or choose another language.`;
+      const notice = `${languageLabel(languageRef.current)} voice input could not start in this browser. Use chat or choose another language.`;
       setVoiceNotice(notice);
       setMessages((current) => [...current, { role: "assistant", text: notice }]);
       setListening(false);
       setVoiceState("idle");
+      setVoiceMode(false);
+      voiceModeRef.current = false;
       recognitionRef.current = null;
       recognitionStartingRef.current = false;
     }
@@ -331,7 +339,7 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
   function beginDrag(event: ReactPointerEvent<HTMLDivElement>) {
     if (!position) return;
     const target = event.target as HTMLElement;
-    if (target.closest(".assistant-actions button") || target.closest(".assistant-panel")) return;
+    if (target.closest(".assistant-actions button") || target.closest(".assistant-full-view")) return;
     event.preventDefault();
     setDraggingDocument(true);
     dragRef.current = {
@@ -375,11 +383,12 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
   function openChat(event: ReactPointerEvent<HTMLButtonElement>) {
     event.stopPropagation();
     if (suppressClickRef.current) return;
-    setOpen(false);
+    stopVoice();
     setFullOpen(true);
   }
 
   function updateLanguage(nextLanguage: AssistantLanguage) {
+    languageRef.current = nextLanguage;
     setLanguage(nextLanguage);
     setVoiceNotice("");
     if (speaking) {
@@ -389,59 +398,19 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
   }
 
   if (!position) return null;
-  const placement = panelPlacement(position);
 
   return (
     <div
-      className={`floating-assistant floating-assistant-${config.theme} ${open ? "is-open" : ""}`}
+      className={`floating-assistant floating-assistant-${config.theme} voice-${voiceState} ${fullOpen ? "is-full-open" : ""}`}
       style={{ left: position.x, top: position.y } as CSSProperties}
     >
-      {open ? (
-        <section className={`assistant-panel ${placement}`} aria-label={`${config.name} chat`}>
-          <div className="assistant-panel-head">
-            <img src={config.avatarSrc} alt="" aria-hidden="true" />
-            <div><strong>{config.name}</strong><span>{config.scope === "website" ? "Website guide" : "Promotion helper"}</span></div>
-            <select
-              className="assistant-language"
-              value={language}
-              onPointerDown={(event) => event.stopPropagation()}
-              onChange={(event) => updateLanguage(event.target.value as AssistantLanguage)}
-              aria-label={`${config.name} language`}
-              title="Assistant language"
-            >
-              {ASSISTANT_LANGUAGES.map((item) => <option key={item.code} value={item.code}>{item.short}</option>)}
-            </select>
-            <button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={() => setOpen(false)} aria-label="Close assistant"><X /></button>
-          </div>
-          <div className="assistant-messages" aria-live="polite">
-            {messages.map((message, index) => (
-              <p key={`${message.role}-${index}`} className={message.role === "user" ? "from-user" : "from-assistant"}>{message.text}</p>
-            ))}
-          </div>
-          {voiceNotice || voiceMode || listening || speaking ? (
-            <div className="assistant-voice-state">
-              {voiceStatusLabel(voiceState, voiceMode) || (listening ? "Listening..." : speaking ? "Speaking..." : voiceNotice)}
-              {voiceMode ? <button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={stopVoice}><PauseCircle /> Stop conversation</button> : null}
-              {speaking ? <button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={stopVoice}><PauseCircle /> Stop</button> : null}
-              {lastVoiceAnswer ? <button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={replayLast}><Volume2 /> Replay</button> : null}
-            </div>
-          ) : null}
-          <div className="assistant-suggestions">
-            {config.suggestions.map((suggestion) => <button key={suggestion} type="button" onPointerDown={(event) => event.stopPropagation()} onClick={() => ask(suggestion)}>{suggestion}</button>)}
-          </div>
-          <form onSubmit={submit} className="assistant-input">
-            <input value={input} onChange={(event) => setInput(event.target.value)} placeholder={`Ask ${config.name}`} />
-            <button type="submit" onPointerDown={(event) => event.stopPropagation()} aria-label="Send message"><Send /></button>
-          </form>
-        </section>
-      ) : null}
       <div className="assistant-dock" onPointerDown={beginDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag}>
         <button type="button" className="assistant-avatar" onClick={(event) => event.preventDefault()} aria-label={`Start ${config.name} voice conversation`}>
           <img src={config.avatarSrc} alt={config.avatarAlt} draggable={false} />
         </button>
         <span className="assistant-name">{config.name}</span>
+        {voiceMode || voiceNotice ? <span className="assistant-voice-pill">{voiceStatusLabel(voiceState, voiceMode) || voiceNotice}</span> : null}
         <div className="assistant-actions">
-          <button type="button" onPointerDown={startVoice} aria-label={`${config.name} voice input`} title={canListen ? "Voice input" : "Voice unavailable, opens chat"} className={listening ? "listening" : ""}>{listening ? <PauseCircle /> : <Mic />}</button>
           <button type="button" onPointerDown={openChat} aria-label={`${config.name} chat`} title="Chat"><MessageCircle /></button>
         </div>
       </div>
@@ -449,6 +418,7 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
         <section className={`assistant-full-view assistant-full-${config.theme}`} aria-label={`${config.name} full chat`}>
           <div className="assistant-full-card">
             <header className="assistant-full-head">
+              <button type="button" className="assistant-back" onClick={() => setFullOpen(false)} aria-label={`Back from ${config.name} chat`}><ArrowLeft /> Back</button>
               <img src={config.avatarSrc} alt="" aria-hidden="true" />
               <div>
                 <strong>{config.name}</strong>
@@ -458,7 +428,6 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
                 {ASSISTANT_LANGUAGES.map((item) => <option key={item.code} value={item.code}>{item.short}</option>)}
               </select>
               <button type="button" onClick={() => setMessages([{ role: "assistant", text: config.greeting }])}>New</button>
-              <button type="button" onClick={() => setFullOpen(false)} aria-label={`Close ${config.name} chat`}><X /></button>
             </header>
             <div className="assistant-full-messages" aria-live="polite">
               {messages.map((message, index) => (
@@ -477,7 +446,6 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
               {config.suggestions.map((suggestion) => <button key={suggestion} type="button" onClick={() => ask(suggestion)}>{suggestion}</button>)}
             </div>
             <form onSubmit={submit} className="assistant-full-input">
-              <button type="button" onClick={() => startVoiceConversation()} aria-label={`${config.name} voice conversation`}><Mic /></button>
               <input value={input} onChange={(event) => setInput(event.target.value)} placeholder={`Ask ${config.name}`} />
               <button type="submit" aria-label="Send message"><Send /></button>
             </form>
@@ -516,13 +484,6 @@ function selectedLanguage() {
     navigator.language ||
     "en-US"
   );
-}
-
-function panelPlacement(position: Position) {
-  const viewport = viewportSize();
-  const opensUp = position.y + DOCK_HEIGHT + PANEL_HEIGHT + 18 > viewport.height;
-  const opensLeft = position.x + PANEL_WIDTH + 18 > viewport.width;
-  return `${opensUp ? "panel-up" : "panel-down"} ${opensLeft ? "panel-left" : "panel-right"}`;
 }
 
 function setDraggingDocument(active: boolean) {
