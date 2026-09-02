@@ -31,7 +31,7 @@ export const ASSISTANT_LANGUAGES: { code: AssistantLanguage; label: string; shor
 export const websiteAssistant: AssistantContext = {
   scope: "website",
   name: "MARK8LARA",
-  avatarSrc: "/assistants/mark8lara-avatar.svg",
+  avatarSrc: "/assistants/mark8lara-avatar.png",
   avatarAlt: "MARK8LARA website assistant",
   theme: "website",
   storageKey: "mark8lara-position",
@@ -120,7 +120,7 @@ export const websiteAssistant: AssistantContext = {
 export const promotionAssistant: AssistantContext = {
   scope: "promotion-mini-app",
   name: "LARA",
-  avatarSrc: "/assistants/lara-avatar.svg",
+  avatarSrc: "/assistants/lara-avatar.png",
   avatarAlt: "LARA Promotion Mini App assistant",
   theme: "promotion",
   storageKey: "promotion-lara-position",
@@ -142,7 +142,7 @@ export const promotionAssistant: AssistantContext = {
       id: "campaigns",
       match: [
         "campaign", "campaigns", "dm", "dm promotion", "group promotion", "history", "pause", "resume", "start group", "send message",
-        "campaign kaise", "group promotion kaise", "dm kaise", "message bhejna", "кампания", "личные сообщения", "групповая", "活动", "群组推广", "私信", "کمپین", "پیام",
+        "campaign kaise", "campaign banana", "campaign banana hai", "campaign kaise banana", "mujhe campaign kaise banana hai", "campaign setup", "group promotion kaise", "dm kaise", "message bhejna", "message kaise bhejna", "promotion chalana", "кампания", "личные сообщения", "групповая", "活动", "群组推广", "私信", "کمپین", "پیام",
       ],
       answer:
         "Campaigns are split into DM Promotion and Group Promotion. For group promotion, connect a healthy Telegram session, approve or join target groups, organize them into categories, verify writable/sendable status where available, then create the group campaign and monitor history/status. Next: check Sessions first if you are unsure whether sending is available.",
@@ -155,7 +155,7 @@ export const promotionAssistant: AssistantContext = {
     },
     {
       id: "groups",
-      match: ["group", "groups", "found", "approved", "joined", "category", "categories", "folder", "find groups", "writable", "sendable", "group kaise", "категория", "группы", "群组", "分类", "گروه", "دسته"],
+      match: ["group", "groups", "found", "approved", "joined", "category", "categories", "folder", "find groups", "writable", "sendable", "group kaise", "group dhundna", "groups kaise milenge", "category banana", "folder banana", "категория", "группы", "群组", "分类", "گروه", "دسته"],
       answer:
         "Groups move through discovery, found review, approval, joining and categories. Approved and sendable groups are the best candidates for group campaigns, depending on session permissions and Telegram responses. Next: use Find Groups, review Found Groups, then keep campaign-ready groups in categories.",
     },
@@ -167,7 +167,7 @@ export const promotionAssistant: AssistantContext = {
     },
     {
       id: "sessions",
-      match: ["session", "sessions", "telegram account", "health", "reconnect", "premium", "standard", "writable", "sendable", "login", "session health", "session kaise", "сессия", "здоровье", "会话", "健康", "سشن", "سلامت"],
+      match: ["session", "sessions", "telegram account", "health", "reconnect", "premium", "standard", "writable", "sendable", "login", "session health", "session kaise", "account connect", "telegram connect", "session connect", "session healthy", "сессия", "здоровье", "会话", "健康", "سشن", "سلامت"],
       answer:
         "Sessions are customer-linked Telegram accounts. Check health, reconnect state, access, Premium/Standard visibility and selected-session requirements before workflows that depend on Telegram permissions. Next: reconnect or choose another session if health is weak.",
     },
@@ -224,7 +224,7 @@ export function detectRequestedLanguage(text: string): AssistantLanguage | null 
   if (/[\u0900-\u097f]/.test(source) && /(\u0939\u093f\u0902\u0926\u0940|\u0939\u093f\u0928\u094d\u0926\u0940)/i.test(source)) return "hi-IN";
   if (/[\u0400-\u04ff]/.test(source) && /(\u0440\u0443\u0441\u0441\u043a|\u0433\u043e\u0432\u043e\u0440\u0438|\u044f\u0437\u044b\u043a)/i.test(source)) return "ru-RU";
   if (/(\u4e2d\u6587|\u6c49\u8bed|\u6f22\u8a9e|\u7528\u4e2d\u6587|\u8bf4\u4e2d\u6587|\u7b80\u4f53\u4e2d\u6587)/.test(source)) return "zh-CN";
-  if (/(\u0641\u0627\u0631\u0633\u06cc|\u0641\u0627\u0631\u0633\u064a|\u067e\u0627\u0631\u0633\u06cc|\u0628\u0647 \u0641\u0627\u0631\u0633\u06cc|\u0641\u0627\u0631\u0633\u06cc \u0635\u062d\u0628\u062a)/.test(source)) return "fa-IR";
+  if (/(\u0641\u0627\u0631\u0633\u06cc|\u0641\u0627\u0631\u0633\u064a|\u067e\u0627\u0631\u0633\u06cc|\u0628\u0647 \u0641\u0627\u0631\u0633\u06cc|\u0641\u0627\u0631\u0633\u06cc \u0635\u062d\u0628\u062a|\u0641\u0627\u0631\u0633\u06cc \u067e\u0627\u0633\u062e|\u0628\u0647 \u0641\u0627\u0631\u0633\u06cc \u062c\u0648\u0627\u0628|\u0641\u0627\u0631\u0633\u06cc \u062d\u0631\u0641)/.test(source)) return "fa-IR";
   if (/\b(hindi|hinglish|hindi me|hindi mein|hindi mai|hindi bol|hindi bolo|hindi mein bolo|hindi me bolo|hindi baat|hindi language|hindi mein baat|hindi me baat|hindi mai baat|hindi mein baat karo|hindi me baat karo|hindi mai baat karo|can you speak hindi|speak hindi|talk hindi|use hindi|baat karo|hin me|roman hindi)\b/.test(normalized)) return "hi-IN";
   if (/\b(english|angrezi|english me|en me|speak english|talk english|use english)\b/.test(normalized)) return "en-US";
   if (/\b(russian|russki|russky|russkij|po russki|speak russian|talk russian|use russian)\b/.test(normalized)) return "ru-RU";
@@ -268,7 +268,7 @@ function detectLanguageFromText(text: string): AssistantLanguage | null {
   if (/[\u4e00-\u9fff]/.test(text)) return "zh-CN";
   if (/[\u0900-\u097f]/.test(text)) return "hi-IN";
   const normalized = normalizeQuestion(text);
-  if (/\b(kya|kaise|kaisa|kaisi|mujhe|mujko|batao|samjhao|madad|shuru|karna|karo|chahiye|bhejna|group kaise|campaign kaise|session kaise|kitna|paisa|kahan|kidhar)\b/.test(normalized)) {
+  if (/\b(kya|kaise|kaisa|kaisi|mujhe|mujko|batao|samjhao|madad|shuru|karna|karo|banana|banaya|banau|chahiye|bhejna|chalana|dhundna|group kaise|campaign kaise|session kaise|kitna|paisa|kahan|kidhar)\b/.test(normalized)) {
     return "hi-IN";
   }
   return null;

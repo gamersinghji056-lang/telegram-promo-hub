@@ -3,6 +3,7 @@ import fs from "node:fs";
 import test from "node:test";
 
 const read = (path) => fs.readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+const readBuffer = (path) => fs.readFileSync(new URL(`../${path}`, import.meta.url));
 
 test("floating assistant drags from the avatar while preserving tap-to-voice", () => {
   const floating = read("src/components/floating-assistant.tsx");
@@ -31,8 +32,19 @@ test("avatar starts hands-free voice conversation with guarded turn transitions"
   assert(floating.includes("setVoiceState(\"listening\")"));
   assert(floating.includes("setVoiceState(\"processing\")"));
   assert(floating.includes("recognitionStartingRef.current"));
-  assert(floating.includes("if (recognitionRef.current || recognitionStartingRef.current || listening) return"));
-  assert(floating.includes("if (!receivedResult)"));
+  assert(floating.includes("if (recognitionRef.current || recognitionStartingRef.current || listeningRef.current) return"));
+  assert(floating.includes("recognition.interimResults = true"));
+  assert(floating.includes("recognition.continuous = true"));
+  assert(floating.includes("SPEECH_SILENCE_DELAY_MS"));
+  assert(floating.includes("NO_SPEECH_TIMEOUT_MS"));
+  assert(floating.includes("MAX_UTTERANCE_MS"));
+  assert(floating.includes("finalTranscript"));
+  assert(floating.includes("interimTranscript"));
+  assert(floating.includes("scheduleSpeechComplete"));
+  assert(floating.includes("submittedUtteranceRef"));
+  assert(floating.includes("listeningRef.current"));
+  assert(floating.includes("recognition.onend = null"));
+  assert(floating.includes("if (!receivedSpeech)"));
   assert(floating.includes("stopVoice();"));
   assert(floating.includes("Stop conversation"));
   assert(!floating.includes("<Mic"));
@@ -84,6 +96,7 @@ test("assistant languages are selectable and persisted separately per assistant"
   assert(knowledge.includes('"fa-IR"'));
   assert(floating.includes("const languageStorageKey = `${config.storageKey}-language`"));
   assert(floating.includes("localStorage.setItem(languageStorageKey, language)"));
+  assert(floating.includes("localStorage.setItem(languageStorageKey, responseLanguage)"));
   assert(floating.includes('className="assistant-language"'));
   assert(floating.includes("const languageRef = useRef<AssistantLanguage>"));
   assert(floating.includes("recognition.lang = ASSISTANT_LANGUAGES.find"));
@@ -95,6 +108,7 @@ test("language switch phrases update deterministic assistant language", () => {
   assert(knowledge.includes("languageSwitchAnswer"));
   assert(knowledge.includes("hindi mein baat"));
   assert(knowledge.includes("can you speak hindi"));
+  assert(knowledge.includes("hindi mai baat karo"));
   assert(knowledge.includes("roman hindi"));
   assert(knowledge.includes("speak russian"));
   assert(knowledge.includes("simplified chinese"));
@@ -114,6 +128,9 @@ test("language inference gives obvious text/script priority over a stale UI hint
   assert(knowledge.includes("[\\u4e00-\\u9fff]"));
   assert(knowledge.includes("[\\u0900-\\u097f]"));
   assert(knowledge.includes("campaign kaise"));
+  assert(knowledge.includes("mujhe campaign kaise banana hai"));
+  assert(knowledge.includes("campaign banana"));
+  assert(knowledge.includes("account connect"));
   assert(knowledge.includes("group promotion kaise"));
   assert(knowledge.includes("session kaise"));
 });
@@ -152,17 +169,19 @@ test("voice mode uses avatar-only red listening and blue speaking waves", () => 
 
 test("MARK8LARA and LARA retain separate contexts and avatars", () => {
   const knowledge = read("src/lib/assistant-knowledge.ts");
-  const mark8lara = read("public/assistants/mark8lara-avatar.svg");
-  const lara = read("public/assistants/lara-avatar.svg");
+  const mark8lara = readBuffer("public/assistants/mark8lara-avatar.png");
+  const lara = readBuffer("public/assistants/lara-avatar.png");
   assert(knowledge.includes("MARK8LARA is the public MARK8BOT website guide"));
   assert(knowledge.includes("LARA is only the Telegram Promotion Mini App helper"));
   assert(knowledge.includes("does not answer as the public website assistant"));
   assert(knowledge.includes("this Mini App helper stays focused on Telegram Promotion"));
   assert(knowledge.includes('storageKey: "mark8lara-position"'));
   assert(knowledge.includes('storageKey: "promotion-lara-position"'));
-  assert(mark8lara.includes("MARK8LARA assistant avatar"));
-  assert(lara.includes("LARA promotion assistant avatar"));
-  assert.notEqual(mark8lara, lara);
+  assert(knowledge.includes('avatarSrc: "/assistants/mark8lara-avatar.png"'));
+  assert(knowledge.includes('avatarSrc: "/assistants/lara-avatar.png"'));
+  assert(mark8lara.length > 10000);
+  assert(lara.length > 10000);
+  assert.notDeepEqual(mark8lara, lara);
 });
 
 test("major supported languages have deterministic same-language responses", () => {

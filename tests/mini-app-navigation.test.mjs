@@ -145,7 +145,7 @@ test("Promotion Mini App uses LARA helper only", () => {
   assert(assistant.includes('scope: "promotion-mini-app"'));
   assert(assistant.includes("does not answer as the public website assistant"));
   assert(assistant.includes("Campaigns are split into DM Promotion and Group Promotion"));
-  assert(assistant.includes('avatarSrc: "/assistants/lara-avatar.svg"'));
+  assert(assistant.includes('avatarSrc: "/assistants/lara-avatar.png"'));
   assert(floating.includes("speechSynthesis.speak"));
   assert(floating.includes("assistant-full-view"));
   assert(!floating.includes("panelPlacement"));

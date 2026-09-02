@@ -24,7 +24,7 @@ type SpeechRecognitionLike = {
   continuous: boolean;
   interimResults: boolean;
   lang: string;
-  onresult: ((event: { results: { [index: number]: { [index: number]: { transcript: string } } } }) => void) | null;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
   onend: (() => void) | null;
   onerror: ((event?: { error?: string }) => void) | null;
   start: () => void;
@@ -32,10 +32,24 @@ type SpeechRecognitionLike = {
   abort?: () => void;
 };
 
+type SpeechRecognitionEventLike = {
+  resultIndex?: number;
+  results: {
+    length?: number;
+    [index: number]: {
+      isFinal?: boolean;
+      [index: number]: { transcript: string };
+    };
+  };
+};
+
 const DOCK_WIDTH = 78;
 const DOCK_HEIGHT = 105;
 const DRAG_THRESHOLD = 6;
 const VOICE_REFRESH_DELAYS = [80, 250, 700, 1400];
+const SPEECH_SILENCE_DELAY_MS = 1250;
+const NO_SPEECH_TIMEOUT_MS = 11000;
+const MAX_UTTERANCE_MS = 45000;
 
 export function FloatingAssistant({ config, pageContext }: { config: AssistantContext; pageContext?: string }) {
   const languageStorageKey = `${config.storageKey}-language`;
@@ -55,9 +69,14 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
   const dragRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number; moved: boolean; startedOnAvatar: boolean } | null>(null);
   const suppressClickRef = useRef(false);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const listeningRef = useRef(false);
   const recognitionStartingRef = useRef(false);
   const voiceModeRef = useRef(false);
   const languageRef = useRef<AssistantLanguage>("en-US");
+  const speechSilenceTimerRef = useRef<number | null>(null);
+  const speechNoInputTimerRef = useRef<number | null>(null);
+  const speechMaxTimerRef = useRef<number | null>(null);
+  const submittedUtteranceRef = useRef("");
   const canListen = useMemo(() => typeof window !== "undefined" && Boolean((window as SpeechWindow).SpeechRecognition || (window as SpeechWindow).webkitSpeechRecognition), []);
   const canSpeak = useMemo(() => typeof window !== "undefined" && "speechSynthesis" in window && "SpeechSynthesisUtterance" in window, []);
 
@@ -155,6 +174,7 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
     recognitionRef.current?.abort?.();
     window.speechSynthesis?.cancel();
     voiceModeRef.current = false;
+    clearSpeechTimers();
     setDraggingDocument(false);
     setAssistantFullOpenDocument(false);
   }, []);
@@ -213,6 +233,7 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
     const responseLanguage = requestedLanguage ?? inferAssistantLanguage(value, languageRef.current);
     if (responseLanguage !== languageRef.current) {
       languageRef.current = responseLanguage;
+      localStorage.setItem(languageStorageKey, responseLanguage);
       setLanguage(responseLanguage);
     }
     const answer = answerAssistantQuestion(config, value, pageContext, responseLanguage);
@@ -233,11 +254,13 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
   function stopVoice() {
     voiceModeRef.current = false;
     setVoiceMode(false);
+    clearSpeechTimers();
     recognitionRef.current?.stop();
     recognitionRef.current?.abort?.();
     recognitionRef.current = null;
     recognitionStartingRef.current = false;
     setListening(false);
+    listeningRef.current = false;
     setVoiceNotice("");
     window.speechSynthesis?.cancel();
     setSpeaking(false);
@@ -272,7 +295,7 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
   }
 
   function startListening(continueConversation: boolean) {
-    if (recognitionRef.current || recognitionStartingRef.current || listening) return;
+    if (recognitionRef.current || recognitionStartingRef.current || listeningRef.current) return;
     if (!canListen) {
       const notice = "Voice input is not available in this browser. Use chat instead.";
       setVoiceNotice(notice);
@@ -285,44 +308,112 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
     const SpeechRecognitionCtor = (window as SpeechWindow).SpeechRecognition || (window as SpeechWindow).webkitSpeechRecognition;
     if (!SpeechRecognitionCtor) return;
     const recognition = new SpeechRecognitionCtor();
-    let receivedResult = false;
-    recognition.continuous = false;
-    recognition.interimResults = false;
+    let receivedSpeech = false;
+    let finalTranscript = "";
+    let interimTranscript = "";
+    let submitted = false;
+    recognition.continuous = true;
+    recognition.interimResults = true;
     recognition.lang = ASSISTANT_LANGUAGES.find((item) => item.code === languageRef.current)?.recognitionLang ?? languageRef.current;
-    recognition.onresult = (eventResult) => {
-      receivedResult = true;
-      const transcript = eventResult.results[0]?.[0]?.transcript ?? "";
-      recognitionRef.current = null;
-      recognitionStartingRef.current = false;
-      setListening(false);
-      if (!transcript.trim()) {
+    submittedUtteranceRef.current = "";
+    clearSpeechTimers();
+    const currentTranscript = () => normalizeTranscript(`${finalTranscript} ${interimTranscript}`);
+    const scheduleNoSpeechStop = () => {
+      speechNoInputTimerRef.current = window.setTimeout(() => {
+        if (!receivedSpeech) stopVoice();
+      }, NO_SPEECH_TIMEOUT_MS);
+    };
+    const submitUtterance = () => {
+      if (submitted) return;
+      const transcript = currentTranscript();
+      if (!transcript) {
         stopVoice();
         return;
       }
+      const duplicateKey = transcript.toLowerCase();
+      if (submittedUtteranceRef.current === duplicateKey) return;
+      submitted = true;
+      submittedUtteranceRef.current = duplicateKey;
+      clearSpeechTimers();
+      recognitionRef.current = null;
+      recognitionStartingRef.current = false;
+      setListening(false);
+      listeningRef.current = false;
+      if (continueConversation) {
+        voiceModeRef.current = true;
+        setVoiceMode(true);
+      }
+      recognition.onend = null;
+      recognition.onerror = null;
+      try {
+        recognition.stop();
+      } catch {
+        recognition.abort?.();
+      }
       ask(transcript, true, continueConversation);
+    };
+    const scheduleSpeechComplete = () => {
+      if (speechSilenceTimerRef.current) window.clearTimeout(speechSilenceTimerRef.current);
+      speechSilenceTimerRef.current = window.setTimeout(submitUtterance, SPEECH_SILENCE_DELAY_MS);
+    };
+    recognition.onresult = (eventResult) => {
+      receivedSpeech = true;
+      if (speechNoInputTimerRef.current) {
+        window.clearTimeout(speechNoInputTimerRef.current);
+        speechNoInputTimerRef.current = null;
+      }
+      interimTranscript = "";
+      const start = eventResult.resultIndex ?? 0;
+      const length = typeof eventResult.results.length === "number" ? eventResult.results.length : Object.keys(eventResult.results).length;
+      for (let index = start; index < length; index += 1) {
+        const result = eventResult.results[index];
+        const transcript = result?.[0]?.transcript ?? "";
+        if (!transcript.trim()) continue;
+        if (result?.isFinal) {
+          finalTranscript = normalizeTranscript(`${finalTranscript} ${transcript}`);
+        } else {
+          interimTranscript = normalizeTranscript(`${interimTranscript} ${transcript}`);
+        }
+      }
+      if (currentTranscript()) scheduleSpeechComplete();
     };
     recognition.onerror = (eventError) => {
       const notice = eventError?.error === "not-allowed" ? "Microphone permission was blocked. You can still type your question." : "Voice input stopped. You can continue in chat.";
       setVoiceNotice(notice);
       setListening(false);
+      listeningRef.current = false;
       setVoiceState("idle");
       voiceModeRef.current = false;
       setVoiceMode(false);
+      clearSpeechTimers();
       recognitionRef.current = null;
       recognitionStartingRef.current = false;
     };
     recognition.onend = () => {
       setListening(false);
+      listeningRef.current = false;
       recognitionRef.current = null;
       recognitionStartingRef.current = false;
-      if (!receivedResult) {
+      if (submitted) return;
+      if (!receivedSpeech) {
         stopVoice();
+        return;
       }
+      scheduleSpeechComplete();
     };
     recognitionRef.current = recognition;
     recognitionStartingRef.current = true;
     setListening(true);
+    listeningRef.current = true;
     setVoiceState("listening");
+    scheduleNoSpeechStop();
+    speechMaxTimerRef.current = window.setTimeout(() => {
+      if (currentTranscript()) {
+        submitUtterance();
+      } else {
+        stopVoice();
+      }
+    }, MAX_UTTERANCE_MS);
     try {
       recognition.start();
       recognitionStartingRef.current = false;
@@ -331,12 +422,23 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
       setVoiceNotice(notice);
       setMessages((current) => [...current, { role: "assistant", text: notice }]);
       setListening(false);
+      listeningRef.current = false;
       setVoiceState("idle");
       setVoiceMode(false);
       voiceModeRef.current = false;
+      clearSpeechTimers();
       recognitionRef.current = null;
       recognitionStartingRef.current = false;
     }
+  }
+
+  function clearSpeechTimers() {
+    if (speechSilenceTimerRef.current) window.clearTimeout(speechSilenceTimerRef.current);
+    if (speechNoInputTimerRef.current) window.clearTimeout(speechNoInputTimerRef.current);
+    if (speechMaxTimerRef.current) window.clearTimeout(speechMaxTimerRef.current);
+    speechSilenceTimerRef.current = null;
+    speechNoInputTimerRef.current = null;
+    speechMaxTimerRef.current = null;
   }
 
   function replayLast() {
@@ -400,6 +502,7 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
 
   function updateLanguage(nextLanguage: AssistantLanguage) {
     languageRef.current = nextLanguage;
+    localStorage.setItem(languageStorageKey, nextLanguage);
     setLanguage(nextLanguage);
     setVoiceNotice("");
     if (speaking) {
@@ -472,6 +575,10 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
       {fullChat}
     </>
   );
+}
+
+function normalizeTranscript(text: string) {
+  return text.replace(/\s+/g, " ").trim();
 }
 
 function viewportSize() {

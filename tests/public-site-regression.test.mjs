@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 
 const read = (path) => fs.readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+const readBuffer = (path) => fs.readFileSync(new URL(`../${path}`, import.meta.url));
 
 test("MARK8BOT public website exposes every required route without public admin navigation", () => {
   const publicSite = read("src/components/public-site.tsx");
@@ -39,8 +40,8 @@ test("public website has MARK8LARA only and keeps assistant knowledge separate",
   assert(shell.includes("<FloatingAssistant config={websiteAssistant}"));
   assert(assistant.includes('name: "MARK8LARA"'));
   assert(assistant.includes('name: "LARA"'));
-  assert(assistant.includes('avatarSrc: "/assistants/mark8lara-avatar.svg"'));
-  assert(assistant.includes('avatarSrc: "/assistants/lara-avatar.svg"'));
+  assert(assistant.includes('avatarSrc: "/assistants/mark8lara-avatar.png"'));
+  assert(assistant.includes('avatarSrc: "/assistants/lara-avatar.png"'));
   assert(assistant.includes("MARK8LARA is the public MARK8BOT website guide"));
   assert(assistant.includes("LARA is only the Telegram Promotion Mini App helper"));
   assert(floating.includes("SpeechRecognition"));
@@ -123,13 +124,11 @@ test("homepage explains real Promotion workflows and official support without fa
 });
 
 test("assistant avatar assets are local and distinct", () => {
-  const mark8lara = read("public/assistants/mark8lara-avatar.svg");
-  const lara = read("public/assistants/lara-avatar.svg");
-  assert(mark8lara.includes("MARK8LARA assistant avatar"));
-  assert(lara.includes("LARA promotion assistant avatar"));
-  assert.notEqual(mark8lara, lara);
-  assert(!/href=["']https?:\/\//.test(mark8lara));
-  assert(!/href=["']https?:\/\//.test(lara));
+  const mark8lara = readBuffer("public/assistants/mark8lara-avatar.png");
+  const lara = readBuffer("public/assistants/lara-avatar.png");
+  assert(mark8lara.length > 10000);
+  assert(lara.length > 10000);
+  assert.notDeepEqual(mark8lara, lara);
 });
 
 test("sitemap indexes only public marketing routes and robots protects operational paths", () => {
