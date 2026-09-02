@@ -225,7 +225,7 @@ export function detectRequestedLanguage(text: string): AssistantLanguage | null 
   if (/[\u0400-\u04ff]/.test(source) && /(\u0440\u0443\u0441\u0441\u043a|\u0433\u043e\u0432\u043e\u0440\u0438|\u044f\u0437\u044b\u043a)/i.test(source)) return "ru-RU";
   if (/(\u4e2d\u6587|\u6c49\u8bed|\u6f22\u8a9e|\u7528\u4e2d\u6587|\u8bf4\u4e2d\u6587|\u7b80\u4f53\u4e2d\u6587)/.test(source)) return "zh-CN";
   if (/(\u0641\u0627\u0631\u0633\u06cc|\u0641\u0627\u0631\u0633\u064a|\u067e\u0627\u0631\u0633\u06cc|\u0628\u0647 \u0641\u0627\u0631\u0633\u06cc|\u0641\u0627\u0631\u0633\u06cc \u0635\u062d\u0628\u062a)/.test(source)) return "fa-IR";
-  if (/\b(hindi|hinglish|hindi me|hindi mein|hindi mai|hindi bol|hindi bolo|hindi baat|hindi language|hindi mein baat|hindi me baat|baat karo|hin me|roman hindi)\b/.test(normalized)) return "hi-IN";
+  if (/\b(hindi|hinglish|hindi me|hindi mein|hindi mai|hindi bol|hindi bolo|hindi mein bolo|hindi me bolo|hindi baat|hindi language|hindi mein baat|hindi me baat|hindi mai baat|hindi mein baat karo|hindi me baat karo|hindi mai baat karo|can you speak hindi|speak hindi|talk hindi|use hindi|baat karo|hin me|roman hindi)\b/.test(normalized)) return "hi-IN";
   if (/\b(english|angrezi|english me|en me|speak english|talk english|use english)\b/.test(normalized)) return "en-US";
   if (/\b(russian|russki|russky|russkij|po russki|speak russian|talk russian|use russian)\b/.test(normalized)) return "ru-RU";
   if (/\b(chinese|mandarin|zhongwen|simplified chinese|speak chinese|talk chinese|use chinese)\b/.test(normalized)) return "zh-CN";

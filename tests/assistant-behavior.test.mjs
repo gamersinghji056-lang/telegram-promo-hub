@@ -13,6 +13,7 @@ test("floating assistant drags from the avatar while preserving tap-to-voice", (
   assert(floating.includes("Math.hypot(deltaX, deltaY) < DRAG_THRESHOLD"));
   assert(floating.includes("if (!drag.moved && drag.startedOnAvatar) startVoiceConversation()"));
   assert(floating.includes("setPointerCapture"));
+  assert(floating.includes("active pointer capture target"));
   assert(floating.includes("setDraggingDocument(true)"));
   assert(floating.includes("setDraggingDocument(false)"));
   assert(styles.includes("position:fixed"));
@@ -44,10 +45,15 @@ test("chat icon opens a full assistant page view with isolated history", () => {
   assert(floating.includes("const historyStorageKey = `${config.storageKey}-chat-history`"));
   assert(floating.includes("localStorage.setItem(historyStorageKey"));
   assert(floating.includes("setFullOpen(true)"));
+  assert(floating.includes("createPortal("));
+  assert(floating.includes("document.body"));
+  assert(floating.includes("{!fullOpen ? ("));
   assert(floating.includes("assistant-full-view"));
   assert(floating.includes("assistant-full-messages"));
   assert(floating.includes("assistant-full-input"));
   assert(styles.includes(".assistant-full-view{position:fixed"));
+  assert(styles.includes("z-index:2147483000"));
+  assert(styles.includes("height:100dvh"));
   assert(styles.includes(".assistant-full-card{display:grid"));
   assert(styles.includes("width:100%;height:100%"));
   assert(styles.includes("assistant-back"));
@@ -61,7 +67,8 @@ test("assistant position and full chat stay bounded inside the viewport", () => 
   assert(floating.includes("viewport?.offsetTop"));
   assert(floating.includes("viewport?.offsetLeft"));
   assert(floating.includes("localStorage.setItem(config.storageKey"));
-  assert(floating.includes('target.closest(".assistant-full-view")'));
+  assert(floating.includes("setAssistantFullOpenDocument(fullOpen)"));
+  assert(floating.includes('root.dataset.assistantFullOpen = "true"'));
   assert(!floating.includes("panelPlacement"));
   assert(!floating.includes("PANEL_WIDTH"));
   assert(!floating.includes("PANEL_HEIGHT"));
@@ -79,7 +86,7 @@ test("assistant languages are selectable and persisted separately per assistant"
   assert(floating.includes("localStorage.setItem(languageStorageKey, language)"));
   assert(floating.includes('className="assistant-language"'));
   assert(floating.includes("const languageRef = useRef<AssistantLanguage>"));
-  assert(floating.includes("recognition.lang = languageRef.current"));
+  assert(floating.includes("recognition.lang = ASSISTANT_LANGUAGES.find"));
 });
 
 test("language switch phrases update deterministic assistant language", () => {
@@ -87,6 +94,7 @@ test("language switch phrases update deterministic assistant language", () => {
   assert(knowledge.includes("detectRequestedLanguage"));
   assert(knowledge.includes("languageSwitchAnswer"));
   assert(knowledge.includes("hindi mein baat"));
+  assert(knowledge.includes("can you speak hindi"));
   assert(knowledge.includes("roman hindi"));
   assert(knowledge.includes("speak russian"));
   assert(knowledge.includes("simplified chinese"));
@@ -115,6 +123,9 @@ test("voice output uses selected language voices and fails truthfully", () => {
   assert(floating.includes("voiceschanged"));
   assert(floating.includes("chooseVoice(language, latestVoices)"));
   assert(floating.includes("closestVoice(language, latestVoices)"));
+  assert(floating.includes("rankedVoices(language, voices, true)"));
+  assert(floating.includes("voiceSettings(language)"));
+  assert(floating.includes("premium|enhanced|neural|natural"));
   assert(floating.includes("No installed ${languageLabel(language)} speech voice is available"));
   assert(floating.includes("window.speechSynthesis.cancel()"));
   assert(floating.includes("setSpeaking(true)"));
@@ -129,8 +140,10 @@ test("voice mode uses avatar-only red listening and blue speaking waves", () => 
   const styles = read("src/styles.css");
   assert(floating.includes("voice-${voiceState}"));
   assert(styles.includes(".voice-listening .assistant-avatar::before"));
+  assert(styles.includes(".voice-listening .assistant-avatar::after"));
   assert(styles.includes("rgb(244 63 94 / 72%)"));
   assert(styles.includes(".voice-assistant-speaking .assistant-avatar::before"));
+  assert(styles.includes(".voice-assistant-speaking .assistant-avatar::after"));
   assert(styles.includes("rgb(34 211 238 / 72%)"));
   assert(styles.includes(".voice-processing .assistant-avatar::after"));
   assert(styles.includes("@keyframes assistantListenWave"));

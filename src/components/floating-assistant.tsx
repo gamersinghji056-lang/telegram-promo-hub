@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { createPortal } from "react-dom";
 import { ArrowLeft, MessageCircle, PauseCircle, Send, Volume2 } from "lucide-react";
 import {
   ASSISTANT_LANGUAGES,
@@ -34,6 +35,7 @@ type SpeechRecognitionLike = {
 const DOCK_WIDTH = 78;
 const DOCK_HEIGHT = 105;
 const DRAG_THRESHOLD = 6;
+const VOICE_REFRESH_DELAYS = [80, 250, 700, 1400];
 
 export function FloatingAssistant({ config, pageContext }: { config: AssistantContext; pageContext?: string }) {
   const languageStorageKey = `${config.storageKey}-language`;
@@ -89,9 +91,9 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
     const loadVoices = () => setVoices(window.speechSynthesis.getVoices());
     loadVoices();
     window.speechSynthesis.addEventListener?.("voiceschanged", loadVoices);
-    const refreshId = window.setTimeout(loadVoices, 250);
+    const refreshIds = VOICE_REFRESH_DELAYS.map((delay) => window.setTimeout(loadVoices, delay));
     return () => {
-      window.clearTimeout(refreshId);
+      refreshIds.forEach((refreshId) => window.clearTimeout(refreshId));
       window.speechSynthesis.removeEventListener?.("voiceschanged", loadVoices);
     };
   }, [canSpeak]);
@@ -147,11 +149,14 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
     if (position) localStorage.setItem(config.storageKey, JSON.stringify(position));
   }, [config.storageKey, position]);
 
+  useEffect(() => setAssistantFullOpenDocument(fullOpen), [fullOpen]);
+
   useEffect(() => () => {
     recognitionRef.current?.abort?.();
     window.speechSynthesis?.cancel();
     voiceModeRef.current = false;
     setDraggingDocument(false);
+    setAssistantFullOpenDocument(false);
   }, []);
 
   function speak(text: string, language: AssistantLanguage, continueConversation = false) {
@@ -178,9 +183,11 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
     }
     if (!voice && matchedVoice) setVoiceNotice(`Using the closest installed voice for ${languageLabel(language)}.`);
     const utterance = new SpeechSynthesisUtterance(text);
+    const settings = voiceSettings(language);
     utterance.lang = matchedVoice?.lang || language;
     utterance.voice = matchedVoice ?? null;
-    utterance.rate = language === "zh-CN" ? 0.92 : 1;
+    utterance.rate = settings.rate;
+    utterance.pitch = settings.pitch;
     utterance.onstart = () => setSpeaking(true);
     utterance.onend = () => {
       setSpeaking(false);
@@ -281,7 +288,7 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
     let receivedResult = false;
     recognition.continuous = false;
     recognition.interimResults = false;
-    recognition.lang = languageRef.current;
+    recognition.lang = ASSISTANT_LANGUAGES.find((item) => item.code === languageRef.current)?.recognitionLang ?? languageRef.current;
     recognition.onresult = (eventResult) => {
       receivedResult = true;
       const transcript = eventResult.results[0]?.[0]?.transcript ?? "";
@@ -351,7 +358,11 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
       moved: false,
       startedOnAvatar: Boolean(target.closest(".assistant-avatar")),
     };
-    event.currentTarget.setPointerCapture(event.pointerId);
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Some embedded WebViews and synthetic test events do not expose an active pointer capture target.
+    }
   }
 
   function moveDrag(event: ReactPointerEvent<HTMLDivElement>) {
@@ -399,60 +410,67 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
 
   if (!position) return null;
 
-  return (
-    <div
-      className={`floating-assistant floating-assistant-${config.theme} voice-${voiceState} ${fullOpen ? "is-full-open" : ""}`}
-      style={{ left: position.x, top: position.y } as CSSProperties}
-    >
-      <div className="assistant-dock" onPointerDown={beginDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag}>
-        <button type="button" className="assistant-avatar" onClick={(event) => event.preventDefault()} aria-label={`Start ${config.name} voice conversation`}>
-          <img src={config.avatarSrc} alt={config.avatarAlt} draggable={false} />
-        </button>
-        <span className="assistant-name">{config.name}</span>
-        {voiceMode || voiceNotice ? <span className="assistant-voice-pill">{voiceStatusLabel(voiceState, voiceMode) || voiceNotice}</span> : null}
-        <div className="assistant-actions">
-          <button type="button" onPointerDown={openChat} aria-label={`${config.name} chat`} title="Chat"><MessageCircle /></button>
-        </div>
-      </div>
-      {fullOpen ? (
-        <section className={`assistant-full-view assistant-full-${config.theme}`} aria-label={`${config.name} full chat`}>
-          <div className="assistant-full-card">
-            <header className="assistant-full-head">
-              <button type="button" className="assistant-back" onClick={() => setFullOpen(false)} aria-label={`Back from ${config.name} chat`}><ArrowLeft /> Back</button>
-              <img src={config.avatarSrc} alt="" aria-hidden="true" />
-              <div>
-                <strong>{config.name}</strong>
-                <span>{config.scope === "website" ? "MARK8BOT website assistant" : "Telegram Promotion assistant"}</span>
-              </div>
-              <select className="assistant-language" value={language} onChange={(event) => updateLanguage(event.target.value as AssistantLanguage)} aria-label={`${config.name} language`}>
-                {ASSISTANT_LANGUAGES.map((item) => <option key={item.code} value={item.code}>{item.short}</option>)}
-              </select>
-              <button type="button" onClick={() => setMessages([{ role: "assistant", text: config.greeting }])}>New</button>
-            </header>
-            <div className="assistant-full-messages" aria-live="polite">
-              {messages.map((message, index) => (
-                <p key={`full-${message.role}-${index}`} className={message.role === "user" ? "from-user" : "from-assistant"}>{message.text}</p>
-              ))}
-            </div>
-            {voiceNotice || voiceMode || listening || speaking ? (
-              <div className="assistant-voice-state assistant-full-voice">
-                {voiceStatusLabel(voiceState, voiceMode) || voiceNotice}
-                {voiceMode ? <button type="button" onClick={stopVoice}><PauseCircle /> Stop conversation</button> : null}
-                {speaking ? <button type="button" onClick={stopVoice}><PauseCircle /> Stop speech</button> : null}
-                {lastVoiceAnswer ? <button type="button" onClick={replayLast}><Volume2 /> Replay</button> : null}
-              </div>
-            ) : null}
-            <div className="assistant-suggestions assistant-full-suggestions">
-              {config.suggestions.map((suggestion) => <button key={suggestion} type="button" onClick={() => ask(suggestion)}>{suggestion}</button>)}
-            </div>
-            <form onSubmit={submit} className="assistant-full-input">
-              <input value={input} onChange={(event) => setInput(event.target.value)} placeholder={`Ask ${config.name}`} />
-              <button type="submit" aria-label="Send message"><Send /></button>
-            </form>
+  const fullChat = fullOpen && typeof document !== "undefined" ? createPortal(
+    <section className={`assistant-full-view assistant-full-${config.theme}`} aria-label={`${config.name} full chat`}>
+      <div className="assistant-full-card">
+        <header className="assistant-full-head">
+          <button type="button" className="assistant-back" onClick={() => setFullOpen(false)} aria-label={`Back from ${config.name} chat`}><ArrowLeft /> Back</button>
+          <img src={config.avatarSrc} alt="" aria-hidden="true" />
+          <div>
+            <strong>{config.name}</strong>
+            <span>{config.scope === "website" ? "MARK8BOT website assistant" : "Telegram Promotion assistant"}</span>
           </div>
-        </section>
+          <select className="assistant-language" value={language} onChange={(event) => updateLanguage(event.target.value as AssistantLanguage)} aria-label={`${config.name} language`}>
+            {ASSISTANT_LANGUAGES.map((item) => <option key={item.code} value={item.code}>{item.short}</option>)}
+          </select>
+          <button type="button" onClick={() => setMessages([{ role: "assistant", text: config.greeting }])}>New</button>
+        </header>
+        <div className="assistant-full-messages" aria-live="polite">
+          {messages.map((message, index) => (
+            <p key={`full-${message.role}-${index}`} className={message.role === "user" ? "from-user" : "from-assistant"}>{message.text}</p>
+          ))}
+        </div>
+        {voiceNotice || voiceMode || listening || speaking ? (
+          <div className="assistant-voice-state assistant-full-voice">
+            {voiceStatusLabel(voiceState, voiceMode) || voiceNotice}
+            {voiceMode ? <button type="button" onClick={stopVoice}><PauseCircle /> Stop conversation</button> : null}
+            {speaking ? <button type="button" onClick={stopVoice}><PauseCircle /> Stop speech</button> : null}
+            {lastVoiceAnswer ? <button type="button" onClick={replayLast}><Volume2 /> Replay</button> : null}
+          </div>
+        ) : null}
+        <div className="assistant-suggestions assistant-full-suggestions">
+          {config.suggestions.map((suggestion) => <button key={suggestion} type="button" onClick={() => ask(suggestion)}>{suggestion}</button>)}
+        </div>
+        <form onSubmit={submit} className="assistant-full-input">
+          <input value={input} onChange={(event) => setInput(event.target.value)} placeholder={`Ask ${config.name}`} />
+          <button type="submit" aria-label="Send message"><Send /></button>
+        </form>
+      </div>
+    </section>,
+    document.body,
+  ) : null;
+
+  return (
+    <>
+      {!fullOpen ? (
+        <div
+          className={`floating-assistant floating-assistant-${config.theme} voice-${voiceState}`}
+          style={{ left: position.x, top: position.y } as CSSProperties}
+        >
+          <div className="assistant-dock" onPointerDown={beginDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag}>
+            <button type="button" className="assistant-avatar" onClick={(event) => event.preventDefault()} aria-label={`Start ${config.name} voice conversation`}>
+              <img src={config.avatarSrc} alt={config.avatarAlt} draggable={false} />
+            </button>
+            <span className="assistant-name">{config.name}</span>
+            {voiceMode || voiceNotice ? <span className="assistant-voice-pill">{voiceStatusLabel(voiceState, voiceMode) || voiceNotice}</span> : null}
+            <div className="assistant-actions">
+              <button type="button" onPointerDown={openChat} aria-label={`${config.name} chat`} title="Chat"><MessageCircle /></button>
+            </div>
+          </div>
+        </div>
       ) : null}
-    </div>
+      {fullChat}
+    </>
   );
 }
 
@@ -500,15 +518,32 @@ function setDraggingDocument(active: boolean) {
   root.style.touchAction = "";
 }
 
+function setAssistantFullOpenDocument(active: boolean) {
+  if (typeof document === "undefined") return;
+  const root = document.documentElement;
+  const body = document.body;
+  if (active) {
+    root.dataset.assistantFullOpen = "true";
+    body.dataset.assistantFullOpen = "true";
+    root.style.overflow = "hidden";
+    body.style.overflow = "hidden";
+    return;
+  }
+  delete root.dataset.assistantFullOpen;
+  delete body.dataset.assistantFullOpen;
+  root.style.overflow = "";
+  body.style.overflow = "";
+}
+
 function languageLabel(language: AssistantLanguage) {
   return ASSISTANT_LANGUAGES.find((item) => item.code === language)?.label ?? "selected-language";
 }
 
 function voiceGreeting(name: string, language: AssistantLanguage) {
   if (language === "hi-IN") return `Hi, main ${name} hoon. Main aapki kaise madad kar sakti hoon?`;
-  if (language === "ru-RU") return `Здравствуйте, я ${name}. Чем я могу помочь?`;
-  if (language === "zh-CN") return `你好，我是 ${name}。我可以怎样帮助你？`;
-  if (language === "fa-IR") return `سلام، من ${name} هستم. چطور می توانم کمک کنم؟`;
+  if (language === "ru-RU") return `\u0417\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435, \u044f ${name}. \u0427\u0435\u043c \u044f \u043c\u043e\u0433\u0443 \u043f\u043e\u043c\u043e\u0447\u044c?`;
+  if (language === "zh-CN") return `\u4f60\u597d\uff0c\u6211\u662f ${name}\u3002\u6211\u53ef\u4ee5\u600e\u6837\u5e2e\u52a9\u4f60\uff1f`;
+  if (language === "fa-IR") return `\u0633\u0644\u0627\u0645\u060c \u0645\u0646 ${name} \u0647\u0633\u062a\u0645. \u0686\u0637\u0648\u0631 \u0645\u06cc \u062a\u0648\u0627\u0646\u0645 \u06a9\u0645\u06a9 \u06a9\u0646\u0645\u061f`;
   return `Hi, I am ${name}. How can I help you?`;
 }
 
@@ -521,14 +556,40 @@ function voiceStatusLabel(state: VoiceState, active: boolean) {
 }
 
 function chooseVoice(language: AssistantLanguage, voices: SpeechSynthesisVoice[]) {
-  return (
-    voices.find((voice) => normalizeLanguage(voice.lang) === language && /female|woman|zira|samantha|google|natural|premium|aria|sonia|heera|huihui|yalda/i.test(voice.name)) ||
-    voices.find((voice) => normalizeLanguage(voice.lang) === language) ||
-    null
-  );
+  return rankedVoices(language, voices, true)[0]?.voice ?? null;
 }
 
 function closestVoice(language: AssistantLanguage, voices: SpeechSynthesisVoice[]) {
+  return rankedVoices(language, voices, false)[0]?.voice ?? rankedVoices("en-US", voices, true)[0]?.voice ?? null;
+}
+
+function rankedVoices(language: AssistantLanguage, voices: SpeechSynthesisVoice[], exactOnly: boolean) {
+  return voices
+    .map((voice) => ({ voice, score: voiceScore(language, voice, exactOnly) }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score);
+}
+
+function voiceScore(language: AssistantLanguage, voice: SpeechSynthesisVoice, exactOnly: boolean) {
+  const normalized = normalizeLanguage(voice.lang);
   const family = language.slice(0, 2).toLowerCase();
-  return voices.find((voice) => voice.lang.toLowerCase().startsWith(family)) || voices.find((voice) => normalizeLanguage(voice.lang) === "en-US") || null;
+  const voiceLang = voice.lang.toLowerCase();
+  if (normalized !== language && (exactOnly || !voiceLang.startsWith(family))) return 0;
+  const name = voice.name.toLowerCase();
+  let score = normalized === language ? 1000 : 420;
+  if (voiceLang === language.toLowerCase()) score += 120;
+  if (voice.localService) score += 35;
+  if (/premium|enhanced|neural|natural|online|google|microsoft|apple|siri|compact|eloquence/i.test(name)) score += 120;
+  if (/female|woman|zira|samantha|aria|sonia|jenny|natasha|heera|lekha|huihui|xiaoxiao|xiaoyi|yalda|dilara|monica|veena/i.test(name)) score += 95;
+  if (/default|generic|basic/i.test(name)) score -= 35;
+  if (/male|man|david|mark|alex|paul/i.test(name)) score -= 60;
+  return score;
+}
+
+function voiceSettings(language: AssistantLanguage) {
+  if (language === "hi-IN") return { rate: 0.94, pitch: 1.04 };
+  if (language === "ru-RU") return { rate: 0.92, pitch: 1 };
+  if (language === "zh-CN") return { rate: 0.9, pitch: 1.02 };
+  if (language === "fa-IR") return { rate: 0.92, pitch: 1 };
+  return { rate: 0.96, pitch: 1.02 };
 }
