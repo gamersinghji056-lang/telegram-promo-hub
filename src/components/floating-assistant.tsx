@@ -11,6 +11,7 @@ import {
   type AssistantLanguage,
 } from "@/lib/assistant-knowledge";
 import { ASSISTANT_TTS_TIMEOUT_MS, assistantIdFromName } from "@/lib/assistant-voice";
+import { canUseClientKokoro, cancelClientKokoroSynthesis, synthesizeClientKokoro } from "@/lib/client-kokoro-tts";
 
 type Position = { x: number; y: number };
 type ChatMessage = { role: "assistant" | "user"; text: string; voice?: boolean };
@@ -191,16 +192,36 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
     const turn = ++speechTurnRef.current;
     stopCurrentAudio(false);
     window.speechSynthesis?.cancel();
+    const request = { assistant: assistantIdFromName(config.name), language, text };
+    let triedClientKokoro = false;
     try {
-      await speakSelfHosted(text, language, continueConversation, turn);
+      if (canUseClientKokoro(request)) {
+        triedClientKokoro = true;
+        setVoiceNotice("Preparing natural voice...");
+        const localAudio = await synthesizeClientKokoro(request);
+        if (turn !== speechTurnRef.current || (continueConversation && !voiceModeRef.current)) return;
+        setVoiceNotice("");
+        await playAudioBlob(localAudio.blob, continueConversation, turn);
+        return;
+      }
+      await speakSelfHosted(request, continueConversation, turn);
       return;
     } catch {
       if (turn !== speechTurnRef.current) return;
+      setVoiceNotice("");
+      if (triedClientKokoro) {
+        try {
+          await speakSelfHosted(request, continueConversation, turn);
+          return;
+        } catch {
+          if (turn !== speechTurnRef.current) return;
+        }
+      }
       browserSpeak(text, language, continueConversation, turn);
     }
   }
 
-  async function speakSelfHosted(text: string, language: AssistantLanguage, continueConversation: boolean, turn: number) {
+  async function speakSelfHosted(request: { assistant: "lara" | "mark8lara"; language: AssistantLanguage; text: string }, continueConversation: boolean, turn: number) {
     const controller = new AbortController();
     audioAbortRef.current = controller;
     const timeout = window.setTimeout(() => controller.abort(), ASSISTANT_TTS_TIMEOUT_MS + 2000);
@@ -208,7 +229,7 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
       const response = await fetch("/api/assistant/tts", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ assistant: assistantIdFromName(config.name), language, text }),
+        body: JSON.stringify(request),
         signal: controller.signal,
       });
       if (!response.ok) throw new Error("Self-hosted TTS failed.");
@@ -353,6 +374,7 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
   }
 
   function stopCurrentAudio(cancelSpeech = true) {
+    cancelClientKokoroSynthesis();
     audioAbortRef.current?.abort();
     audioAbortRef.current = null;
     const audio = audioRef.current;

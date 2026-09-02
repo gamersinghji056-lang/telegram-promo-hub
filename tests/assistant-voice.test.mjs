@@ -13,8 +13,8 @@ test("assistant voice profiles route languages to open-source engines", () => {
   assert(voice.includes("assistantVoiceProfiles"));
   assert(voice.includes('lara: {'));
   assert(voice.includes('mark8lara: {'));
-  assert(voice.includes('"en-US": { engine: "kokoro", voice: "af_bella"'));
-  assert(voice.includes('"en-US": { engine: "kokoro", voice: "af_bella", locale: "en-US", fallbackEngine: "piper"'));
+  assert(voice.includes('"en-US": { engine: "client-kokoro", voice: "af_bella"'));
+  assert(voice.includes('"en-US": { engine: "client-kokoro", voice: "af_bella", locale: "en-US", fallbackEngine: "piper"'));
   assert(voice.includes('"hi-IN": { engine: "kokoro", voice: "hf_alpha"'));
   assert(voice.includes('"zh-CN": { engine: "kokoro", voice: "zf_xiaoxiao"'));
   assert(voice.includes('"ru-RU": { engine: "piper", voice: "ru_RU-irina-medium"'));
@@ -25,7 +25,7 @@ test("LARA and MARK8LARA have distinct configured voice profiles", () => {
   const voice = read("src/lib/assistant-voice.ts");
   assert(voice.includes('persona: "female, clear, modern, friendly, slightly energetic Promotion identity"'));
   assert(voice.includes('persona: "different female, mature, premium, calm MARK8BOT identity"'));
-  assert(voice.includes('"en-US": { engine: "kokoro", voice: "af_heart"'));
+  assert(voice.includes('"en-US": { engine: "client-kokoro", voice: "af_heart"'));
   assert(voice.includes('"hi-IN": { engine: "kokoro", voice: "hf_beta"'));
   assert(voice.includes('"zh-CN": { engine: "kokoro", voice: "zf_xiaoyi"'));
   assert(voice.includes('"fa-IR": { engine: "piper", voice: "fa_IR-ganji_adabi-medium"'));
@@ -46,6 +46,9 @@ test("assistant TTS API validates input and proxies only audio", () => {
 
 test("assistant client uses self-hosted audio first and browser speech as fallback", () => {
   const floating = read("src/components/floating-assistant.tsx");
+  assert(floating.includes("synthesizeClientKokoro"));
+  assert(floating.includes("canUseClientKokoro(request)"));
+  assert(floating.includes("Preparing natural voice..."));
   assert(floating.includes('fetch("/api/assistant/tts"'));
   assert(floating.includes("new Audio(url)"));
   assert(floating.includes("audio.play()"));
@@ -53,6 +56,28 @@ test("assistant client uses self-hosted audio first and browser speech as fallba
   assert(floating.includes("audioAbortRef.current?.abort()"));
   assert(floating.includes("speechTurnRef.current"));
   assert(floating.includes("if (turn === speechTurnRef.current && voiceModeRef.current) startListening(true)"));
+});
+
+test("client Kokoro runs in a worker, requires WebGPU, and falls back to Piper safely", () => {
+  const client = read("src/lib/client-kokoro-tts.ts");
+  const worker = read("src/lib/client-kokoro-tts.worker.ts");
+  const voice = read("src/lib/assistant-voice.ts");
+  assert(client.includes("new Worker(new URL(\"./client-kokoro-tts.worker.ts\", import.meta.url)"));
+  assert(client.includes('wasmPolicy: "skip-interactive"'));
+  assert(client.includes("WebGPU is unavailable; WASM is skipped for interactive voice latency."));
+  assert(client.includes("pending = new Map"));
+  assert(client.includes("cancelClientKokoroSynthesis"));
+  assert(worker.includes('import { KokoroTTS } from "kokoro-js"'));
+  assert(worker.includes('device: "webgpu"'));
+  assert(worker.includes("CLIENT_KOKORO_MODEL_ID"));
+  assert(worker.includes("CLIENT_KOKORO_SYNTH_TIMEOUT_MS"));
+  assert(worker.includes("sessionPromise"));
+  assert(worker.includes("Client Kokoro synthesis cancelled."));
+  assert(worker.includes("Object.prototype.hasOwnProperty.call(tts.voices, message.voice)"));
+  assert(voice.includes('CLIENT_KOKORO_MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX"'));
+  assert(voice.includes('CLIENT_KOKORO_DTYPE = "q4"'));
+  assert(voice.includes("clientKokoroRoute"));
+  assert(voice.includes('if (request.language !== "en-US") return null;'));
 });
 
 test("lara-voice service config documents Kokoro/Piper and Hinglish routing", () => {

@@ -1,7 +1,7 @@
 import { normalizeLanguage, type AssistantLanguage } from "./assistant-knowledge";
 
 export type AssistantVoiceId = "lara" | "mark8lara";
-export type TtsEngine = "kokoro" | "piper" | "browser";
+export type TtsEngine = "client-kokoro" | "kokoro" | "piper" | "browser";
 
 export type AssistantTtsRequest = {
   assistant: AssistantVoiceId;
@@ -18,6 +18,11 @@ export type AssistantVoiceRoute = {
 
 export const ASSISTANT_TTS_MAX_CHARS = 900;
 export const ASSISTANT_TTS_TIMEOUT_MS = 22000;
+export const CLIENT_KOKORO_MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
+export const CLIENT_KOKORO_DTYPE = "q4";
+export const CLIENT_KOKORO_MODEL_SIZE = "about 80-100 MB for q4 ONNX plus voice files; browser cache stores the model after first load";
+export const CLIENT_KOKORO_INIT_TIMEOUT_MS = 12000;
+export const CLIENT_KOKORO_SYNTH_TIMEOUT_MS = 10000;
 
 export const assistantVoiceProfiles: Record<AssistantVoiceId, {
   label: string;
@@ -28,7 +33,7 @@ export const assistantVoiceProfiles: Record<AssistantVoiceId, {
     label: "LARA",
     persona: "female, clear, modern, friendly, slightly energetic Promotion identity",
     voices: {
-      "en-US": { engine: "kokoro", voice: "af_bella", locale: "en-US", fallbackEngine: "piper" },
+      "en-US": { engine: "client-kokoro", voice: "af_bella", locale: "en-US", fallbackEngine: "piper" },
       "hi-IN": { engine: "kokoro", voice: "hf_alpha", locale: "hi-IN", fallbackEngine: "piper" },
       "ru-RU": { engine: "piper", voice: "ru_RU-irina-medium", locale: "ru-RU", fallbackEngine: "browser" },
       "zh-CN": { engine: "kokoro", voice: "zf_xiaoxiao", locale: "zh-CN", fallbackEngine: "piper" },
@@ -39,7 +44,7 @@ export const assistantVoiceProfiles: Record<AssistantVoiceId, {
     label: "MARK8LARA",
     persona: "different female, mature, premium, calm MARK8BOT identity",
     voices: {
-      "en-US": { engine: "kokoro", voice: "af_heart", locale: "en-US", fallbackEngine: "piper" },
+      "en-US": { engine: "client-kokoro", voice: "af_heart", locale: "en-US", fallbackEngine: "piper" },
       "hi-IN": { engine: "kokoro", voice: "hf_beta", locale: "hi-IN", fallbackEngine: "piper" },
       "ru-RU": { engine: "piper", voice: "ru_RU-irina-medium", locale: "ru-RU", fallbackEngine: "browser" },
       "zh-CN": { engine: "kokoro", voice: "zf_xiaoyi", locale: "zh-CN", fallbackEngine: "piper" },
@@ -54,6 +59,13 @@ export function assistantIdFromName(name: string): AssistantVoiceId {
 
 export function routeAssistantVoice(request: AssistantTtsRequest): AssistantVoiceRoute {
   return assistantVoiceProfiles[request.assistant].voices[request.language];
+}
+
+export function clientKokoroRoute(request: AssistantTtsRequest): AssistantVoiceRoute | null {
+  const route = routeAssistantVoice(request);
+  if (request.language !== "en-US") return null;
+  if (route.engine !== "client-kokoro") return null;
+  return route;
 }
 
 export function parseAssistantTtsRequest(payload: unknown): { ok: true; value: AssistantTtsRequest } | { ok: false; error: string } {
