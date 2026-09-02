@@ -3,14 +3,17 @@ import { createPortal } from "react-dom";
 import { ArrowLeft, MessageCircle, PauseCircle, Send, Volume2 } from "lucide-react";
 import {
   ASSISTANT_LANGUAGES,
+  ASSISTANT_LANGUAGE_OPTIONS,
   answerAssistantQuestion,
-  detectRequestedLanguage,
   inferAssistantLanguage,
+  normalizeLanguagePreference,
   normalizeLanguage,
+  resolveAssistantTurnLanguage,
   type AssistantContext,
   type AssistantLanguage,
+  type AssistantLanguagePreference,
 } from "@/lib/assistant-knowledge";
-import { ASSISTANT_TTS_TIMEOUT_MS, assistantIdFromName } from "@/lib/assistant-voice";
+import { ASSISTANT_TTS_TIMEOUT_MS, assistantIdFromName, prepareTextForSpeech } from "@/lib/assistant-voice";
 import { canUseClientKokoro, cancelClientKokoroSynthesis, synthesizeClientKokoro } from "@/lib/client-kokoro-tts";
 
 type Position = { x: number; y: number };
@@ -54,7 +57,7 @@ const NO_SPEECH_TIMEOUT_MS = 11000;
 const MAX_UTTERANCE_MS = 45000;
 
 export function FloatingAssistant({ config, pageContext }: { config: AssistantContext; pageContext?: string }) {
-  const languageStorageKey = `${config.storageKey}-language`;
+  const languageStorageKey = `${config.storageKey}-language-preference`;
   const historyStorageKey = `${config.storageKey}-chat-history`;
   const [position, setPosition] = useState<Position | null>(null);
   const [fullOpen, setFullOpen] = useState(false);
@@ -65,7 +68,7 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
   const [voiceNotice, setVoiceNotice] = useState("");
   const [lastVoiceAnswer, setLastVoiceAnswer] = useState("");
-  const [language, setLanguage] = useState<AssistantLanguage>("en-US");
+  const [language, setLanguage] = useState<AssistantLanguagePreference>("auto");
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>(() => [{ role: "assistant", text: config.greeting }]);
   const dragRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number; moved: boolean; startedOnAvatar: boolean } | null>(null);
@@ -75,6 +78,7 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
   const recognitionStartingRef = useRef(false);
   const voiceModeRef = useRef(false);
   const languageRef = useRef<AssistantLanguage>("en-US");
+  const languagePreferenceRef = useRef<AssistantLanguagePreference>("auto");
   const speechSilenceTimerRef = useRef<number | null>(null);
   const speechNoInputTimerRef = useRef<number | null>(null);
   const speechMaxTimerRef = useRef<number | null>(null);
@@ -105,9 +109,10 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
   }, [clamp]);
 
   useEffect(() => {
-    const savedLanguage = normalizeLanguage(localStorage.getItem(languageStorageKey)) ?? inferAssistantLanguage("", selectedLanguage());
-    languageRef.current = savedLanguage;
-    setLanguage(savedLanguage);
+    const savedPreference = normalizeLanguagePreference(localStorage.getItem(languageStorageKey)) ?? "auto";
+    languagePreferenceRef.current = savedPreference;
+    languageRef.current = savedPreference === "auto" ? (inferAssistantLanguage("", selectedLanguage()) ?? "en-US") : savedPreference;
+    setLanguage(savedPreference);
   }, [languageStorageKey]);
 
   useEffect(() => {
@@ -124,7 +129,8 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
 
   useEffect(() => {
     localStorage.setItem(languageStorageKey, language);
-    languageRef.current = language;
+    languagePreferenceRef.current = language;
+    if (language !== "auto") languageRef.current = language;
   }, [language, languageStorageKey]);
 
   useEffect(() => {
@@ -192,7 +198,9 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
     const turn = ++speechTurnRef.current;
     stopCurrentAudio(false);
     window.speechSynthesis?.cancel();
-    const request = { assistant: assistantIdFromName(config.name), language, text };
+    const assistant = assistantIdFromName(config.name);
+    const spokenText = prepareTextForSpeech(text, language, assistant);
+    const request = { assistant, language, text: spokenText };
     let triedClientKokoro = false;
     try {
       if (canUseClientKokoro(request)) {
@@ -217,7 +225,7 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
           if (turn !== speechTurnRef.current) return;
         }
       }
-      browserSpeak(text, language, continueConversation, turn);
+      browserSpeak(spokenText, language, continueConversation, turn);
     }
   }
 
@@ -333,12 +341,13 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
     const value = text.trim();
     if (!value) return;
     if (voice) setVoiceState("processing");
-    const requestedLanguage = detectRequestedLanguage(value);
-    const responseLanguage = requestedLanguage ?? inferAssistantLanguage(value, languageRef.current);
-    if (responseLanguage !== languageRef.current) {
-      languageRef.current = responseLanguage;
-      localStorage.setItem(languageStorageKey, responseLanguage);
-      setLanguage(responseLanguage);
+    const turnLanguage = resolveAssistantTurnLanguage(value, languagePreferenceRef.current, languageRef.current);
+    const responseLanguage = turnLanguage.responseLanguage;
+    languageRef.current = responseLanguage;
+    if (turnLanguage.explicitLanguage && languagePreferenceRef.current !== turnLanguage.explicitLanguage) {
+      languagePreferenceRef.current = turnLanguage.explicitLanguage;
+      localStorage.setItem(languageStorageKey, turnLanguage.explicitLanguage);
+      setLanguage(turnLanguage.explicitLanguage);
     }
     const answer = answerAssistantQuestion(config, value, pageContext, responseLanguage);
     setMessages((current) => [
@@ -427,7 +436,7 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
     let submitted = false;
     recognition.continuous = true;
     recognition.interimResults = true;
-    recognition.lang = ASSISTANT_LANGUAGES.find((item) => item.code === languageRef.current)?.recognitionLang ?? languageRef.current;
+    recognition.lang = recognitionLanguageHint(languagePreferenceRef.current, config.scope);
     submittedUtteranceRef.current = "";
     clearSpeechTimers();
     const currentTranscript = () => normalizeTranscript(`${finalTranscript} ${interimTranscript}`);
@@ -613,10 +622,11 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
     setFullOpen(true);
   }
 
-  function updateLanguage(nextLanguage: AssistantLanguage) {
-    languageRef.current = nextLanguage;
+  function updateLanguage(nextLanguage: AssistantLanguagePreference) {
+    languagePreferenceRef.current = nextLanguage;
     localStorage.setItem(languageStorageKey, nextLanguage);
     setLanguage(nextLanguage);
+    if (nextLanguage !== "auto") languageRef.current = nextLanguage;
     setVoiceNotice("");
     if (speaking) {
       window.speechSynthesis?.cancel();
@@ -637,8 +647,8 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
             <strong>{config.name}</strong>
             <span>{config.scope === "website" ? "MARK8BOT website assistant" : "Telegram Promotion assistant"}</span>
           </div>
-          <select className="assistant-language" value={language} onChange={(event) => updateLanguage(event.target.value as AssistantLanguage)} aria-label={`${config.name} language`}>
-            {ASSISTANT_LANGUAGES.map((item) => <option key={item.code} value={item.code}>{item.short}</option>)}
+          <select className="assistant-language" value={language} onChange={(event) => updateLanguage(event.target.value as AssistantLanguagePreference)} aria-label={`${config.name} language`}>
+            {ASSISTANT_LANGUAGE_OPTIONS.map((item) => <option key={item.code} value={item.code}>{item.short}</option>)}
           </select>
           <button type="button" onClick={() => setMessages([{ role: "assistant", text: config.greeting }])}>New</button>
         </header>
@@ -758,6 +768,11 @@ function setAssistantFullOpenDocument(active: boolean) {
 
 function languageLabel(language: AssistantLanguage) {
   return ASSISTANT_LANGUAGES.find((item) => item.code === language)?.label ?? "selected-language";
+}
+
+function recognitionLanguageHint(preference: AssistantLanguagePreference, scope: AssistantContext["scope"]) {
+  if (preference === "auto") return scope === "promotion-mini-app" ? "en-IN" : "en-US";
+  return ASSISTANT_LANGUAGES.find((item) => item.code === preference)?.recognitionLang ?? preference;
 }
 
 function voiceGreeting(name: string, language: AssistantLanguage) {

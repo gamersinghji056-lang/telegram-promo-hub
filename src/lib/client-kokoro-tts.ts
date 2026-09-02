@@ -74,7 +74,7 @@ export function getClientKokoroCapability(): ClientKokoroCapability {
 }
 
 export function canUseClientKokoro(request: AssistantTtsRequest) {
-  return Boolean(clientKokoroRoute(request)) && getClientKokoroCapability().supported;
+  return clientKokoroEnabled() && Boolean(clientKokoroRoute(request)) && getClientKokoroCapability().supported;
 }
 
 export async function synthesizeClientKokoro(request: AssistantTtsRequest): Promise<ClientKokoroAudio> {
@@ -132,4 +132,11 @@ function ensureWorker() {
     }
   };
   return worker;
+}
+
+function clientKokoroEnabled() {
+  const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env;
+  if (env?.["VITE_ENABLE_CLIENT_KOKORO"] === "1") return true;
+  if (typeof localStorage === "undefined") return false;
+  return localStorage.getItem("lara-client-kokoro") === "1";
 }

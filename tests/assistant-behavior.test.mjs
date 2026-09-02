@@ -90,16 +90,19 @@ test("assistant languages are selectable and persisted separately per assistant"
   const floating = read("src/components/floating-assistant.tsx");
   const knowledge = read("src/lib/assistant-knowledge.ts");
   assert(knowledge.includes("ASSISTANT_LANGUAGES"));
+  assert(knowledge.includes("ASSISTANT_LANGUAGE_OPTIONS"));
+  assert(knowledge.includes('"auto"'));
   assert(knowledge.includes('"hi-IN"'));
   assert(knowledge.includes('"ru-RU"'));
   assert(knowledge.includes('"zh-CN"'));
   assert(knowledge.includes('"fa-IR"'));
-  assert(floating.includes("const languageStorageKey = `${config.storageKey}-language`"));
+  assert(floating.includes("const languageStorageKey = `${config.storageKey}-language-preference`"));
   assert(floating.includes("localStorage.setItem(languageStorageKey, language)"));
-  assert(floating.includes("localStorage.setItem(languageStorageKey, responseLanguage)"));
+  assert(floating.includes("localStorage.setItem(languageStorageKey, turnLanguage.explicitLanguage)"));
   assert(floating.includes('className="assistant-language"'));
   assert(floating.includes("const languageRef = useRef<AssistantLanguage>"));
-  assert(floating.includes("recognition.lang = ASSISTANT_LANGUAGES.find"));
+  assert(floating.includes("const languagePreferenceRef = useRef<AssistantLanguagePreference>"));
+  assert(floating.includes("recognition.lang = recognitionLanguageHint(languagePreferenceRef.current, config.scope)"));
 });
 
 test("language switch phrases update deterministic assistant language", () => {

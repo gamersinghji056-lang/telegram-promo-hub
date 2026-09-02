@@ -52,7 +52,8 @@ test("assistant client uses self-hosted audio first and browser speech as fallba
   assert(floating.includes('fetch("/api/assistant/tts"'));
   assert(floating.includes("new Audio(url)"));
   assert(floating.includes("audio.play()"));
-  assert(floating.includes("browserSpeak(text, language, continueConversation, turn)"));
+  assert(floating.includes("prepareTextForSpeech(text, language, assistant)"));
+  assert(floating.includes("browserSpeak(spokenText, language, continueConversation, turn)"));
   assert(floating.includes("audioAbortRef.current?.abort()"));
   assert(floating.includes("speechTurnRef.current"));
   assert(floating.includes("if (turn === speechTurnRef.current && voiceModeRef.current) startListening(true)"));
@@ -63,6 +64,7 @@ test("client Kokoro runs in a worker, requires WebGPU, and falls back to Piper s
   const worker = read("src/lib/client-kokoro-tts.worker.ts");
   const voice = read("src/lib/assistant-voice.ts");
   assert(client.includes("new Worker(new URL(\"./client-kokoro-tts.worker.ts\", import.meta.url)"));
+  assert(client.includes("clientKokoroEnabled()"));
   assert(client.includes('wasmPolicy: "skip-interactive"'));
   assert(client.includes("WebGPU is unavailable; WASM is skipped for interactive voice latency."));
   assert(client.includes("pending = new Map"));

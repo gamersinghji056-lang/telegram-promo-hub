@@ -1,5 +1,6 @@
 export type AssistantScope = "website" | "promotion-mini-app";
 export type AssistantLanguage = "en-US" | "hi-IN" | "ru-RU" | "zh-CN" | "fa-IR";
+export type AssistantLanguagePreference = "auto" | AssistantLanguage;
 
 export type AssistantContext = {
   scope: AssistantScope;
@@ -26,6 +27,11 @@ export const ASSISTANT_LANGUAGES: { code: AssistantLanguage; label: string; shor
   { code: "ru-RU", label: "Russian", short: "RU", recognitionLang: "ru-RU" },
   { code: "zh-CN", label: "Simplified Chinese", short: "ZH", recognitionLang: "zh-CN" },
   { code: "fa-IR", label: "Persian / Farsi", short: "FA", recognitionLang: "fa-IR" },
+];
+
+export const ASSISTANT_LANGUAGE_OPTIONS: { code: AssistantLanguagePreference; label: string; short: string }[] = [
+  { code: "auto", label: "Auto", short: "AUTO" },
+  ...ASSISTANT_LANGUAGES.map(({ code, label, short }) => ({ code, label, short })),
 ];
 
 export const websiteAssistant: AssistantContext = {
@@ -209,12 +215,47 @@ export function normalizeLanguage(language?: string | null): AssistantLanguage |
   return null;
 }
 
+export function normalizeLanguagePreference(language?: string | null): AssistantLanguagePreference | null {
+  const value = String(language ?? "").trim().toLowerCase();
+  if (value === "auto" || value === "automatic" || value === "detect") return "auto";
+  return normalizeLanguage(language);
+}
+
 export function inferAssistantLanguage(text: string, languageHint?: string | null): AssistantLanguage {
   const requestedLanguage = detectRequestedLanguage(text);
   if (requestedLanguage) return requestedLanguage;
   const scriptLanguage = detectLanguageFromText(text);
   if (scriptLanguage) return scriptLanguage;
+  const hinglish = scoreHinglish(text);
+  if (hinglish.score >= 3 && hinglish.score > hinglish.englishScore) return "hi-IN";
   return normalizeLanguage(languageHint) ?? "en-US";
+}
+
+export function detectAssistantInputLanguage(text: string, previousLanguage: AssistantLanguage = "en-US"): AssistantLanguage {
+  const requestedLanguage = detectRequestedLanguage(text);
+  if (requestedLanguage) return requestedLanguage;
+  const scriptLanguage = detectLanguageFromText(text);
+  if (scriptLanguage) return scriptLanguage;
+  const hinglish = scoreHinglish(text);
+  if (hinglish.score >= 3 && hinglish.score >= hinglish.englishScore + 1) return "hi-IN";
+  if (hinglish.englishScore >= 3 && hinglish.englishScore > hinglish.score) return "en-US";
+  if (hinglish.englishScore >= 2 && hinglish.englishScore >= hinglish.score + 2) return "en-US";
+  if (hinglish.englishScore > 0 && hinglish.score <= 2) return "en-US";
+  return previousLanguage;
+}
+
+export function resolveAssistantTurnLanguage(text: string, preference: AssistantLanguagePreference, previousLanguage: AssistantLanguage = "en-US"): {
+  inputLanguage: AssistantLanguage;
+  responseLanguage: AssistantLanguage;
+  explicitLanguage: AssistantLanguage | null;
+} {
+  const explicitLanguage = detectRequestedLanguage(text);
+  const inputLanguage = detectAssistantInputLanguage(text, previousLanguage);
+  return {
+    inputLanguage,
+    responseLanguage: explicitLanguage ?? (preference === "auto" ? inputLanguage : preference),
+    explicitLanguage,
+  };
 }
 
 export function detectRequestedLanguage(text: string): AssistantLanguage | null {
@@ -242,7 +283,7 @@ export function answerAssistantQuestion(config: AssistantContext, question: stri
   const scored = config.intents
     .map((intent) => ({
       intent,
-      score: intent.match.reduce((total, term) => total + matchScore(normalized, normalizeQuestion(term)), 0),
+      score: intent.match.reduce((total, term) => total + matchScore(normalized, normalizeQuestion(term)), 0) + semanticIntentScore(normalized, intent.id),
     }))
     .filter((item) => item.score > 0)
     .sort((a, b) => b.score - a.score);
@@ -267,11 +308,14 @@ function detectLanguageFromText(text: string): AssistantLanguage | null {
   if (/[\u0400-\u04ff]/.test(text)) return "ru-RU";
   if (/[\u4e00-\u9fff]/.test(text)) return "zh-CN";
   if (/[\u0900-\u097f]/.test(text)) return "hi-IN";
-  const normalized = normalizeQuestion(text);
-  if (/\b(kya|kaise|kaisa|kaisi|mujhe|mujko|batao|samjhao|madad|shuru|karna|karo|banana|banaya|banau|chahiye|bhejna|chalana|dhundna|group kaise|campaign kaise|session kaise|kitna|paisa|kahan|kidhar)\b/.test(normalized)) {
-    return "hi-IN";
-  }
+  const hinglish = scoreHinglish(text);
+  if (hinglish.score >= 3 && hinglish.score > hinglish.englishScore) return "hi-IN";
   return null;
+}
+
+export function isHinglishText(text: string) {
+  const score = scoreHinglish(text);
+  return score.score >= 3 && score.score >= score.englishScore;
 }
 
 function normalizeQuestion(value: string) {
@@ -284,12 +328,77 @@ function normalizeQuestion(value: string) {
     .trim();
 }
 
+const hinglishWords = new Set([
+  "mujhe", "muje", "mera", "meri", "mere", "batao", "btao", "samjhao", "kaise", "kese", "kaha", "kahan", "kidhar",
+  "karna", "krna", "karo", "karu", "kru", "banau", "banana", "banane", "banaya", "chahiye", "chaiye", "nahi", "nhi",
+  "hai", "hain", "ho", "h", "ye", "y", "kya", "kon", "kaun", "wala", "wali", "vali", "ab", "phir", "fir", "isme",
+  "usme", "se", "me", "mein", "mai", "par", "pe", "ke", "ki", "ko", "aur", "ya", "help", "madad", "dhundna",
+  "milenge", "milegi", "select", "add", "connect", "create", "check",
+]);
+
+const hinglishProductWords = new Set([
+  "group", "groups", "campaign", "campaigns", "audience", "account", "session", "sessions", "promotion", "analytics",
+  "billing", "settings", "category", "categories", "approved", "joined", "health", "users",
+]);
+
+const englishSignalWords = new Set([
+  "how", "what", "where", "when", "why", "can", "could", "should", "do", "does", "did", "is", "are", "the", "my",
+  "your", "show", "open", "create", "select", "check", "explain", "manage", "see",
+]);
+
+function scoreHinglish(text: string) {
+  const normalized = normalizeQuestion(text);
+  const words = normalized.split(" ").filter(Boolean);
+  let score = 0;
+  let englishScore = 0;
+  for (const word of words) {
+    if (hinglishWords.has(word)) score += 2;
+    if (hinglishProductWords.has(word)) score += 1;
+    if (englishSignalWords.has(word)) englishScore += 1;
+  }
+  if (/\b(kya|kaise|kese|kaha|kahan|kidhar)\b.*\b(campaign|audience|group|groups|session|analytics|billing)\b/.test(normalized)) score += 3;
+  if (/\b(campaign|audience|group|groups|session|analytics|billing)\b.*\b(kya|kaise|kese|kaha|kahan|kidhar|karu|kru|banana|banau|nahi|nhi)\b/.test(normalized)) score += 3;
+  if (/\b(can you|could you)\b.*\b(mujhe|muje|batao|samjhao|kar sakti|kar sakte)\b/.test(normalized)) score += 4;
+  if (/\b(how do i|where can i|show me|create a|select my)\b/.test(normalized)) englishScore += 3;
+  return { score, englishScore };
+}
+
 function matchScore(question: string, term: string) {
   if (!term) return 0;
   if (question === term) return 6;
   if (question.includes(term)) return term.includes(" ") ? 4 : 2;
   const words = term.split(" ").filter(Boolean);
   if (words.length > 1 && words.every((word) => question.includes(word))) return 3;
+  return 0;
+}
+
+function semanticIntentScore(question: string, intentId: string) {
+  const has = (pattern: RegExp) => pattern.test(question);
+  const productAction = "(how|where|kaise|kese|kaha|kahan|kidhar|banana|banau|banane|create|creation|select|check|open|show|see|milenge|kru|karu|karo)";
+  if (intentId === "campaigns" && (
+    has(new RegExp(`\\bcampaigns?\\b.*\\b${productAction}\\b`)) ||
+    has(new RegExp(`\\b${productAction}\\b.*\\bcampaigns?\\b`)) ||
+    has(/\b(dm|group promotion|send message|message bhejna)\b/)
+  )) return 7;
+  if (intentId === "audience" && (
+    has(new RegExp(`\\baudience\\b.*\\b${productAction}\\b`)) ||
+    has(new RegExp(`\\b${productAction}\\b.*\\baudience\\b`)) ||
+    has(/\b(dm audience|contacts|members|invite|find users)\b/)
+  )) return 7;
+  if (intentId === "groups" && (
+    has(new RegExp(`\\b(approved groups?|joined groups?|groups?|categories|folder)\\b.*\\b${productAction}\\b`)) ||
+    has(new RegExp(`\\b${productAction}\\b.*\\b(approved groups?|joined groups?|groups?|categories|folder)\\b`)) ||
+    has(/\b(find groups|found groups|writable|sendable)\b/)
+  )) return 7;
+  if (intentId === "sessions" && (
+    has(new RegExp(`\\b(sessions?|telegram account|account)\\b.*\\b(health|connect|reconnect|nahi|check|kaise|kese)\\b`)) ||
+    has(new RegExp(`\\b(health|connect|reconnect|nahi|check|kaise|kese)\\b.*\\b(sessions?|telegram account|account)\\b`))
+  )) return 7;
+  if (intentId === "analytics" && (
+    has(/\b(analytics|growth intelligence|growth|report|chart|graph|insight)\b.*\b(kaha|where|show|check|see|kaise)\b/) ||
+    has(/\b(kaha|where|show|check|see|kaise)\b.*\b(analytics|growth intelligence|growth|report|chart|graph|insight)\b/)
+  )) return 7;
+  if (intentId === "billing" && has(/\b(billing|plan|invoice|payment|coins?|credits|settings)\b/)) return 4;
   return 0;
 }
 
@@ -328,7 +437,27 @@ const sectionIntentHints: Record<string, string[]> = {
 };
 
 function localizedIntentAnswer(scope: AssistantScope, intentId: string, language: AssistantLanguage, fallback: string) {
+  const naturalAnswer = naturalAssistantAnswer(scope, intentId, language);
+  if (naturalAnswer) return naturalAnswer;
   return intentTranslations[`${scope}:${intentId}`]?.[language] ?? fallback;
+}
+
+function naturalAssistantAnswer(scope: AssistantScope, intentId: string, language: AssistantLanguage) {
+  if (language !== "hi-IN") return "";
+  if (scope === "promotion-mini-app") {
+    if (intentId === "campaigns") return "Campaign banane ke liye Campaigns section kholo. DM Promotion ya Group Promotion select karo, healthy Telegram session choose karo, Audience ya approved groups set karo, phir campaign create karke History me status check karo.";
+    if (intentId === "audience") return "Audience select karne ke liye Audience ya DM Audience section kholo. Wahan contacts/members review karo, filters apply karo, aur campaign ke liye eligible audience choose karo.";
+    if (intentId === "groups") return "Approved Groups aur Joined Groups groups area me milenge. Find Groups se groups discover karo, Found Groups review karo, approved groups ko categories me rakho, phir campaign me use karo.";
+    if (intentId === "sessions") return "Sessions page par Telegram accounts ki health check karo. Agar session connect nahi ho raha, reconnect try karo; health weak ho to campaign se pehle dusra healthy session choose karo.";
+    if (intentId === "analytics") return "Analytics me campaign reports aur workspace data milta hai. Growth Intelligence group growth snapshots aur Telegram membership signals dikhata hai jab session ke paas access hota hai.";
+    if (intentId === "billing") return "Billing me plans, invoices, Coins aur Add Users credits dikhte hain. Credits use hone wale workflow se pehle Billing check kar lo.";
+  }
+  if (scope === "website") {
+    if (intentId === "promotion") return "Telegram Promotion live workspace hai jahan campaigns, Audience, groups, Sessions, Analytics, Growth Intelligence aur Billing manage hote hain. Start karne ke liye Promotion Mini App open karo.";
+    if (intentId === "mark8bot") return "MARK8BOT Telegram-first product platform hai. Telegram Promotion abhi live hai, aur MARK ek alag intelligence product hai jo business context ke liye ban raha hai.";
+    if (intentId === "start") return "Start karne ke liye Telegram Promotion bot ya Mini App login open karo aur apne customer account se sign in karo.";
+  }
+  return "";
 }
 
 const intentTranslations: Partial<Record<`${AssistantScope}:${string}`, Partial<Record<AssistantLanguage, string>>>> = {

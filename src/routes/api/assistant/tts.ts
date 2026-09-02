@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import {
   ASSISTANT_TTS_TIMEOUT_MS,
   parseAssistantTtsRequest,
+  prepareTextForSpeech,
   routeAssistantVoice,
 } from "@/lib/assistant-voice";
 
@@ -19,7 +20,11 @@ export const Route = createFileRoute("/api/assistant/tts")({
           return Response.json({ ok: false, fallback: "browser", error: "Self-hosted voice service is not configured." }, { status: 503 });
         }
 
-        const route = routeAssistantVoice(parsed.value);
+        const speechRequest = {
+          ...parsed.value,
+          text: prepareTextForSpeech(parsed.value.text, parsed.value.language, parsed.value.assistant),
+        };
+        const route = routeAssistantVoice(speechRequest);
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), ASSISTANT_TTS_TIMEOUT_MS);
         try {
@@ -29,7 +34,7 @@ export const Route = createFileRoute("/api/assistant/tts")({
               "content-type": "application/json",
               ...(process.env["LARA_VOICE_TOKEN"] ? { authorization: `Bearer ${process.env["LARA_VOICE_TOKEN"]}` } : {}),
             },
-            body: JSON.stringify({ ...parsed.value, route }),
+            body: JSON.stringify({ ...speechRequest, route }),
             signal: controller.signal,
           });
           if (!response.ok) {

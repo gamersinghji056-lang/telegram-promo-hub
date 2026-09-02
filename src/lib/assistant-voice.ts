@@ -84,3 +84,124 @@ export function parseAssistantTtsRequest(payload: unknown): { ok: true; value: A
 export function ttsCacheKey(request: AssistantTtsRequest) {
   return `${request.assistant}:${request.language}:${request.text}`;
 }
+
+export function prepareTextForSpeech(text: string, language: AssistantLanguage, assistant: AssistantVoiceId): string {
+  const cleaned = text
+    .replace(/https?:\/\/\S+/gi, " link ")
+    .replace(/[`*_#>~[\]()]/g, " ")
+    .replace(/[\u{1f300}-\u{1faff}]/gu, " ")
+    .replace(/\bDM\b/g, "D M")
+    .replace(/\bUPI\b/g, "U P I")
+    .replace(/\bMARK8BOT\b/g, "MARK eight bot")
+    .replace(/\bMARK8LARA\b/g, "MARK eight LARA")
+    .replace(/\bLARA\b/g, assistant === "mark8lara" ? "LARA" : "Laara")
+    .replace(/\bMini App\b/gi, "Mini app")
+    .replace(/\bTelegram\b/g, "Telegram")
+    .replace(/[!?]{2,}/g, ".")
+    .replace(/[-–—]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (language !== "hi-IN") return cleaned;
+  return normalizeHinglishForHindiTts(cleaned);
+}
+
+const hindiTtsWords: Record<string, string> = {
+  mujhe: "मुझे",
+  muje: "मुझे",
+  main: "मैं",
+  mai: "मैं",
+  me: "में",
+  mein: "में",
+  mera: "मेरा",
+  meri: "मेरी",
+  mere: "मेरे",
+  aapko: "आपको",
+  aapki: "आपकी",
+  batao: "बताओ",
+  btao: "बताओ",
+  samjhao: "समझाओ",
+  kaise: "कैसे",
+  kese: "कैसे",
+  kaha: "कहाँ",
+  kahan: "कहाँ",
+  kidhar: "किधर",
+  karna: "करना",
+  krna: "करना",
+  karo: "करो",
+  karu: "करूं",
+  kru: "करूं",
+  sakti: "सकती",
+  sakte: "सकते",
+  hoon: "हूँ",
+  hu: "हूँ",
+  hai: "है",
+  hain: "हैं",
+  nahi: "नहीं",
+  nhi: "नहीं",
+  chahiye: "चाहिए",
+  chaiye: "चाहिए",
+  banana: "बनाना",
+  banane: "बनाने",
+  banau: "बनाऊँ",
+  banaya: "बनाया",
+  kholo: "खोलो",
+  milenge: "मिलेंगे",
+  milegi: "मिलेगी",
+  choose: "choose",
+  select: "select",
+  check: "check",
+  create: "create",
+  connect: "connect",
+  add: "add",
+  phir: "फिर",
+  fir: "फिर",
+  ab: "अब",
+  aur: "और",
+  ya: "या",
+  se: "से",
+  par: "पर",
+  pe: "पर",
+  ke: "के",
+  ki: "की",
+  ko: "को",
+  liye: "लिए",
+  wala: "वाला",
+  wali: "वाली",
+  vali: "वाली",
+};
+
+const speechProductTerms: Record<string, string> = {
+  campaigns: "Campaigns",
+  campaign: "Campaign",
+  audience: "Audience",
+  "approved groups": "Approved Groups",
+  "joined groups": "Joined Groups",
+  groups: "groups",
+  group: "group",
+  sessions: "Sessions",
+  session: "session",
+  analytics: "Analytics",
+  "growth intelligence": "Growth Intelligence",
+  billing: "Billing",
+  settings: "Settings",
+  telegram: "Telegram",
+};
+
+function normalizeHinglishForHindiTts(text: string) {
+  const protectedText = Object.entries(speechProductTerms).reduce((value, [term, replacement]) => {
+    return value.replace(new RegExp(`\\b${escapeRegExp(term)}\\b`, "gi"), ` ${replacement} `);
+  }, text);
+  return protectedText
+    .split(/(\s+|[,.])/)
+    .map((part) => {
+      const key = part.toLowerCase();
+      return hindiTtsWords[key] ?? part;
+    })
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
