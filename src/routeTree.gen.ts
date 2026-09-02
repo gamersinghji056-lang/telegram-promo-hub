@@ -33,6 +33,7 @@ import { Route as MiniAppSectionRouteImport } from './routes/mini-app.$section'
 import { Route as MiniAppLoginRouteImport } from './routes/mini-app.login'
 import { Route as MiniAppRegisterRouteImport } from './routes/mini-app.register'
 import { Route as PromotionAppRouteImport } from './routes/promotion.app'
+import { Route as ApiAssistantTtsRouteImport } from './routes/api/assistant/tts'
 import { Route as ApiInternalCampaignWorkerRouteImport } from './routes/api/internal/campaign-worker'
 import { Route as ApiInternalEntitySendTestRouteImport } from './routes/api/internal/entity-send-test'
 import { Route as ApiPublicTelegramWebhookRouteImport } from './routes/api/public/telegram/webhook'
@@ -157,6 +158,11 @@ const PromotionAppRoute = PromotionAppRouteImport.update({
   path: '/app',
   getParentRoute: () => PromotionRoute,
 } as any)
+const ApiAssistantTtsRoute = ApiAssistantTtsRouteImport.update({
+  id: '/api/assistant/tts',
+  path: '/api/assistant/tts',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiInternalCampaignWorkerRoute =
   ApiInternalCampaignWorkerRouteImport.update({
     id: '/api/internal/campaign-worker',
@@ -201,6 +207,7 @@ export interface FileRoutesByFullPath {
   '/promotion/app': typeof PromotionAppRoute
   '/admin/': typeof AdminIndexRoute
   '/mini-app/': typeof MiniAppIndexRoute
+  '/api/assistant/tts': typeof ApiAssistantTtsRoute
   '/api/internal/campaign-worker': typeof ApiInternalCampaignWorkerRoute
   '/api/internal/entity-send-test': typeof ApiInternalEntitySendTestRoute
   '/api/public/telegram/webhook': typeof ApiPublicTelegramWebhookRoute
@@ -228,6 +235,7 @@ export interface FileRoutesByTo {
   '/promotion/app': typeof PromotionAppRoute
   '/admin': typeof AdminIndexRoute
   '/mini-app': typeof MiniAppIndexRoute
+  '/api/assistant/tts': typeof ApiAssistantTtsRoute
   '/api/internal/campaign-worker': typeof ApiInternalCampaignWorkerRoute
   '/api/internal/entity-send-test': typeof ApiInternalEntitySendTestRoute
   '/api/public/telegram/webhook': typeof ApiPublicTelegramWebhookRoute
@@ -258,6 +266,7 @@ export interface FileRoutesById {
   '/promotion/app': typeof PromotionAppRoute
   '/admin/': typeof AdminIndexRoute
   '/mini-app/': typeof MiniAppIndexRoute
+  '/api/assistant/tts': typeof ApiAssistantTtsRoute
   '/api/internal/campaign-worker': typeof ApiInternalCampaignWorkerRoute
   '/api/internal/entity-send-test': typeof ApiInternalEntitySendTestRoute
   '/api/public/telegram/webhook': typeof ApiPublicTelegramWebhookRoute
@@ -289,6 +298,7 @@ export interface FileRouteTypes {
     | '/promotion/app'
     | '/admin/'
     | '/mini-app/'
+    | '/api/assistant/tts'
     | '/api/internal/campaign-worker'
     | '/api/internal/entity-send-test'
     | '/api/public/telegram/webhook'
@@ -316,6 +326,7 @@ export interface FileRouteTypes {
     | '/promotion/app'
     | '/admin'
     | '/mini-app'
+    | '/api/assistant/tts'
     | '/api/internal/campaign-worker'
     | '/api/internal/entity-send-test'
     | '/api/public/telegram/webhook'
@@ -345,6 +356,7 @@ export interface FileRouteTypes {
     | '/promotion/app'
     | '/admin/'
     | '/mini-app/'
+    | '/api/assistant/tts'
     | '/api/internal/campaign-worker'
     | '/api/internal/entity-send-test'
     | '/api/public/telegram/webhook'
@@ -364,6 +376,7 @@ export interface RootRouteChildren {
   PromotionRoute: typeof PromotionRouteWithChildren
   SecurityRoute: typeof SecurityRoute
   TermsRoute: typeof TermsRoute
+  ApiAssistantTtsRoute: typeof ApiAssistantTtsRoute
   ApiInternalCampaignWorkerRoute: typeof ApiInternalCampaignWorkerRoute
   ApiInternalEntitySendTestRoute: typeof ApiInternalEntitySendTestRoute
   ApiPublicTelegramWebhookRoute: typeof ApiPublicTelegramWebhookRoute
@@ -539,6 +552,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PromotionAppRouteImport
       parentRoute: typeof PromotionRoute
     }
+    '/api/assistant/tts': {
+      id: '/api/assistant/tts'
+      path: '/api/assistant/tts'
+      fullPath: '/api/assistant/tts'
+      preLoaderRoute: typeof ApiAssistantTtsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/internal/campaign-worker': {
       id: '/api/internal/campaign-worker'
       path: '/api/internal/campaign-worker'
@@ -643,6 +663,7 @@ const rootRouteChildren: RootRouteChildren = {
   PromotionRoute: PromotionRouteWithChildren,
   SecurityRoute: SecurityRoute,
   TermsRoute: TermsRoute,
+  ApiAssistantTtsRoute: ApiAssistantTtsRoute,
   ApiInternalCampaignWorkerRoute: ApiInternalCampaignWorkerRoute,
   ApiInternalEntitySendTestRoute: ApiInternalEntitySendTestRoute,
   ApiPublicTelegramWebhookRoute: ApiPublicTelegramWebhookRoute,

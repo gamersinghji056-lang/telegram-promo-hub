@@ -10,6 +10,7 @@ import {
   type AssistantContext,
   type AssistantLanguage,
 } from "@/lib/assistant-knowledge";
+import { ASSISTANT_TTS_TIMEOUT_MS, assistantIdFromName } from "@/lib/assistant-voice";
 
 type Position = { x: number; y: number };
 type ChatMessage = { role: "assistant" | "user"; text: string; voice?: boolean };
@@ -77,6 +78,9 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
   const speechNoInputTimerRef = useRef<number | null>(null);
   const speechMaxTimerRef = useRef<number | null>(null);
   const submittedUtteranceRef = useRef("");
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioAbortRef = useRef<AbortController | null>(null);
+  const speechTurnRef = useRef(0);
   const canListen = useMemo(() => typeof window !== "undefined" && Boolean((window as SpeechWindow).SpeechRecognition || (window as SpeechWindow).webkitSpeechRecognition), []);
   const canSpeak = useMemo(() => typeof window !== "undefined" && "speechSynthesis" in window && "SpeechSynthesisUtterance" in window, []);
 
@@ -172,6 +176,7 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
 
   useEffect(() => () => {
     recognitionRef.current?.abort?.();
+    stopCurrentAudio();
     window.speechSynthesis?.cancel();
     voiceModeRef.current = false;
     clearSpeechTimers();
@@ -179,16 +184,88 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
     setAssistantFullOpenDocument(false);
   }, []);
 
-  function speak(text: string, language: AssistantLanguage, continueConversation = false) {
+  async function speak(text: string, language: AssistantLanguage, continueConversation = false) {
     setLastVoiceAnswer(text);
     setVoiceNotice("");
+    setVoiceState("processing");
+    const turn = ++speechTurnRef.current;
+    stopCurrentAudio(false);
+    window.speechSynthesis?.cancel();
+    try {
+      await speakSelfHosted(text, language, continueConversation, turn);
+      return;
+    } catch {
+      if (turn !== speechTurnRef.current) return;
+      browserSpeak(text, language, continueConversation, turn);
+    }
+  }
+
+  async function speakSelfHosted(text: string, language: AssistantLanguage, continueConversation: boolean, turn: number) {
+    const controller = new AbortController();
+    audioAbortRef.current = controller;
+    const timeout = window.setTimeout(() => controller.abort(), ASSISTANT_TTS_TIMEOUT_MS + 2000);
+    try {
+      const response = await fetch("/api/assistant/tts", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ assistant: assistantIdFromName(config.name), language, text }),
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error("Self-hosted TTS failed.");
+      const blob = await response.blob();
+      if (!blob.type.startsWith("audio/")) throw new Error("Self-hosted TTS returned non-audio data.");
+      if (turn !== speechTurnRef.current || (continueConversation && !voiceModeRef.current)) return;
+      await playAudioBlob(blob, continueConversation, turn);
+    } finally {
+      window.clearTimeout(timeout);
+      if (audioAbortRef.current === controller) audioAbortRef.current = null;
+    }
+  }
+
+  function playAudioBlob(blob: Blob, continueConversation: boolean, turn: number) {
+    return new Promise<void>((resolve, reject) => {
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      setVoiceState("assistant-speaking");
+      setSpeaking(true);
+      const cleanup = () => {
+        URL.revokeObjectURL(url);
+        if (audioRef.current === audio) audioRef.current = null;
+      };
+      audio.onended = () => {
+        cleanup();
+        if (turn !== speechTurnRef.current) return resolve();
+        setSpeaking(false);
+        if (continueConversation && voiceModeRef.current) {
+          window.setTimeout(() => {
+            if (turn === speechTurnRef.current && voiceModeRef.current) startListening(true);
+          }, 120);
+        } else {
+          setVoiceState("idle");
+        }
+        resolve();
+      };
+      audio.onerror = () => {
+        cleanup();
+        setSpeaking(false);
+        reject(new Error("Audio playback failed."));
+      };
+      audio.play().catch((error) => {
+        cleanup();
+        setSpeaking(false);
+        reject(error);
+      });
+    });
+  }
+
+  function browserSpeak(text: string, language: AssistantLanguage, continueConversation = false, turn = ++speechTurnRef.current) {
     if (!canSpeak) {
       setVoiceNotice("Voice output is unavailable in this browser, so I showed the answer as text.");
       if (continueConversation) stopVoice();
       setVoiceState("idle");
       return;
     }
-    window.speechSynthesis.cancel();
     setVoiceState("assistant-speaking");
     const latestVoices = voices.length ? voices : window.speechSynthesis.getVoices();
     const voice = chooseVoice(language, latestVoices);
@@ -208,16 +285,22 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
     utterance.voice = matchedVoice ?? null;
     utterance.rate = settings.rate;
     utterance.pitch = settings.pitch;
-    utterance.onstart = () => setSpeaking(true);
+    utterance.onstart = () => {
+      if (turn === speechTurnRef.current) setSpeaking(true);
+    };
     utterance.onend = () => {
+      if (turn !== speechTurnRef.current) return;
       setSpeaking(false);
       if (continueConversation && voiceModeRef.current) {
-        window.setTimeout(() => startListening(true), 120);
+        window.setTimeout(() => {
+          if (turn === speechTurnRef.current && voiceModeRef.current) startListening(true);
+        }, 120);
       } else {
         setVoiceState("idle");
       }
     };
     utterance.onerror = () => {
+      if (turn !== speechTurnRef.current) return;
       setSpeaking(false);
       setVoiceState("idle");
       if (continueConversation && voiceModeRef.current) stopVoice();
@@ -243,7 +326,7 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
       { role: "assistant", text: answer, voice },
     ]);
     setInput("");
-    if (voice) speak(answer, responseLanguage, continueConversation);
+    if (voice) void speak(answer, responseLanguage, continueConversation);
   }
 
   function submit(event: FormEvent) {
@@ -254,7 +337,9 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
   function stopVoice() {
     voiceModeRef.current = false;
     setVoiceMode(false);
+    speechTurnRef.current += 1;
     clearSpeechTimers();
+    stopCurrentAudio();
     recognitionRef.current?.stop();
     recognitionRef.current?.abort?.();
     recognitionRef.current = null;
@@ -265,6 +350,19 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
     window.speechSynthesis?.cancel();
     setSpeaking(false);
     setVoiceState("idle");
+  }
+
+  function stopCurrentAudio(cancelSpeech = true) {
+    audioAbortRef.current?.abort();
+    audioAbortRef.current = null;
+    const audio = audioRef.current;
+    if (audio) {
+      audio.pause();
+      audio.removeAttribute("src");
+      audio.load();
+      audioRef.current = null;
+    }
+    if (cancelSpeech) window.speechSynthesis?.cancel();
   }
 
   function startVoiceConversation() {
@@ -284,14 +382,7 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
     }
     voiceModeRef.current = true;
     setVoiceMode(true);
-    if (!canSpeak) {
-      const notice = "Voice output is not available in this browser, so I will listen and show answers as text.";
-      setVoiceNotice(notice);
-      setMessages((current) => [...current, { role: "assistant", text: notice }]);
-      startListening(true);
-      return;
-    }
-    speak(voiceGreeting(config.name, languageRef.current), languageRef.current, true);
+    void speak(voiceGreeting(config.name, languageRef.current), languageRef.current, true);
   }
 
   function startListening(continueConversation: boolean) {
@@ -442,7 +533,7 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
   }
 
   function replayLast() {
-    if (lastVoiceAnswer) speak(lastVoiceAnswer, inferAssistantLanguage(lastVoiceAnswer, language));
+    if (lastVoiceAnswer) void speak(lastVoiceAnswer, inferAssistantLanguage(lastVoiceAnswer, language));
   }
 
   function beginDrag(event: ReactPointerEvent<HTMLDivElement>) {
@@ -507,6 +598,7 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
     setVoiceNotice("");
     if (speaking) {
       window.speechSynthesis?.cancel();
+      stopCurrentAudio();
       setSpeaking(false);
     }
   }

@@ -15,6 +15,7 @@
     "start:order-worker": "MARK8BOT_RUNTIME_ROLE=order-worker node .output/server/index.mjs",
     "start:promotion-bot": "MARK8BOT_RUNTIME_ROLE=promotion-bot node .output/server/index.mjs",
     "start:mark-worker": "MARK8BOT_RUNTIME_ROLE=mark-ai node workers/mark-intelligence-worker.mjs",
+    "start:lara-voice": "node services/lara-voice/server.mjs",
     "typecheck": "tsc --noEmit --noPropertyAccessFromIndexSignature false --exactOptionalPropertyTypes false",
     "test": "node --test tests/*.test.mjs",
     "lint": "eslint .",

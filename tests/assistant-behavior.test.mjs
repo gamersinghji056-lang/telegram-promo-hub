@@ -144,7 +144,7 @@ test("voice output uses selected language voices and fails truthfully", () => {
   assert(floating.includes("voiceSettings(language)"));
   assert(floating.includes("premium|enhanced|neural|natural"));
   assert(floating.includes("No installed ${languageLabel(language)} speech voice is available"));
-  assert(floating.includes("window.speechSynthesis.cancel()"));
+  assert(floating.includes("window.speechSynthesis?.cancel()"));
   assert(floating.includes("setSpeaking(true)"));
   assert(floating.includes("setSpeaking(false)"));
   assert(floating.includes("utterance.onerror"));
