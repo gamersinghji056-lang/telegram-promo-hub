@@ -120,6 +120,41 @@ test("lara-voice mock mode rejects invalid requests", async () => {
   }
 });
 
+test("lara-voice mock mode generates requested multilingual sample phrases", async () => {
+  const port = 8899;
+  const service = await startMockVoiceService(port);
+  const samples = [
+    ["en-US", "Hello, I can help you manage your Telegram Promotion workspace.", "af_bella", "af_heart"],
+    ["hi-IN", "नमस्ते, मैं आपके टेलीग्राम प्रमोशन वर्कस्पेस में आपकी मदद कर सकती हूँ।", "hf_alpha", "hf_beta"],
+    ["hi-IN", "Namaste, main aapko campaign banane aur audience manage karne me help kar sakti hoon.", "hf_alpha", "hf_beta"],
+    ["ru-RU", "Здравствуйте, я могу помочь вам с Telegram Promotion.", "ru_RU-irina-medium", "ru_RU-irina-medium"],
+    ["zh-CN", "你好，我可以帮助你管理 Telegram Promotion。", "zf_xiaoxiao", "zf_xiaoyi"],
+    ["fa-IR", "سلام، من می‌توانم در مدیریت Telegram Promotion به شما کمک کنم.", "fa_IR-ganji-medium", "fa_IR-ganji_adabi-medium"],
+  ];
+  try {
+    await waitFor(async () => {
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}/healthz`);
+        return response.ok;
+      } catch {
+        return false;
+      }
+    });
+    for (const [language, text, laraVoice, mark8laraVoice] of samples) {
+      const lara = await synthesize(port, "lara", language, text);
+      const mark8lara = await synthesize(port, "mark8lara", language, text);
+      assert.equal(lara.contentType, "audio/wav");
+      assert.equal(mark8lara.contentType, "audio/wav");
+      assert(lara.bytes > 44);
+      assert(mark8lara.bytes > 44);
+      assert.equal(lara.voice, laraVoice);
+      assert.equal(mark8lara.voice, mark8laraVoice);
+    }
+  } finally {
+    await service.cleanup();
+  }
+});
+
 async function synthesize(port, assistant, language, text) {
   const response = await fetch(`http://127.0.0.1:${port}/synthesize`, {
     method: "POST",
