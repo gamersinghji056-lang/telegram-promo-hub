@@ -86,7 +86,7 @@ createServer(async (request, response) => {
   } catch (error) {
     return json(response, 500, { ok: false, error: error instanceof Error ? error.message : "Voice synthesis failed." });
   }
-}).listen(PORT, "0.0.0.0", () => {
+}).listen(PORT, () => {
   console.info(JSON.stringify({ event: "lara_voice_started", port: PORT }));
 });
 
