@@ -4,11 +4,12 @@ import { ArrowLeft, MessageCircle, PauseCircle, Send, Volume2 } from "lucide-rea
 import {
   ASSISTANT_LANGUAGES,
   ASSISTANT_LANGUAGE_OPTIONS,
-  answerAssistantQuestion,
+  answerAssistantTurn,
   inferAssistantLanguage,
   normalizeLanguagePreference,
   normalizeLanguage,
   resolveAssistantTurnLanguage,
+  type AssistantConversationContext,
   type AssistantContext,
   type AssistantLanguage,
   type AssistantLanguagePreference,
@@ -86,6 +87,7 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioAbortRef = useRef<AbortController | null>(null);
   const speechTurnRef = useRef(0);
+  const assistantConversationRef = useRef<AssistantConversationContext>({ turns: 0 });
   const canListen = useMemo(() => typeof window !== "undefined" && Boolean((window as SpeechWindow).SpeechRecognition || (window as SpeechWindow).webkitSpeechRecognition), []);
   const canSpeak = useMemo(() => typeof window !== "undefined" && "speechSynthesis" in window && "SpeechSynthesisUtterance" in window, []);
 
@@ -349,7 +351,9 @@ export function FloatingAssistant({ config, pageContext }: { config: AssistantCo
       localStorage.setItem(languageStorageKey, turnLanguage.explicitLanguage);
       setLanguage(turnLanguage.explicitLanguage);
     }
-    const answer = answerAssistantQuestion(config, value, pageContext, responseLanguage);
+    const assistantTurn = answerAssistantTurn(config, value, pageContext, responseLanguage, assistantConversationRef.current);
+    assistantConversationRef.current = assistantTurn.nextContext;
+    const answer = assistantTurn.answer;
     setMessages((current) => [
       ...current,
       { role: "user", text: value, voice },

@@ -67,23 +67,101 @@ test("explicit language preference changes response language without disabling i
   assert.equal(understood.responseLanguage, "en-US");
 });
 
-test("natural Promotion intents resolve across English and Hinglish variants", async () => {
+test("natural Promotion paraphrases resolve by meaning", async () => {
   const { knowledge } = await loadAssistantModules();
   const samples = [
-    ["Mujhe campaign banana hai", "Campaign banane ke liye"],
-    ["campaign kese banau", "Campaign banane ke liye"],
-    ["campaign create kaha se hoga", "Campaign banane ke liye"],
-    ["where is campaign creation", "Campaigns are split"],
-    ["Where do I select the audience?", "Audience tools"],
+    ["campaign kaise banega", "Campaign banane ke liye"],
+    ["mujhe campaign start karna hai", "Campaign banane ke liye"],
+    ["promotion kaha se start karu", "Campaign banane ke liye"],
+    ["how can I send promotion", "Open Campaigns"],
+    ["I want to promote in groups", "Group Campaign"],
+    ["group me message bhejna hai", "Group Campaign"],
+    ["campaign create karne ka option kidhar hai", "Campaign banane ke liye"],
+    ["where can I create group promotion", "Group Campaign"],
+    ["campaign creation option?", "Open Campaigns"],
+    ["groups ko message kaise bheju", "Group Campaign"],
+    ["Where do I select the audience?", "Audience"],
     ["Ab approved groups kaha milenge?", "Approved Groups"],
     ["session connect nahi ho raha kya karu?", "Sessions page"],
-    ["Where is analytics?", "Analytics reports"],
+    ["Where is analytics?", "Analytics"],
   ];
   for (const [question, expected] of samples) {
     const language = knowledge.resolveAssistantTurnLanguage(question, "auto", "en-US").responseLanguage;
     const answer = knowledge.answerAssistantQuestion(knowledge.promotionAssistant, question, undefined, language);
     assert(answer.includes(expected), `${question} -> ${answer}`);
   }
+});
+
+test("semantic router extracts topic action and confidence instead of fixed answers", async () => {
+  const { knowledge } = await loadAssistantModules();
+  const disconnected = knowledge.understandAssistantMessage(knowledge.promotionAssistant, "mere sessions bar bar disconnect kyu ho rahe hain", "hi-IN");
+  assert.equal(disconnected.topic, "session-health");
+  assert.equal(disconnected.action, "troubleshooting");
+  assert(disconnected.confidence >= 4);
+
+  const approved = knowledge.understandAssistantMessage(knowledge.promotionAssistant, "jo groups mene approve kiye the wo kaha hain", "hi-IN");
+  assert.equal(approved.topic, "approved-groups");
+  assert.equal(approved.action, "navigation");
+
+  const targeting = knowledge.understandAssistantMessage(knowledge.promotionAssistant, "campaign me sirf selected groups ko kese bheju", "hi-IN");
+  assert.equal(targeting.topic, "group-campaign");
+  assert.equal(targeting.action, "selection");
+});
+
+test("same topic composes different answers for navigation selection and difference intents", async () => {
+  const { knowledge } = await loadAssistantModules();
+  const location = knowledge.answerAssistantTurn(knowledge.promotionAssistant, "approved groups kaha milenge", undefined, "hi-IN");
+  const use = knowledge.answerAssistantTurn(knowledge.promotionAssistant, "approved group ko campaign me use kese karu", undefined, "hi-IN");
+  const difference = knowledge.answerAssistantTurn(knowledge.promotionAssistant, "approved aur joined group me difference kya hai", undefined, "hi-IN");
+
+  assert(location.answer.includes("Audience kholo"));
+  assert(use.answer.includes("targeting step"));
+  assert.notEqual(location.answer, use.answer);
+  assert(difference.answer.includes("Approved Groups wo hain"));
+  assert(difference.answer.includes("Joined Groups wo hain"));
+});
+
+test("bounded follow-up context carries campaign workflow across short turns", async () => {
+  const { knowledge } = await loadAssistantModules();
+  let context = { turns: 0 };
+
+  const first = knowledge.answerAssistantTurn(knowledge.promotionAssistant, "mujhe group promotion karna hai", undefined, "hi-IN", context);
+  context = first.nextContext;
+  assert.equal(first.understanding.topic, "group-campaign");
+  assert(first.answer.includes("Group Campaign"));
+
+  const second = knowledge.answerAssistantTurn(knowledge.promotionAssistant, "groups kaha se aayenge", undefined, "hi-IN", context);
+  context = second.nextContext;
+  assert(["approved-groups", "find-groups", "group-campaign"].includes(second.understanding.topic));
+  assert(/Find Groups|Approved Groups|Categories/.test(second.answer));
+
+  const third = knowledge.answerAssistantTurn(knowledge.promotionAssistant, "aur session?", undefined, "hi-IN", context);
+  context = third.nextContext;
+  assert.equal(third.understanding.topic, "sessions");
+  assert(third.answer.includes("Sessions"));
+
+  const fourth = knowledge.answerAssistantTurn(knowledge.promotionAssistant, "where can I check its status?", undefined, "en-US", context);
+  assert.equal(fourth.understanding.language, "en-US");
+  assert.equal(fourth.understanding.topic, "analytics");
+  assert(/Analytics|Campaign History/.test(fourth.answer));
+});
+
+test("smart fallback clarifies Promotion-like low-confidence questions and refuses unrelated ones", async () => {
+  const { knowledge } = await loadAssistantModules();
+  const lowConfidence = knowledge.answerAssistantTurn(knowledge.promotionAssistant, "promotion option confuse kar raha hai", undefined, "hi-IN");
+  assert(lowConfidence.answer.includes("campaign banana"));
+  const unrelated = knowledge.answerAssistantTurn(knowledge.promotionAssistant, "kal ka weather kya hai", undefined, "hi-IN");
+  assert(unrelated.answer.includes("Promotion workspace"));
+});
+
+test("semantic queries work in supported scripts without changing LARA scope", async () => {
+  const { knowledge } = await loadAssistantModules();
+  assert.equal(knowledge.answerAssistantTurn(knowledge.promotionAssistant, "मैं campaign कैसे बनाऊँ", undefined, "hi-IN").understanding.topic, "campaigns");
+  assert.equal(knowledge.answerAssistantTurn(knowledge.promotionAssistant, "как проверить session health", undefined, "ru-RU").understanding.topic, "session-health");
+  assert.equal(knowledge.answerAssistantTurn(knowledge.promotionAssistant, "在哪里创建 campaign", undefined, "zh-CN").understanding.topic, "campaigns");
+  assert.equal(knowledge.answerAssistantTurn(knowledge.promotionAssistant, "چطور campaign بسازم", undefined, "fa-IR").understanding.topic, "campaigns");
+  const markQuestion = knowledge.answerAssistantTurn(knowledge.promotionAssistant, "mark ai business plan batao", undefined, "hi-IN");
+  assert(!markQuestion.answer.includes("MARK is"));
 });
 
 test("spoken text is normalized separately for Hindi and Hinglish Piper output", async () => {
@@ -96,6 +174,25 @@ test("spoken text is normalized separately for Hindi and Hinglish Piper output",
   assert(!spoken.includes("**"));
   assert(!spoken.includes("https://"));
   assert(spoken.includes("बनाने के लिए"));
-  assert(spoken.includes("Campaigns section खोलो"));
-  assert(spoken.includes("Audience select करो"));
+  assert(spoken.includes("कैंपेन्स section खोलो"));
+  assert(spoken.includes("ऑडियंस select करो"));
+});
+
+test("language-specific speech normalization does not leak Hindi pronunciation into other languages", async () => {
+  const { voice } = await loadAssistantModules();
+  const hi = voice.prepareTextForSpeech("Mujhe Group Campaign banana hai aur approved groups select karne hain.", "hi-IN", "lara");
+  const en = voice.prepareTextForSpeech("Open Campaigns and choose Group Campaign.", "en-US", "lara");
+  const ru = voice.prepareTextForSpeech("Откройте Campaigns и выберите Group Campaign.", "ru-RU", "lara");
+  const zh = voice.prepareTextForSpeech("打开 Campaigns，然后选择 Group Campaign。", "zh-CN", "lara");
+  const fa = voice.prepareTextForSpeech("Campaigns را باز کنید و Group Campaign را انتخاب کنید.", "fa-IR", "lara");
+
+  assert(hi.includes("मुझे"));
+  assert(hi.includes("ग्रुप कैंपेन"));
+  assert.equal(en.includes("ग्रुप"), false);
+  assert.equal(ru.includes("ग्रुप"), false);
+  assert.equal(zh.includes("ग्रुप"), false);
+  assert.equal(fa.includes("ग्रुप"), false);
+  assert(ru.includes("кампейнс"));
+  assert(zh.includes("活动"));
+  assert(fa.includes("کمپین"));
 });

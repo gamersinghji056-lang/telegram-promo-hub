@@ -1,6 +1,47 @@
 export type AssistantScope = "website" | "promotion-mini-app";
 export type AssistantLanguage = "en-US" | "hi-IN" | "ru-RU" | "zh-CN" | "fa-IR";
 export type AssistantLanguagePreference = "auto" | AssistantLanguage;
+export type AssistantTopic =
+  | "home"
+  | "campaigns"
+  | "dm-campaign"
+  | "group-campaign"
+  | "audience"
+  | "find-groups"
+  | "found-groups"
+  | "approved-groups"
+  | "joined-groups"
+  | "categories"
+  | "sessions"
+  | "session-health"
+  | "analytics"
+  | "growth-intelligence"
+  | "add-users"
+  | "refer-earn"
+  | "billing"
+  | "settings"
+  | "support"
+  | "mark-navigation"
+  | "unknown";
+export type AssistantAction = "how-to" | "navigation" | "troubleshooting" | "difference" | "status" | "selection" | "explain" | "pricing" | "out-of-scope";
+export type AssistantConversationContext = {
+  topic?: AssistantTopic;
+  subtopic?: string;
+  action?: AssistantAction;
+  language?: AssistantLanguage;
+  turns: number;
+};
+export type AssistantUnderstanding = {
+  language: AssistantLanguage;
+  topic: AssistantTopic;
+  subtopic?: string;
+  action: AssistantAction;
+  questionType: "how" | "where" | "why" | "what" | "status" | "short-follow-up" | "unknown";
+  entities: string[];
+  confidence: number;
+  inScope: boolean;
+  usedContext: boolean;
+};
 
 export type AssistantContext = {
   scope: AssistantScope;
@@ -274,25 +315,456 @@ export function detectRequestedLanguage(text: string): AssistantLanguage | null 
   return null;
 }
 
-export function answerAssistantQuestion(config: AssistantContext, question: string, pageContext?: string, languageHint?: string | null) {
+export function answerAssistantTurn(
+  config: AssistantContext,
+  question: string,
+  pageContext?: string,
+  languageHint?: string | null,
+  context: AssistantConversationContext = { turns: 0 },
+): { answer: string; understanding: AssistantUnderstanding; nextContext: AssistantConversationContext } {
   const normalized = normalizeQuestion(question);
-  if (!normalized) return config.greeting;
-  const language = inferAssistantLanguage(question, languageHint);
-  const requestedLanguage = detectRequestedLanguage(question);
-  if (requestedLanguage) return languageSwitchAnswer(config, requestedLanguage);
-  const scored = config.intents
-    .map((intent) => ({
-      intent,
-      score: intent.match.reduce((total, term) => total + matchScore(normalized, normalizeQuestion(term)), 0) + semanticIntentScore(normalized, intent.id),
-    }))
-    .filter((item) => item.score > 0)
-    .sort((a, b) => b.score - a.score);
-  const topIntent = scored[0]?.intent;
-  const answer = topIntent ? localizedIntentAnswer(config.scope, topIntent.id, language, topIntent.localized?.[language] ?? topIntent.answer) : localizedFallback(config, language);
-  if (config.scope === "promotion-mini-app") {
-    return withPromotionContext(answer, topIntent?.id, pageContext);
+  const language = inferAssistantLanguage(question, languageHint ?? context.language);
+  if (!normalized) {
+    const understanding = emptyUnderstanding(language);
+    return { answer: config.greeting, understanding, nextContext: context };
   }
-  return answer;
+  const requestedLanguage = detectRequestedLanguage(question);
+  if (requestedLanguage) {
+    const understanding = emptyUnderstanding(requestedLanguage);
+    return {
+      answer: languageSwitchAnswer(config, requestedLanguage),
+      understanding,
+      nextContext: { ...context, language: requestedLanguage, turns: context.turns + 1 },
+    };
+  }
+
+  const understanding = understandAssistantMessage(config, question, language, context);
+  const baseAnswer = composeAssistantAnswer(config, understanding, question);
+  const answer = config.scope === "promotion-mini-app" ? withPromotionContext(baseAnswer, topicIntentId(understanding.topic), pageContext) : baseAnswer;
+  const nextContext = understanding.inScope && understanding.topic !== "unknown"
+    ? {
+        topic: understanding.topic,
+        subtopic: understanding.subtopic,
+        action: understanding.action,
+        language: understanding.language,
+        turns: Math.min(context.turns + 1, 8),
+      }
+    : { ...context, language: understanding.language, turns: Math.min(context.turns + 1, 8) };
+  return { answer, understanding, nextContext };
+}
+
+export function answerAssistantQuestion(config: AssistantContext, question: string, pageContext?: string, languageHint?: string | null) {
+  return answerAssistantTurn(config, question, pageContext, languageHint).answer;
+}
+
+export function understandAssistantMessage(
+  config: AssistantContext,
+  question: string,
+  language: AssistantLanguage = inferAssistantLanguage(question),
+  context: AssistantConversationContext = { turns: 0 },
+): AssistantUnderstanding {
+  const normalized = normalizeQuestion(question);
+  const tokens = normalized.split(" ").filter(Boolean);
+  const topicScores = scoreTopics(normalized, tokens, config.scope);
+  const action = detectAction(normalized);
+  const questionType = detectQuestionType(normalized, action);
+  const entities = detectEntities(normalized);
+  const best = [...topicScores.entries()].sort((a, b) => b[1] - a[1])[0] ?? ["unknown", 0] as [AssistantTopic, number];
+  let topic = best[0];
+  let confidence = best[1];
+  let usedContext = false;
+
+  if (isShortFollowUp(normalized) && context.topic && context.topic !== "unknown") {
+    topic = refineFollowUpTopic(normalized, context.topic);
+    confidence = Math.max(confidence, 6);
+    usedContext = true;
+  } else if (confidence < 4 && context.topic && hasContextualFollowUp(normalized)) {
+    topic = refineFollowUpTopic(normalized, context.topic);
+    confidence = Math.max(confidence, 4.5);
+    usedContext = true;
+  }
+
+  const inScope = config.scope === "promotion-mini-app" ? isPromotionTopic(topic, confidence, normalized) : isWebsiteTopic(topic, confidence, normalized);
+  return {
+    language,
+    topic: inScope ? topic : "unknown",
+    subtopic: detectSubtopic(normalized, topic),
+    action,
+    questionType,
+    entities,
+    confidence: Math.min(10, Number(confidence.toFixed(2))),
+    inScope,
+    usedContext,
+  };
+}
+
+function emptyUnderstanding(language: AssistantLanguage): AssistantUnderstanding {
+  return {
+    language,
+    topic: "unknown",
+    action: "explain",
+    questionType: "unknown",
+    entities: [],
+    confidence: 0,
+    inScope: true,
+    usedContext: false,
+  };
+}
+
+type TopicRule = {
+  topic: AssistantTopic;
+  terms: string[];
+  phrases?: RegExp[];
+  weight?: number;
+};
+
+const promotionTopicRules: TopicRule[] = [
+  {
+    topic: "group-campaign",
+    terms: ["group campaign", "group promotion", "groups promotion", "group promo", "group me", "groups me", "group wala", "selected groups", "message bhejna", "promo bhejna"],
+    phrases: [
+      /\b(group|groups)\b.*\b(campaign|promotion|promo|message|send|bhejna|bheju)\b/,
+      /\b(campaign|promotion|promo|message|send|bhejna|bheju)\b.*\b(group|groups)\b/,
+    ],
+    weight: 2,
+  },
+  {
+    topic: "dm-campaign",
+    terms: ["dm campaign", "dm promotion", "direct message", "private message", "dm audience", "contacts"],
+    phrases: [/\b(dm|direct|private)\b.*\b(campaign|promotion|message|audience)\b/],
+    weight: 2,
+  },
+  {
+    topic: "campaigns",
+    terms: ["campaign", "campaigns", "promotion", "promo", "promote", "send promotion", "start promotion", "campaign create", "campaign creation", "campaign banana", "campaign banega", "campaign banau", "message bhejna", "bhejna hai", "launch", "start"],
+    phrases: [
+      /\b(how|kaise|kese|kaha|kidhar|where|start|create|banana|banau|banega|bhejna|promote|promotion)\b.*\b(campaign|promotion|promo|message|groups?)\b/,
+      /\b(campaign|promotion|promo|message|groups?)\b.*\b(how|kaise|kese|kaha|kidhar|where|start|create|banana|banau|banega|bhejna|promote)\b/,
+    ],
+    weight: 1.5,
+  },
+  {
+    topic: "approved-groups",
+    terms: ["approved group", "approved groups", "approve group", "approve kiye", "approve kiye the", "approved", "swikrit", "manzoor"],
+    phrases: [/\b(approved|approve)\b.*\b(group|groups)\b/, /\b(groups?)\b.*\b(approved|approve)\b/],
+    weight: 2.5,
+  },
+  {
+    topic: "joined-groups",
+    terms: ["joined group", "joined groups", "join group", "joined", "join kiye"],
+    phrases: [/\b(joined|join)\b.*\b(group|groups)\b/, /\b(groups?)\b.*\b(joined|join)\b/],
+    weight: 2.2,
+  },
+  {
+    topic: "find-groups",
+    terms: ["find groups", "search groups", "discover groups", "group dhundna", "groups dhundna", "group find", "groups kaha se aayenge"],
+    phrases: [/\b(find|search|discover|dhundna|dhundo|kaha se aayenge)\b.*\b(group|groups)\b/],
+    weight: 2,
+  },
+  { topic: "found-groups", terms: ["found groups", "found group", "review found", "discovered groups"], weight: 1.8 },
+  { topic: "categories", terms: ["category", "categories", "folder", "folders", "segment", "list"], weight: 1.7 },
+  {
+    topic: "audience",
+    terms: ["audience", "audiences", "users", "contacts", "members", "target", "targeting", "select audience", "choose audience", "eligible users", "audience selection"],
+    phrases: [/\b(audience|users|contacts|members|targeting|target)\b.*\b(select|choose|kaise|where|kaha|kidhar)\b/, /\b(select|choose|kaise|where|kaha|kidhar)\b.*\b(audience|users|contacts|members|targeting|target)\b/],
+    weight: 2,
+  },
+  {
+    topic: "session-health",
+    terms: ["session health", "session disconnect", "sessions disconnect", "disconnect", "disconnected", "unhealthy", "health weak", "connect nahi", "reconnect", "bar bar disconnect", "not connecting"],
+    phrases: [/\b(session|sessions|account)\b.*\b(disconnect|unhealthy|health|reconnect|connect nahi|not connecting|fail|problem)\b/],
+    weight: 2.4,
+  },
+  {
+    topic: "sessions",
+    terms: ["session", "sessions", "telegram account", "account connect", "healthy session", "premium session", "standard session", "sending account"],
+    phrases: [/\b(session|sessions|telegram account|account)\b.*\b(select|choose|kaise|where|kaha|connect|health)\b/],
+    weight: 1.8,
+  },
+  {
+    topic: "analytics",
+    terms: ["analytics", "analysis", "report", "reports", "history", "status", "result", "tracking", "campaign status", "check status", "metrics"],
+    phrases: [/\b(analytics|report|history|status|result|tracking|metrics)\b/, /\b(check|see|where|kaha|kidhar)\b.*\b(status|history|report|analytics)\b/],
+    weight: 1.9,
+  },
+  { topic: "growth-intelligence", terms: ["growth intelligence", "growth", "members growth", "joins", "leaves", "snapshot"], weight: 2 },
+  { topic: "add-users", terms: ["add users", "add members", "invite users", "member add", "users add", "add karna", "invite"], weight: 2 },
+  { topic: "billing", terms: ["billing", "bill", "payment", "invoice", "plan", "plans", "coins", "credits", "price", "pricing", "upi"], weight: 1.9 },
+  { topic: "settings", terms: ["settings", "setting", "language", "theme", "profile", "password", "security", "appearance"], weight: 1.6 },
+  { topic: "support", terms: ["support", "help", "error", "issue", "problem", "contact", "laura_luxee", "@laura_luxee", "madad"], weight: 1.4 },
+  { topic: "home", terms: ["home", "dashboard", "this page", "current page", "yahan", "idhar", "ye page"], weight: 1.3 },
+];
+
+const websiteTopicRules: TopicRule[] = [
+  { topic: "mark-navigation", terms: ["mark8bot", "website", "product", "products", "mark", "telegram promotion", "guides", "faq", "contact", "support", "plans", "pricing"], weight: 1.5 },
+  ...promotionTopicRules,
+];
+
+function scoreTopics(normalized: string, tokens: string[], scope: AssistantScope) {
+  const scores = new Map<AssistantTopic, number>();
+  const rules = scope === "website" ? websiteTopicRules : promotionTopicRules;
+  for (const rule of rules) {
+    let score = 0;
+    for (const term of rule.terms) {
+      const termScore = matchScore(normalized, normalizeQuestion(term));
+      if (termScore) score += termScore * (rule.weight ?? 1);
+    }
+    for (const pattern of rule.phrases ?? []) {
+      if (pattern.test(normalized)) score += 4 * (rule.weight ?? 1);
+    }
+    if (score > 0) scores.set(rule.topic, (scores.get(rule.topic) ?? 0) + score);
+  }
+  if (tokens.some((token) => ["campaign", "campaigns", "promotion", "promo", "promote"].includes(token)) && tokens.some((token) => ["group", "groups"].includes(token))) {
+    scores.set("group-campaign", (scores.get("group-campaign") ?? 0) + 4);
+  }
+  if (tokens.includes("approved") && tokens.includes("joined") && /\b(difference|farak|antar|vs|versus|compare|kya)\b/.test(normalized)) {
+    scores.set("approved-groups", (scores.get("approved-groups") ?? 0) + 4);
+    scores.set("joined-groups", (scores.get("joined-groups") ?? 0) + 3);
+  }
+  if (tokens.includes("session") || tokens.includes("sessions")) {
+    if (/\b(disconnect|nahi|fail|problem|error|health|unhealthy|reconnect)\b/.test(normalized)) {
+      scores.set("session-health", (scores.get("session-health") ?? 0) + 5);
+    }
+  }
+  return scores;
+}
+
+function detectAction(normalized: string): AssistantAction {
+  if (/\b(difference|farak|antar|vs|versus|compare|alag)\b/.test(normalized)) return "difference";
+  if (/\b(disconnect|nahi|nhi|problem|issue|error|fail|failed|why|kyu|kyon|not working|stuck|unhealthy)\b/.test(normalized)) return "troubleshooting";
+  if (/\b(status|history|result|report|check|track|tracking|monitor)\b/.test(normalized)) return "status";
+  if (/\b(select|choose|target|sirf selected|selected|filter|category|categories|audience)\b/.test(normalized)) return "selection";
+  if (/\b(where|kaha|kahan|kidhar|milenge|milega|show|open|see|find|location|page|option)\b/.test(normalized)) return "navigation";
+  if (/\b(how|kaise|kese|karu|kru|karna|create|start|banana|banau|banega|send|bhejna|promote|launch)\b/.test(normalized)) return "how-to";
+  if (/\b(price|pricing|plan|billing|payment|invoice|credits|coins)\b/.test(normalized)) return "pricing";
+  return "explain";
+}
+
+function detectQuestionType(normalized: string, action: AssistantAction): AssistantUnderstanding["questionType"] {
+  if (isShortFollowUp(normalized)) return "short-follow-up";
+  if (/\b(how|kaise|kese|karu|kru)\b/.test(normalized)) return "how";
+  if (/\b(where|kaha|kahan|kidhar|milenge|milega)\b/.test(normalized)) return "where";
+  if (/\b(why|kyu|kyon)\b/.test(normalized)) return "why";
+  if (/\b(what|kya)\b/.test(normalized)) return "what";
+  if (action === "status") return "status";
+  return "unknown";
+}
+
+function detectEntities(normalized: string) {
+  const entityPatterns: [string, RegExp][] = [
+    ["Campaigns", /\bcampaigns?\b|\bpromotion\b|\bpromo\b/],
+    ["Group Campaign", /\bgroup campaign\b|\bgroup promotion\b|\bgroup promo\b/],
+    ["DM Campaign", /\bdm\b|\bdirect message\b/],
+    ["Audience", /\baudience\b|\bcontacts\b|\bmembers\b|\busers\b/],
+    ["Approved Groups", /\bapproved groups?\b/],
+    ["Joined Groups", /\bjoined groups?\b/],
+    ["Sessions", /\bsessions?\b|\btelegram account\b/],
+    ["Analytics", /\banalytics\b|\breports?\b|\bhistory\b|\bstatus\b/],
+    ["Billing", /\bbilling\b|\bplan\b|\bpayment\b|\bcredits?\b|\bcoins?\b/],
+  ];
+  return entityPatterns.flatMap(([label, pattern]) => (pattern.test(normalized) ? [label] : []));
+}
+
+function detectSubtopic(normalized: string, topic: AssistantTopic) {
+  if (topic === "campaigns" || topic === "group-campaign" || topic === "dm-campaign") {
+    if (/\bgroup\b/.test(normalized)) return "group";
+    if (/\bdm\b|\bdirect\b|\bcontacts\b/.test(normalized)) return "dm";
+    if (/\bstatus|history|report\b/.test(normalized)) return "history";
+  }
+  if (topic === "approved-groups" || topic === "joined-groups" || topic === "find-groups" || topic === "found-groups") return "groups";
+  if (topic === "session-health") return "health";
+  return undefined;
+}
+
+function isShortFollowUp(normalized: string) {
+  const words = normalized.split(" ").filter(Boolean);
+  return words.length <= 5 && /\b(aur|and|also|wala|wali|usme|isme|that|it|its|session|audience|groups?|status|history|then|phir)\b/.test(normalized);
+}
+
+function hasContextualFollowUp(normalized: string) {
+  return /\b(usme|isme|its|that|same|aur|and|then|phir|kaha se|where can i)\b/.test(normalized);
+}
+
+function refineFollowUpTopic(normalized: string, previousTopic: AssistantTopic): AssistantTopic {
+  if (/\bsession|account\b/.test(normalized)) return "sessions";
+  if (/\baudience|target|select|choose\b/.test(normalized)) return "audience";
+  if (/\bstatus|history|report|analytics|check\b/.test(normalized)) return "analytics";
+  if (/\bgroup|groups|approved|joined|category|categories\b/.test(normalized)) {
+    if (previousTopic === "campaigns") return "group-campaign";
+    return previousTopic === "approved-groups" || previousTopic === "joined-groups" ? previousTopic : "approved-groups";
+  }
+  return previousTopic;
+}
+
+function isPromotionTopic(topic: AssistantTopic, confidence: number, normalized: string) {
+  if (topic === "mark-navigation") return false;
+  if (topic !== "unknown" && confidence >= 4) return true;
+  return /\b(promotion|campaign|groups?|audience|session|analytics|billing|settings|telegram|approved|joined|category|users?)\b/.test(normalized);
+}
+
+function isWebsiteTopic(topic: AssistantTopic, confidence: number, normalized: string) {
+  if (confidence >= 3.5 && topic !== "unknown") return true;
+  return /\b(mark8bot|mark|promotion|campaign|telegram|plans|pricing|support|guide|website|product)\b/.test(normalized);
+}
+
+function topicIntentId(topic: AssistantTopic) {
+  if (["group-campaign", "dm-campaign"].includes(topic)) return "campaigns";
+  if (["approved-groups", "joined-groups", "find-groups", "found-groups", "categories"].includes(topic)) return "groups";
+  if (topic === "session-health") return "sessions";
+  if (topic === "growth-intelligence") return "analytics";
+  if (topic === "add-users") return "audience";
+  return topic === "unknown" ? undefined : topic;
+}
+
+function composeAssistantAnswer(config: AssistantContext, understanding: AssistantUnderstanding, question: string) {
+  if (config.scope === "website") return composeWebsiteAnswer(config, understanding, question);
+  return composePromotionAnswer(config, understanding, question);
+}
+
+function composePromotionAnswer(config: AssistantContext, understanding: AssistantUnderstanding, question: string) {
+  const language = understanding.language;
+  if (!understanding.inScope) return localizedFallback(config, language);
+  const normalized = normalizeQuestion(question);
+  if (/\b(confuse|confused|samajh nahi|samajh nhi|clear nahi|clear nhi)\b/.test(normalized) && !/\b(campaign|audience|group|session|billing|analytics)\b.*\b(create|banana|select|choose|status|health|send|bhejna|pay|invoice)\b/.test(normalized)) {
+    return promotionClarification(language);
+  }
+  if (understanding.topic === "unknown" || understanding.confidence < 4) return promotionClarification(language);
+  if (language === "hi-IN") return composePromotionHinglish(understanding);
+  if (language === "ru-RU") return composePromotionRussian(understanding);
+  if (language === "zh-CN") return composePromotionChinese(understanding);
+  if (language === "fa-IR") return composePromotionPersian(understanding);
+  return composePromotionEnglish(understanding);
+}
+
+function composeWebsiteAnswer(config: AssistantContext, understanding: AssistantUnderstanding, question: string) {
+  if (!understanding.inScope) return localizedFallback(config, understanding.language);
+  const intentId = topicIntentId(understanding.topic);
+  if (intentId && intentTranslations[`${config.scope}:${intentId}`]?.[understanding.language]) {
+    return intentTranslations[`${config.scope}:${intentId}`]?.[understanding.language] ?? config.fallback;
+  }
+  if (understanding.topic === "mark-navigation") {
+    return understanding.language === "hi-IN"
+      ? "MARK8BOT website par Products me Telegram Promotion aur MARK compare kar sakte ho. Guides setup ke liye hain, FAQ quick answers ke liye, aur Contact support ke liye."
+      : "Use Products to compare Telegram Promotion and MARK, Guides for setup help, FAQ for quick answers, and Contact for support.";
+  }
+  return localizedIntentAnswer(config.scope, intentId ?? "promotion", understanding.language, config.fallback);
+}
+
+function composePromotionEnglish(understanding: AssistantUnderstanding) {
+  switch (understanding.topic) {
+    case "group-campaign":
+      if (understanding.action === "selection") return "In Group Campaign, choose the approved groups or categories you want to target, then set the message and pick a healthy Session before starting.";
+      return "Open Campaigns, choose Group Campaign, select approved groups or categories, set your message, choose a healthy Session, then start the campaign and watch History for status.";
+    case "dm-campaign":
+      return "Open Campaigns and choose DM Promotion. Prepare the DM Audience first, review eligible contacts, set the message, choose the sending Session, then monitor campaign history.";
+    case "campaigns":
+      if (understanding.action === "status") return "Campaign status is in Campaign History. Open the DM or Group history view and check delivery, pauses, failures and completion state there.";
+      return "Open Campaigns. Use DM Promotion for contacts and Group Campaign for groups, then select the audience, set the message, choose a healthy Session and start.";
+    case "audience":
+      return "Open Audience to manage campaign targets. For group promotion, use approved groups or categories; for DM Promotion, prepare contacts in DM Audience before launching.";
+    case "approved-groups":
+      if (understanding.action === "difference") return "Approved Groups are groups you reviewed and approved for promotion. Joined Groups are groups a connected Session has joined. Approved tells LARA what is campaign-ready; Joined tells you what the Telegram account can access.";
+      if (understanding.action === "selection" || understanding.entities.includes("Campaigns")) return "When creating a Group Campaign, use the targeting step to choose Approved Groups or their categories. That is how approved groups become campaign destinations.";
+      return "Open Audience, then Approved Groups. That is where your approved groups are listed and ready to organize for campaign targeting.";
+    case "joined-groups":
+      return "Open Audience, then Joined Groups. These show groups joined by connected Sessions, useful for checking access before using them in campaigns.";
+    case "find-groups":
+      return "Use Find Groups to discover Telegram groups, review them in Found Groups, approve the useful ones, then organize approved groups into categories for campaigns.";
+    case "categories":
+      return "Use Categories to organize approved or joined groups into reusable target sets, so a Group Campaign can select a category instead of picking groups one by one.";
+    case "session-health":
+      return "Open Sessions and check health. If a Session keeps disconnecting, reconnect it, confirm Telegram access, and choose another healthy Session before sending a campaign.";
+    case "sessions":
+      return "Sessions are the Telegram accounts used for sending and checks. Pick a healthy Session before campaigns, Add Users or group workflows.";
+    case "analytics":
+      return "Open Analytics or Campaign History to check performance, delivery state and reports. Use Growth Intelligence when you need group growth signals and membership snapshots.";
+    case "growth-intelligence":
+      return "Growth Intelligence shows group growth snapshots and Telegram membership signals when a connected Session has enough access. Compare it with campaign history for results.";
+    case "add-users":
+      return "Open Add Users when you want to add eligible users to a destination. Check credits, destination limits and Session health before starting the job.";
+    case "billing":
+      return "Open Billing for plans, invoices, Coins and Add Users credits. Check it before workflows that consume credits.";
+    case "settings":
+      return "Open Settings for account profile, password, language, appearance and support access.";
+    default:
+      return promotionClarification("en-US");
+  }
+}
+
+function composePromotionHinglish(understanding: AssistantUnderstanding) {
+  switch (understanding.topic) {
+    case "group-campaign":
+      if (understanding.action === "selection") return "Group Campaign banate waqt targeting step me Approved Groups ya Categories select karo. Phir message set karo, healthy Session choose karo aur campaign start karo.";
+      return "Campaigns section kholo. Groups me promotion bhejna hai to Group Campaign choose karo, approved groups ya categories select karo, message set karo, healthy Session choose karo, phir start karo.";
+    case "dm-campaign":
+      return "Campaigns section me DM Promotion choose karo. Pehle DM Audience prepare karo, eligible contacts review karo, message set karo, Session choose karo aur History me status check karo.";
+    case "campaigns":
+      if (understanding.action === "status") return "Campaign ka status Campaign History me milega. DM ya Group History kholo aur delivery, failures, pause/resume aur completion state check karo.";
+      return "Campaign banane ke liye Campaigns section kholo. DM Promotion contacts ke liye hai, Group Campaign groups ke liye. Audience select karo, message set karo, healthy Session choose karo aur campaign start karo.";
+    case "audience":
+      return "Audience section me campaign targets manage hote hain. Group promotion ke liye Approved Groups ya Categories use karo; DM Promotion ke liye DM Audience me contacts prepare karo.";
+    case "approved-groups":
+      if (understanding.action === "difference") return "Approved Groups wo hain jo tumne review karke campaign ke liye approve kiye. Joined Groups wo hain jahan connected Session already joined hai. Campaign targeting me usually Approved Groups ya Categories use hote hain.";
+      if (understanding.action === "selection" || understanding.entities.includes("Campaigns")) return "Approved Groups ko Group Campaign me use karne ke liye campaign banate waqt targeting step me Approved Groups ya Categories select karo.";
+      return "Audience kholo, phir Approved Groups me jao. Wahi par tumhare approved groups milenge.";
+    case "joined-groups":
+      return "Audience me Joined Groups kholo. Wahan connected Sessions ke joined groups dikhte hain, jisse access aur campaign readiness check kar sakte ho.";
+    case "find-groups":
+      return "Groups lane ke liye Find Groups use karo. Found Groups me review karo, useful groups approve karo, phir Categories me organize karke Group Campaign me use karo.";
+    case "categories":
+      return "Categories me approved ya joined groups ko folders jaisa organize karo. Group Campaign me category select karna one-by-one groups select karne se easy hota hai.";
+    case "session-health":
+      return "Sessions page kholo aur health check karo. Session baar-baar disconnect ho raha hai to reconnect try karo, Telegram access confirm karo, aur campaign se pehle healthy Session choose karo.";
+    case "sessions":
+      return "Sessions connected Telegram accounts hote hain. Campaign, Add Users aur group checks se pehle healthy Session select karna zaroori hai.";
+    case "analytics":
+      return "Analytics ya Campaign History me status aur reports milte hain. Delivery, failures aur results check karo; Growth Intelligence group growth signals ke liye use hota hai.";
+    case "growth-intelligence":
+      return "Growth Intelligence group growth snapshots aur membership signals dikhata hai, jab connected Session ke paas access hota hai. Isko campaign history ke saath compare karo.";
+    case "add-users":
+      return "Add Users section users add karne ke workflow ke liye hai. Start se pehle credits, destination limits aur Session health check karo.";
+    case "billing":
+      return "Billing me plans, invoices, Coins aur Add Users credits milte hain. Credits use hone wale workflow se pehle Billing check kar lo.";
+    case "settings":
+      return "Settings me profile, password, language, theme aur support access milta hai.";
+    default:
+      return promotionClarification("hi-IN");
+  }
+}
+
+function composePromotionRussian(understanding: AssistantUnderstanding) {
+  if (understanding.topic === "session-health") return "Откройте Sessions и проверьте health. Если сессия часто отключается, переподключите ее и перед кампанией выберите здоровую Session.";
+  if (understanding.topic === "approved-groups") return understanding.action === "difference"
+    ? "Approved Groups - это группы, которые вы одобрили для кампаний. Joined Groups - группы, куда уже вошла подключенная Session."
+    : "Откройте Audience, затем Approved Groups. Там находятся одобренные группы для дальнейшего таргетинга.";
+  if (understanding.topic === "analytics") return "Откройте Analytics или Campaign History, чтобы проверить статус, доставку, ошибки и результаты кампании.";
+  return "Откройте Campaigns. Для групп выберите Group Campaign, затем Approved Groups или Categories, задайте сообщение, выберите здоровую Session и запустите кампанию.";
+}
+
+function composePromotionChinese(understanding: AssistantUnderstanding) {
+  if (understanding.topic === "session-health") return "打开 Sessions 查看 health。如果会话经常断开，先重新连接，再选择健康的 Session 发送活动。";
+  if (understanding.topic === "approved-groups") return understanding.action === "difference"
+    ? "Approved Groups 是你审核后批准用于推广的群组；Joined Groups 是已连接 Session 加入过的群组。"
+    : "打开 Audience，然后进入 Approved Groups。那里可以看到已批准、可用于活动定位的群组。";
+  if (understanding.topic === "analytics") return "打开 Analytics 或 Campaign History，可以查看活动状态、发送结果、失败和报表。";
+  return "打开 Campaigns。群组推广选择 Group Campaign，然后选择 Approved Groups 或 Categories，设置消息，选择健康的 Session，再启动。";
+}
+
+function composePromotionPersian(understanding: AssistantUnderstanding) {
+  if (understanding.topic === "session-health") return "بخش Sessions را باز کنید و health را بررسی کنید. اگر Session مرتب قطع می‌شود، دوباره وصل کنید و قبل از کمپین یک Session سالم انتخاب کنید.";
+  if (understanding.topic === "approved-groups") return understanding.action === "difference"
+    ? "Approved Groups گروه‌هایی هستند که برای کمپین تایید کرده‌اید. Joined Groups گروه‌هایی هستند که Session متصل وارد آن‌ها شده است."
+    : "Audience را باز کنید و به Approved Groups بروید. گروه‌های تایید شده برای هدف‌گیری کمپین آنجا هستند.";
+  if (understanding.topic === "analytics") return "Analytics یا Campaign History را باز کنید تا وضعیت، ارسال‌ها، خطاها و نتیجه کمپین را ببینید.";
+  return "Campaigns را باز کنید. برای ارسال در گروه‌ها Group Campaign را انتخاب کنید، سپس Approved Groups یا Categories، پیام و Session سالم را انتخاب کنید.";
+}
+
+function promotionClarification(language: AssistantLanguage) {
+  if (language === "hi-IN") return "Aap campaign banana, groups select karna, ya Session choose/check karna pooch rahe ho? Inme se jo part chahiye bol do, main wahi explain kar dungi.";
+  if (language === "ru-RU") return "Вы спрашиваете про создание кампании, выбор групп или выбор Session? Уточните часть, и я объясню.";
+  if (language === "zh-CN") return "你是想问创建 campaign、选择 groups，还是选择 Session？告诉我具体部分，我会直接解释。";
+  if (language === "fa-IR") return "منظورتان ساخت campaign، انتخاب groups یا انتخاب Session است؟ همان بخش را بگویید تا توضیح بدهم.";
+  return "Are you asking about creating a campaign, selecting groups, or choosing a Session? Tell me which part and I will explain that.";
 }
 
 function languageSwitchAnswer(config: AssistantContext, language: AssistantLanguage) {
