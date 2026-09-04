@@ -93,7 +93,8 @@ for (const item of cases) {
     assert.equal(data.hasTelegram, true);
   }
   if (item.path === "/promotion/app") {
-    assert.equal(data.hasWeb, true);
+    assert.equal(data.path, "/mini-app/dashboard");
+    assert.equal(data.hasLara, true);
     assert.equal(data.hasManifest, true);
   }
 }

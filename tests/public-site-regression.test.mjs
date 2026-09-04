@@ -67,8 +67,9 @@ test("Promotion web app route reuses shared Mini App core and preserves session 
   const alias = read("src/routes/promotion.app.tsx");
   const telegram = read("src/lib/telegram.server.ts");
   assert(alias.includes("TELEGRAM_PROMOTION_WORKSPACE_PATH"));
-  assert(alias.includes("window.location.search"));
-  assert(alias.includes("window.location.hash"));
+  assert(alias.includes("beforeLoad"));
+  assert(alias.includes("location.searchStr"));
+  assert(alias.includes("location.hash"));
   assert(alias.includes("Telegram Promotion Web App"));
   assert(telegram.includes('new URL("/mini-app"'));
   assert(fs.existsSync(new URL("../src/routes/mini-app.tsx", import.meta.url)));

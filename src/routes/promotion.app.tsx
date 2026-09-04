@@ -1,8 +1,12 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { useEffect } from "react";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 import { TELEGRAM_PROMOTION_WORKSPACE_PATH } from "@/lib/promotion-platform";
 
 export const Route = createFileRoute("/promotion/app")({
+  beforeLoad: ({ location }) => {
+    throw redirect({
+      href: `${TELEGRAM_PROMOTION_WORKSPACE_PATH}${location.searchStr}${location.hash}`,
+    });
+  },
   head: () => ({
     meta: [
       { title: "Telegram Promotion Web App" },
@@ -14,10 +18,6 @@ export const Route = createFileRoute("/promotion/app")({
 });
 
 function PromotionAppAlias() {
-  useEffect(() => {
-    window.location.replace(`${TELEGRAM_PROMOTION_WORKSPACE_PATH}${window.location.search}${window.location.hash}`);
-  }, []);
-
   return (
     <main className="grid min-h-screen place-items-center bg-background p-6 text-center">
       <div>
