@@ -1,22 +1,27 @@
 import { createFileRoute } from "@tanstack/react-router";
 import {
-  TELEGRAM_PROMOTION_ANDROID,
   TELEGRAM_PROMOTION_ANDROID_APK_FILENAME,
   TELEGRAM_PROMOTION_ANDROID_METADATA_FILENAME,
+  getTelegramPromotionAndroidReleaseSource,
 } from "@/lib/promotion-platform";
 
-const DOWNLOADABLE_FILES = new Map([
-  [TELEGRAM_PROMOTION_ANDROID_APK_FILENAME, {
-    sourceUrl: TELEGRAM_PROMOTION_ANDROID.apkSourceUrl,
-    contentType: "application/vnd.android.package-archive",
-    disposition: `attachment; filename="${TELEGRAM_PROMOTION_ANDROID_APK_FILENAME}"`,
-  }],
-  [TELEGRAM_PROMOTION_ANDROID_METADATA_FILENAME, {
-    sourceUrl: TELEGRAM_PROMOTION_ANDROID.metadataSourceUrl,
-    contentType: "application/json; charset=utf-8",
-    disposition: `inline; filename="${TELEGRAM_PROMOTION_ANDROID_METADATA_FILENAME}"`,
-  }],
-]);
+function getDownloadableFiles() {
+  const releaseSource = getTelegramPromotionAndroidReleaseSource();
+  return new Map([
+    [TELEGRAM_PROMOTION_ANDROID_APK_FILENAME, {
+      sourceUrl: releaseSource.apkSourceUrl,
+      contentType: "application/vnd.android.package-archive",
+      disposition: `attachment; filename="${TELEGRAM_PROMOTION_ANDROID_APK_FILENAME}"`,
+    }],
+    [TELEGRAM_PROMOTION_ANDROID_METADATA_FILENAME, {
+      sourceUrl: releaseSource.metadataSourceUrl,
+      contentType: "application/json; charset=utf-8",
+      disposition: `inline; filename="${TELEGRAM_PROMOTION_ANDROID_METADATA_FILENAME}"`,
+    }],
+  ]);
+}
+
+const DOWNLOADABLE_FILES = getDownloadableFiles();
 
 export const Route = createFileRoute("/downloads/$file")({
   server: {

@@ -5,6 +5,7 @@ import {
   TELEGRAM_PROMOTION_DOWNLOAD_PATH,
   TELEGRAM_PROMOTION_WEB_APP_PATH,
   TELEGRAM_PROMOTION_WORKSPACE_PATH,
+  getTelegramPromotionAndroidReleaseSource,
 } from "./promotion-platform";
 import { telegramSettings } from "./telegram.server";
 
@@ -21,8 +22,10 @@ export const getPublicProductConfig = createServerFn({ method: "GET" }).handler(
   const [telegram, support, androidRelease] = await Promise.all([telegramSettings(), supportSettings(), getAndroidReleaseMetadata()]);
   const username = telegram.bot_username.replace(/^@/, "").trim();
   const supportUsername = support.telegramUsername || "laura_luxee";
+  const androidReleaseSource = getTelegramPromotionAndroidReleaseSource();
   const android = {
     ...TELEGRAM_PROMOTION_ANDROID,
+    ...androidReleaseSource,
     ...androidRelease,
     releaseDate: androidRelease.buildDate?.slice(0, 10) ?? TELEGRAM_PROMOTION_ANDROID.releaseDate,
     apkSizeLabel: androidRelease.apkSizeBytes ? formatBytes(androidRelease.apkSizeBytes) : TELEGRAM_PROMOTION_ANDROID.apkSizeLabel,
@@ -46,10 +49,11 @@ export const getPublicProductConfig = createServerFn({ method: "GET" }).handler(
 });
 
 async function getAndroidReleaseMetadata(): Promise<AndroidReleaseMetadata> {
+  const releaseSource = getTelegramPromotionAndroidReleaseSource();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 1500);
   try {
-    const response = await fetch(TELEGRAM_PROMOTION_ANDROID.metadataSourceUrl, {
+    const response = await fetch(releaseSource.metadataSourceUrl, {
       signal: controller.signal,
       headers: { accept: "application/json" },
     });

@@ -36,3 +36,12 @@ supabase/.temp/
 *.njsproj
 *.sln
 *.sw?
+
+# Android release signing material must stay outside git.
+*.jks
+*.keystore
+android/*.jks
+android/*.keystore
+android/app/*.jks
+android/app/*.keystore
+android/keystores/
