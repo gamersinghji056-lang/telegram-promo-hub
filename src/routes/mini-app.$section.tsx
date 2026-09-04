@@ -130,6 +130,7 @@ import {
   updateAccountName,
   changeAccountPassword,
   directMiniAppLogin,
+  directMiniAppRegister,
   verifyConnectionCode,
   verifyConnectionPassword,
   testWritableGroups,
@@ -368,13 +369,18 @@ function healthColor(score: number) {
 
 function DirectMiniAppLogin({
   login,
+  register,
   onSuccess,
 }: {
   login: (email: string, password: string) => Promise<{ token: string }>;
+  register: (input: { email: string; password: string; confirmPassword: string; name?: string | null }) => Promise<{ token: string }>;
   onSuccess: (token: string) => void;
 }) {
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -383,7 +389,10 @@ function DirectMiniAppLogin({
     setBusy(true);
     setError("");
     try {
-      const result = await login(email, password);
+      const result =
+        mode === "login"
+          ? await login(email, password)
+          : await register({ email, password, confirmPassword, name: name.trim() || null });
       sessionStorage.setItem("customer-session", result.token);
       onSuccess(result.token);
     } catch (e) {
@@ -400,26 +409,42 @@ function DirectMiniAppLogin({
           <ProductIcon name="avatar" className="size-11 shrink-0" />
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-primary">Telegram Promotion</p>
-            <h1 className="text-lg font-semibold">Login to the Mini App</h1>
+            <h1 className="text-lg font-semibold">{mode === "login" ? "Login to Telegram Promotion" : "Create your Promotion account"}</h1>
           </div>
         </div>
         <p className="text-sm text-muted-foreground">
-          Bot sessions continue automatically. If no valid bot session is present, use your existing customer account here.
+          Bot sessions continue automatically. In a normal browser or Android app, use the same customer account here.
         </p>
+        <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1">
+          <button type="button" className={`min-h-9 rounded-md text-xs font-semibold ${mode === "login" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"}`} onClick={() => setMode("login")}>Login</button>
+          <button type="button" className={`min-h-9 rounded-md text-xs font-semibold ${mode === "register" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"}`} onClick={() => setMode("register")}>Register</button>
+        </div>
         <form className="space-y-3" onSubmit={submit}>
+          {mode === "register" ? (
+            <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
+              Name
+              <input className={inputClass()} type="text" autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} />
+            </label>
+          ) : null}
           <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
             Email
             <input className={inputClass()} type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} />
           </label>
           <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
             Password
-            <input className={inputClass()} type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} />
+            <input className={inputClass()} type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} required value={password} onChange={(event) => setPassword(event.target.value)} />
           </label>
+          {mode === "register" ? (
+            <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
+              Confirm password
+              <input className={inputClass()} type="password" autoComplete="new-password" required value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} />
+            </label>
+          ) : null}
           {error ? <p className="rounded-lg border border-destructive/30 bg-destructive/10 p-2 text-xs text-destructive">{error}</p> : null}
-          <Button className="w-full" type="submit" disabled={busy}>{busy ? "Logging in..." : "LOGIN"}</Button>
+          <Button className="w-full" type="submit" disabled={busy}>{busy ? (mode === "login" ? "Logging in..." : "Creating account...") : (mode === "login" ? "LOGIN" : "REGISTER")}</Button>
         </form>
         <p className="text-xs text-muted-foreground">
-          New users can still register through the Promotion bot. Support: <a className="font-semibold text-primary" href="https://t.me/laura_luxee" target="_blank" rel="noreferrer">@laura_luxee</a>.
+          This uses the same account and workspace data as Telegram Promotion. Support: <a className="font-semibold text-primary" href="https://t.me/laura_luxee" target="_blank" rel="noreferrer">@laura_luxee</a>.
         </p>
       </section>
       <FloatingAssistant config={promotionAssistant} pageContext="login: Promotion Mini App access" />
@@ -450,6 +475,7 @@ function MiniAppSection() {
   const audienceDiscoveryFn = useServerFn(getAudienceDiscoveryState);
   const bulkJoinStateFn = useServerFn(getBulkJoinState);
   const directLoginFn = useServerFn(directMiniAppLogin);
+  const directRegisterFn = useServerFn(directMiniAppRegister);
 
   const actions = {
     addConnection: useServerFn(addConnection),
@@ -878,6 +904,7 @@ function MiniAppSection() {
     return (
       <DirectMiniAppLogin
         login={(email, password) => directLoginFn({ data: { email, password } })}
+        register={(input) => directRegisterFn({ data: input })}
         onSuccess={(token) => {
           setAuth(`sess ${token}`);
           setError("");

@@ -10,7 +10,7 @@ test("MARK8BOT public website exposes every required route without public admin 
   const required = [
     "promotion.tsx", "mark.tsx", "guides.tsx", "guides.promotion.tsx", "guides.mark.tsx",
     "about.tsx", "faq.tsx", "contact.tsx", "privacy.tsx", "terms.tsx",
-    "acceptable-use.tsx", "security.tsx", "promotion.app.tsx", "mark.app.tsx",
+    "acceptable-use.tsx", "security.tsx", "download.tsx", "promotion.app.tsx", "mark.app.tsx",
   ];
   for (const route of required) assert(fs.existsSync(new URL(`../src/routes/${route}`, import.meta.url)), route);
   assert(!publicSite.includes('href="/admin'));
@@ -63,12 +63,49 @@ test("Promotion bot destination comes from current Telegram settings without a u
   assert(!config.toLowerCase().includes("wpaypromotionbot"));
 });
 
-test("Promotion route compatibility preserves the live Mini App query and session fragment", () => {
+test("Promotion web app route reuses shared Mini App core and preserves session fragment", () => {
   const alias = read("src/routes/promotion.app.tsx");
   const telegram = read("src/lib/telegram.server.ts");
-  assert(alias.includes("/mini-app${window.location.search}${window.location.hash}"));
+  assert(alias.includes("TELEGRAM_PROMOTION_WORKSPACE_PATH"));
+  assert(alias.includes("window.location.search"));
+  assert(alias.includes("window.location.hash"));
+  assert(alias.includes("Telegram Promotion Web App"));
   assert(telegram.includes('new URL("/mini-app"'));
   assert(fs.existsSync(new URL("../src/routes/mini-app.tsx", import.meta.url)));
+});
+
+test("PWA shell is installable without caching private workspace data", () => {
+  const root = read("src/routes/__root.tsx");
+  const manifest = JSON.parse(read("public/manifest.webmanifest"));
+  const sw = read("public/sw.js");
+  assert.equal(manifest.start_url, "/promotion/app");
+  assert.equal(manifest.display, "standalone");
+  assert.equal(manifest.scope, "/");
+  assert(root.includes('rel: "manifest"'));
+  assert(root.includes("serviceWorker"));
+  assert(sw.includes('"/api/"'));
+  assert(sw.includes('"/mini-app"'));
+  assert(sw.includes('"/promotion/app"'));
+  assert(!sw.includes("customer-session"));
+  assert(!sw.includes("Authorization"));
+});
+
+test("download page exposes platform choices with honest Android release metadata", () => {
+  const publicSite = read("src/components/public-site.tsx");
+  const platform = read("src/lib/promotion-platform.ts");
+  const config = read("src/lib/public-site.functions.ts");
+  assert(publicSite.includes('page === "download"'));
+  assert(publicSite.includes("Choose how you want to use Telegram Promotion."));
+  assert(publicSite.includes("Download Android App"));
+  assert(publicSite.includes("Signed APK pending"));
+  assert(publicSite.includes("Add to Home Screen"));
+  assert(platform.includes('packageId: "com.mark8bot.telegrampromotion"'));
+  assert(platform.includes('versionName: "0.1.0"'));
+  assert(platform.includes('minAndroid: "Android 8.0 (API 26)"'));
+  assert(platform.includes("releaseApkAvailable: false"));
+  assert(config.includes("TELEGRAM_PROMOTION_WEB_APP_PATH"));
+  assert(!publicSite.includes("Google Play"));
+  assert(!publicSite.includes("App Store"));
 });
 
 test("worker roles preserve combined production behavior and keep MARK foundation inert", () => {
@@ -113,6 +150,9 @@ test("homepage explains real Promotion workflows and official support without fa
   assert(publicSite.includes("HOW TO USE TELEGRAM PROMOTION"));
   assert(publicSite.includes("Audience / Groups / Categories"));
   assert(publicSite.includes("Sessions and health"));
+  assert(publicSite.includes("Use Telegram Promotion anywhere"));
+  assert(publicSite.includes("Open Web App"));
+  assert(publicSite.includes("Open in Telegram"));
   assert(publicSite.includes("Meet LARA - your in-workspace Promotion assistant."));
   assert(publicSite.includes("Voice-driven workflow control is planned for the future."));
   assert(publicSite.includes("@laura_luxee"));
@@ -135,6 +175,7 @@ test("sitemap indexes only public marketing routes and robots protects operation
   const sitemap = read("public/sitemap.xml");
   const robots = read("public/robots.txt");
   assert(sitemap.includes("https://tg.mark8bot.com/promotion"));
+  assert(sitemap.includes("https://tg.mark8bot.com/download"));
   assert(sitemap.includes("https://tg.mark8bot.com/mark"));
   assert(!sitemap.includes("/admin"));
   assert(!sitemap.includes("/mini-app"));

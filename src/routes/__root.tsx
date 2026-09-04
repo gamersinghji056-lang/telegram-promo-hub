@@ -77,6 +77,11 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
+      { name: "theme-color", content: "#050813" },
+      { name: "mobile-web-app-capable", content: "yes" },
+      { name: "apple-mobile-web-app-capable", content: "yes" },
+      { name: "apple-mobile-web-app-title", content: "Promotion" },
+      { name: "apple-mobile-web-app-status-bar-style", content: "black-translucent" },
       { title: "MARK8BOT" },
       { name: "description", content: "Intelligent products built for Telegram." },
       { name: "author", content: "MARK8BOT" },
@@ -91,6 +96,8 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         href: appCss,
       },
       { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
+      { rel: "manifest", href: "/manifest.webmanifest" },
+      { rel: "apple-touch-icon", href: "/apple-touch-icon.png" },
     ],
   }),
   shellComponent: RootShell,
@@ -113,6 +120,11 @@ function RootShell({ children }: { children: ReactNode }) {
       <body>
         {children}
         <Scripts />
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(()=>{if(!("serviceWorker"in navigator))return;const secure=location.protocol==="https:"||location.hostname==="localhost";if(!secure)return;window.addEventListener("load",()=>{navigator.serviceWorker.register("/sw.js").catch(()=>{});});})();`,
+          }}
+        />
       </body>
     </html>
   );

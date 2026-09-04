@@ -1,3 +1,34 @@
-import { createFileRoute } from "@tanstack/react-router"; import { useEffect } from "react";
-export const Route=createFileRoute("/promotion/app")({head:()=>({meta:[{title:"Opening Telegram Promotion"},{name:"robots",content:"noindex,nofollow"}]}),component:PromotionAppAlias});
-function PromotionAppAlias(){useEffect(()=>{window.location.replace(`/mini-app${window.location.search}${window.location.hash}`)},[]);return <main className="grid min-h-screen place-items-center bg-background p-6 text-center"><div><h1 className="text-xl font-semibold">Opening Telegram Promotion…</h1><p className="mt-2 text-sm text-muted-foreground">Your existing Mini App session will be preserved.</p><a className="mt-5 inline-flex text-sm font-medium text-primary" href="/mini-app">Continue to the Mini App</a></div></main>}
+import { createFileRoute } from "@tanstack/react-router";
+import { useEffect } from "react";
+import { TELEGRAM_PROMOTION_WORKSPACE_PATH } from "@/lib/promotion-platform";
+
+export const Route = createFileRoute("/promotion/app")({
+  head: () => ({
+    meta: [
+      { title: "Telegram Promotion Web App" },
+      { name: "description", content: "Open the standalone Telegram Promotion web application with direct customer login or Telegram session handoff." },
+      { name: "robots", content: "noindex,nofollow" },
+    ],
+  }),
+  component: PromotionAppAlias,
+});
+
+function PromotionAppAlias() {
+  useEffect(() => {
+    window.location.replace(`${TELEGRAM_PROMOTION_WORKSPACE_PATH}${window.location.search}${window.location.hash}`);
+  }, []);
+
+  return (
+    <main className="grid min-h-screen place-items-center bg-background p-6 text-center">
+      <div>
+        <h1 className="text-xl font-semibold">Opening Telegram Promotion Web App...</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Your web login or Telegram session handoff will use the same Promotion workspace.
+        </p>
+        <a className="mt-5 inline-flex text-sm font-medium text-primary" href={TELEGRAM_PROMOTION_WORKSPACE_PATH}>
+          Continue to the Web App
+        </a>
+      </div>
+    </main>
+  );
+}

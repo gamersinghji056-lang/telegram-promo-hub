@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import {
   Activity, ArrowRight, BarChart3, Bot, BrainCircuit, Check, ChevronDown, CircleHelp,
-  Compass, CreditCard, ExternalLink, FolderCheck, Gauge, Layers3, Menu, MessageCircle, Mic,
-  Network, RadioTower, Search, Send, ShieldCheck, Sparkles, Tags, Users, WalletCards,
+  Compass, CreditCard, Download, ExternalLink, FolderCheck, Gauge, Globe2, Layers3,
+  Menu, MessageCircle, Mic, MonitorSmartphone, Network, RadioTower, Search, Send,
+  ShieldCheck, Smartphone, Sparkles, Tags, Users, WalletCards,
   X, Zap,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -11,7 +12,7 @@ import { websiteAssistant } from "@/lib/assistant-knowledge";
 import { getPublicProductConfig } from "@/lib/public-site.functions";
 
 type PublicConfig = Awaited<ReturnType<typeof getPublicProductConfig>>;
-type PageKind = "home" | "promotion" | "mark" | "guides" | "guide-promotion" | "guide-mark" | "about" | "faq" | "contact" | "privacy" | "terms" | "acceptable-use" | "security" | "mark-app";
+type PageKind = "home" | "promotion" | "download" | "mark" | "guides" | "guide-promotion" | "guide-mark" | "about" | "faq" | "contact" | "privacy" | "terms" | "acceptable-use" | "security" | "mark-app";
 
 export const PRODUCT_AVAILABILITY = {
   promotion: "live",
@@ -20,7 +21,7 @@ export const PRODUCT_AVAILABILITY = {
 
 const nav = [
   ["Products", "/#products"], ["Solutions", "/#solutions"], ["Guides", "/guides"],
-  ["About", "/about"], ["FAQ", "/faq"], ["Contact", "/contact"],
+  ["Download", "/download"], ["About", "/about"], ["FAQ", "/faq"], ["Contact", "/contact"],
 ] as const;
 
 const supportUsername = "laura_luxee";
@@ -88,7 +89,7 @@ function ProductChooser({ open, close, config, showMark }: { open: boolean; clos
         <p className="public-eyebrow">MARK8BOT PRODUCTS</p>
         <h2 id="product-chooser-title">What would you like to use?</h2>
         <div className="grid gap-3 sm:grid-cols-2">
-          <a className="public-choice public-choice-promotion" href={config?.promotion.botUrl ?? "/promotion"} target={config?.promotion.botUrl ? "_blank" : undefined} rel="noreferrer">
+          <a className="public-choice public-choice-promotion" href={config?.promotion.downloadUrl ?? "/download"}>
             <span className="public-choice-icon"><Send /></span><Status kind="live" />
             <strong>Telegram Promotion</strong><span>Organize and automate your Telegram promotion workflow.</span>
           </a>
@@ -139,7 +140,7 @@ function PublicFooter({ config }: { config: PublicConfig | null }) {
   const telegramUsername = config?.support.telegramUsername ?? supportUsername;
   return <footer className="public-footer"><div className="public-container grid gap-10 lg:grid-cols-[1.5fr_repeat(4,1fr)]">
     <div><a href="/" className="flex items-center gap-3 text-lg font-semibold"><BrandMark compact /> MARK8BOT</a><p>Intelligent products built for Telegram.</p><a className="public-support-link" href={telegramUrl} target="_blank" rel="noreferrer">@{telegramUsername}</a></div>
-    <FooterGroup title="Products" links={[["Telegram Promotion", "/promotion"], ["MARK", "/mark"]]} />
+    <FooterGroup title="Products" links={[["Telegram Promotion", "/promotion"], ["Download", "/download"], ["Web App", "/promotion/app"], ["MARK", "/mark"]]} />
     <FooterGroup title="Company" links={[["About", "/about"], ["Contact", "/contact"]]} />
     <FooterGroup title="Resources" links={[["Guides", "/guides"], ["FAQ", "/faq"], ["Support", "/contact"]]} />
     <FooterGroup title="Legal" links={[["Privacy", "/privacy"], ["Terms", "/terms"], ["Acceptable Use", "/acceptable-use"], ["Security", "/security"]]} />
@@ -171,6 +172,49 @@ function SectionHeading({ eyebrow, title, copy }: { eyebrow: string; title: stri
 }
 
 function RichIcon({ icon: Icon }: { icon: LucideIcon }) { return <Icon />; }
+
+function PlatformAccessSection({ config, compact = false }: { config: PublicConfig | null; compact?: boolean }) {
+  const webAppUrl = config?.promotion.webAppUrl ?? "/promotion/app";
+  const downloadUrl = config?.promotion.downloadUrl ?? "/download";
+  const botUrl = config?.promotion.botUrl ?? "/guides/promotion";
+  return (
+    <section className={compact ? "public-section public-section-alt" : "public-section"}>
+      <div className="public-container">
+        <SectionHeading
+          eyebrow="MULTI-PLATFORM ACCESS"
+          title="Use Telegram Promotion anywhere"
+          copy="Android, iPhone, browser, and Telegram entry points all open the same Promotion workspace and account data."
+        />
+        <div className="platform-access-grid">
+          <a className="platform-access-card platform-android" href={downloadUrl}>
+            <span><Smartphone /></span>
+            <small>Android</small>
+            <strong>Download Android App</strong>
+            <p>Use the native Android shell for the same Promotion workspace.</p>
+          </a>
+          <a className="platform-access-card" href={webAppUrl}>
+            <span><MonitorSmartphone /></span>
+            <small>iPhone</small>
+            <strong>Open Web App</strong>
+            <p>Use Safari and add it to your Home Screen where supported.</p>
+          </a>
+          <a className="platform-access-card" href={webAppUrl}>
+            <span><Globe2 /></span>
+            <small>Browser</small>
+            <strong>Open Web App</strong>
+            <p>Sign in from mobile or desktop without Telegram WebView context.</p>
+          </a>
+          <a className="platform-access-card" href={botUrl} target={config?.promotion.botUrl ? "_blank" : undefined} rel="noreferrer">
+            <span><Send /></span>
+            <small>Telegram</small>
+            <strong>Open in Telegram</strong>
+            <p>Keep using the bot and Mini App session handoff.</p>
+          </a>
+        </div>
+      </div>
+    </section>
+  );
+}
 
 const previewMetrics = [
   [Bot, "Sessions", "Health, Premium and reconnect state"],
@@ -269,11 +313,12 @@ function HomePage() {
       <div className="hero-composition"><ProductFrame mode="overview" /><div className="hero-mark-card"><div className="public-mark-symbol"><BrainCircuit /></div><strong>MARK</strong><span>Intelligence built around your business.</span><button onClick={showMark}>Start MARK</button></div></div>
     </div></section>
     <section className="public-section" id="products"><div className="public-container"><SectionHeading eyebrow="OUR PRODUCTS" title="Two products with separate product boundaries." copy="Telegram Promotion is live today. MARK is the separate intelligence product built around business context." />
-      <article className="product-story promotion-story"><div><Status kind="live" /><p className="public-eyebrow">TELEGRAM PROMOTION</p><h2>Turn Telegram promotion into an organized workflow.</h2><p>Connect sessions, discover audiences, organize groups, prepare campaigns, review history and analyze growth from one Telegram-first workspace.</p><div className="public-actions"><a href="/promotion" className="public-button public-button-primary">Explore Telegram Promotion <ArrowRight /></a>{config?.promotion.botUrl ? <a href={config.promotion.botUrl} target="_blank" rel="noreferrer" className="public-button public-button-secondary">Open Promotion Bot <ExternalLink /></a> : null}</div></div><ProductFrame mode="campaigns" /></article>
+      <article className="product-story promotion-story"><div><Status kind="live" /><p className="public-eyebrow">TELEGRAM PROMOTION</p><h2>Turn Telegram promotion into an organized workflow.</h2><p>Connect sessions, discover audiences, organize groups, prepare campaigns, review history and analyze growth from one Telegram-first workspace.</p><div className="public-actions"><a href="/promotion" className="public-button public-button-primary">Explore Telegram Promotion <ArrowRight /></a><a href="/download" className="public-button public-button-secondary">Choose Platform</a></div></div><ProductFrame mode="campaigns" /></article>
       <article className="product-story mark-story"><ProductFrame kind="mark" /><div><p className="public-eyebrow">MARK</p><h2>Meet MARK.</h2><p className="public-lead-sm">Your business has context. MARK understands it.</p><p>MARK is being designed as an intelligent Telegram assistant shaped by business knowledge, owner-defined instructions and conversation context.</p><div className="public-actions"><a href="/mark" className="public-button public-button-mark">Meet MARK <ArrowRight /></a><button onClick={showMark} className="public-button public-button-secondary">Start MARK</button></div></div></article>
     </div></section>
     <PromotionDeepDive />
     <PreviewShowcase />
+    <PlatformAccessSection config={config} compact />
     <AssistantMarketing />
     <HowToUse />
     <HomeFaq />
@@ -331,12 +376,92 @@ function PromotionPage() {
   const [tab, setTab] = useState("Home");
   const selectedMode = tab === "Home" ? "overview" : tab.toLowerCase() as "campaigns" | "audience" | "sessions" | "analytics" | "growth";
   return <MarketingShell>{({ config }) => <>
-    <PageHero eyebrow="TELEGRAM PROMOTION" status="live" title="One workspace for the Telegram promotion work you repeat." copy="Discover, organize, promote and analyze from a Telegram-first workspace while keeping control of sessions, audiences, campaigns and decisions." actions={<><a className="public-button public-button-primary" href={config?.promotion.botUrl ?? "/guides/promotion"} target={config?.promotion.botUrl ? "_blank" : undefined} rel="noreferrer">Open Promotion Bot <ExternalLink /></a><a className="public-button public-button-secondary" href="/guides/promotion">View the Guide</a></>} visual={<ProductFrame mode="overview" />} />
+    <PageHero eyebrow="TELEGRAM PROMOTION" status="live" title="One workspace for the Telegram promotion work you repeat." copy="Discover, organize, promote and analyze from a Telegram-first workspace while keeping control of sessions, audiences, campaigns and decisions." actions={<><a className="public-button public-button-primary" href={config?.promotion.downloadUrl ?? "/download"}>Choose Platform <ArrowRight /></a><a className="public-button public-button-secondary" href={config?.promotion.webAppUrl ?? "/promotion/app"}>Open Web App</a>{config?.promotion.botUrl ? <a className="public-button public-button-secondary" href={config.promotion.botUrl} target="_blank" rel="noreferrer">Open in Telegram <ExternalLink /></a> : null}</>} visual={<ProductFrame mode="overview" />} />
+    <PlatformAccessSection config={config} />
     <section className="public-section"><div className="public-container"><SectionHeading eyebrow="WHAT IT SOLVES" title="Move the workflow out of scattered chats and manual notes." copy="Telegram Promotion brings research, operational preparation, execution history and reporting into a consistent customer workspace." /><div className="capability-grid">{promotionCapabilities.map(([Icon,title,copy])=><article key={title}><span><RichIcon icon={Icon} /></span><h3>{title}</h3><p>{copy}</p></article>)}</div></div></section>
     <Workflow title="Connect, discover, organize, campaign, analyze, improve." steps={[["CONNECT","Connect the Telegram sessions used by your workspace."],["DISCOVER","Find relevant communities and audiences."],["ORGANIZE","Approve, categorize and prepare targets."],["CAMPAIGN","Prepare and operate supported promotion workflows."],["ANALYZE","Review history, performance and growth intelligence."],["IMPROVE","Use reporting to refine the next operational decision."]]} />
     <section className="public-section public-section-alt"><div className="public-container"><SectionHeading eyebrow="SEE IT IN ACTION" title="A workspace organized around real operations." copy="These interface previews mirror live product areas without using customer data or invented metrics." /><div className="public-tabs" role="tablist">{["Home","Campaigns","Audience","Sessions","Analytics","Growth"].map((item)=><button role="tab" aria-selected={tab===item} onClick={()=>setTab(item)} key={item}>{item}</button>)}</div><ProductFrame mode={selectedMode} /><p className="public-preview-note">{tab} workspace preview. Customer information and metrics are intentionally omitted.</p></div></section>
     <section className="public-section"><div className="public-container split-copy"><div><SectionHeading eyebrow="BUILT FOR CONTROL" title="Automation supports the operator. It does not bypass Telegram." /><p>Customers choose connected accounts, audiences, destinations and campaign actions. Session health, permissions, writable/sendable checks and Telegram responses remain visible throughout supported workflows.</p></div><div className="public-check-list">{["Separate DM and group campaign workflows","Connected-session health and reconnect status","Group discovery, approval, joining and categories","Campaign history and operational status","Analytics and Telegram-derived Growth Intelligence","Plans, billing, referral Coins and Add Users credits"].map(x=><span key={x}><Check />{x}</span>)}</div></div></section>
   </>}</MarketingShell>;
+}
+
+function DownloadPage() {
+  const [platform, setPlatform] = useState<"android" | "ios" | "desktop">("desktop");
+  useEffect(() => {
+    const agent = navigator.userAgent.toLowerCase();
+    if (agent.includes("android")) setPlatform("android");
+    else if (/iphone|ipad|ipod/.test(agent)) setPlatform("ios");
+  }, []);
+
+  return <MarketingShell>{({ config }) => {
+    const android = config?.promotion.android;
+    const webAppUrl = config?.promotion.webAppUrl ?? "/promotion/app";
+    const botUrl = config?.promotion.botUrl ?? "/guides/promotion";
+    const apkReady = Boolean(android?.releaseApkAvailable);
+    return <>
+      <PageHero
+        eyebrow="TELEGRAM PROMOTION ACCESS"
+        status="live"
+        title="Choose how you want to use Telegram Promotion."
+        copy="Android, browser, iPhone Safari/PWA, and Telegram all use the same MARK8BOT customer account, campaigns, audiences, sessions, billing, and product data."
+        actions={<><a className="public-button public-button-primary" href={webAppUrl}>Open Web App <ArrowRight /></a><a className="public-button public-button-secondary" href={botUrl} target={config?.promotion.botUrl ? "_blank" : undefined} rel="noreferrer">Open in Telegram <ExternalLink /></a></>}
+        visual={<ProductFrame mode="overview" />}
+      />
+      <section className="public-section"><div className="public-container download-layout">
+        <div>
+          <SectionHeading eyebrow="PLATFORM OPTIONS" title={platform === "android" ? "Android app and web access" : platform === "ios" ? "iPhone web app access" : "Use the app from any supported device"} copy="Platform detection changes the order shown here only. It never blocks access." />
+          <div className="download-option-list">
+            <article className={platform === "android" ? "highlight" : ""}>
+              <span><Smartphone /></span>
+              <div>
+                <h3>Android</h3>
+                <p>Use the Capacitor Android app shell when a signed APK is available. Until signing is configured, use the Web App button.</p>
+                <div className="public-actions">
+                  {apkReady && android ? <a className="public-button public-button-primary" href={android.apkPath} download>Download Android App <Download /></a> : <button className="public-button public-button-secondary" type="button" disabled>Signed APK pending</button>}
+                  <a className="public-button public-button-secondary" href={webAppUrl}>Open Web App</a>
+                </div>
+              </div>
+            </article>
+            <article className={platform === "ios" ? "highlight" : ""}>
+              <span><MonitorSmartphone /></span>
+              <div>
+                <h3>iPhone</h3>
+                <p>Open the Web App in Safari. iOS installation is available through Safari's Add to Home Screen flow where supported.</p>
+                <div className="public-actions"><a className="public-button public-button-primary" href={webAppUrl}>Open Web App <ArrowRight /></a></div>
+              </div>
+            </article>
+            <article>
+              <span><Globe2 /></span>
+              <div>
+                <h3>Browser</h3>
+                <p>Use Chrome, Safari, Edge, or a compatible mobile browser with direct login/register.</p>
+                <div className="public-actions"><a className="public-button public-button-primary" href={webAppUrl}>Open Web App <ArrowRight /></a></div>
+              </div>
+            </article>
+            <article>
+              <span><Send /></span>
+              <div>
+                <h3>Telegram</h3>
+                <p>Use the existing Promotion bot and Mini App handoff. Bot sessions continue to open the same workspace.</p>
+                <div className="public-actions"><a className="public-button public-button-primary" href={botUrl} target={config?.promotion.botUrl ? "_blank" : undefined} rel="noreferrer">Open in Telegram <ExternalLink /></a></div>
+              </div>
+            </article>
+          </div>
+        </div>
+        <aside className="download-release-panel">
+          <p className="public-eyebrow">CURRENT ANDROID BUILD</p>
+          <dl>
+            <div><dt>Version</dt><dd>{android?.versionName ?? "Not available"}</dd></div>
+            <div><dt>Version code</dt><dd>{android?.versionCode ?? "Not available"}</dd></div>
+            <div><dt>Release date</dt><dd>{android?.releaseDate ?? "Pending signed release"}</dd></div>
+            <div><dt>Minimum Android</dt><dd>{android?.minAndroid ?? "Not available"}</dd></div>
+            <div><dt>APK size</dt><dd>{android?.apkSizeLabel ?? "Pending artifact"}</dd></div>
+          </dl>
+          <p>APK distribution will use the official MARK8BOT website after release signing is configured. Private signing keys are not stored in this repository.</p>
+        </aside>
+      </div></section>
+    </>;
+  }}</MarketingShell>;
 }
 
 function MarkPage({ app = false }: { app?: boolean }) {
@@ -403,6 +528,7 @@ function LegalPage({kind}:{kind:"privacy"|"terms"|"acceptable-use"|"security"}){
 export function PublicPage({ page }: { page: PageKind }) {
   if (page === "home") return <HomePage />;
   if (page === "promotion") return <PromotionPage />;
+  if (page === "download") return <DownloadPage />;
   if (page === "mark") return <MarkPage />;
   if (page === "mark-app") return <MarkPage app />;
   if (page === "guides") return <GuidesPage />;

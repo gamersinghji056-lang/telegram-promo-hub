@@ -5,8 +5,10 @@ import {
   loginCustomer,
   loginCustomerFromFlow,
   logoutCustomer,
+  registerCustomer,
   registerCustomerFromFlow,
   resolveAuth,
+  createCustomerSessionForCustomer,
 } from "./customer-auth.server";
 import * as data from "./customer-data.server";
 import { customerPreferences, saveCustomerPreferences } from "./preferences.server";
@@ -41,6 +43,26 @@ export const directMiniAppLogin = createServerFn({ method: "POST" })
     const result = await loginCustomer({ email: i.email, password: i.password });
     if (!result.ok) throw new Error(result.error);
     return { token: result.token, customerId: result.customerId, tenantId: result.tenantId };
+  });
+
+export const directMiniAppRegister = createServerFn({ method: "POST" })
+  .inputValidator(
+    (i: { email: string; password: string; confirmPassword: string; name?: string | null }) => i,
+  )
+  .handler(async ({ data: i }) => {
+    if (i.password !== i.confirmPassword) throw new Error("Passwords do not match.");
+    const result = await registerCustomer({
+      email: i.email,
+      password: i.password,
+      name: i.name ?? null,
+    });
+    if (!result.ok) throw new Error(result.error);
+    if (result.status !== "ACTIVE") throw new Error("Your account is pending admin approval.");
+    const token = await createCustomerSessionForCustomer({
+      customerId: result.customerId,
+      tenantId: result.tenantId,
+    });
+    return { token, customerId: result.customerId, tenantId: result.tenantId };
   });
 
 export const logout = createServerFn({ method: "POST" })

@@ -123,14 +123,19 @@ test("final Mini App density keeps compact shared cards, icons, avatar, and navi
   assert(styles.includes("--miniapp-bottom-nav-height: 4.375rem"));
 });
 
-test("Mini App supports direct login while preserving Telegram session handoff", () => {
+test("Mini App supports direct login and registration while preserving Telegram session handoff", () => {
   const route = read("src/routes/mini-app.$section.tsx");
   const functions = read("src/lib/customer.functions.ts");
   assert(functions.includes("directMiniAppLogin"));
+  assert(functions.includes("directMiniAppRegister"));
   assert(functions.includes("loginCustomer({ email: i.email, password: i.password })"));
+  assert(functions.includes("registerCustomer({"));
+  assert(functions.includes("createCustomerSessionForCustomer"));
   assert(route.includes("DirectMiniAppLogin"));
   assert(route.includes('sessionStorage.setItem("customer-session", result.token)'));
   assert(route.includes("Bot sessions continue automatically."));
+  assert(route.includes("Create your Promotion account"));
+  assert(route.includes("REGISTER"));
   assert(route.includes('return `tma ${telegram.initData}`'));
   assert(route.includes('return `sess ${session}`'));
 });

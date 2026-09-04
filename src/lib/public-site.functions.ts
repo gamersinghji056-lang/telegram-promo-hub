@@ -1,5 +1,11 @@
 import { createServerFn } from "@tanstack/react-start";
 import { supportSettings } from "./customer-data.server";
+import {
+  TELEGRAM_PROMOTION_ANDROID,
+  TELEGRAM_PROMOTION_DOWNLOAD_PATH,
+  TELEGRAM_PROMOTION_WEB_APP_PATH,
+  TELEGRAM_PROMOTION_WORKSPACE_PATH,
+} from "./promotion-platform";
 import { telegramSettings } from "./telegram.server";
 
 export const getPublicProductConfig = createServerFn({ method: "GET" }).handler(async () => {
@@ -10,6 +16,10 @@ export const getPublicProductConfig = createServerFn({ method: "GET" }).handler(
     promotion: {
       status: "live" as const,
       botUrl: username ? `https://t.me/${encodeURIComponent(username)}?start=website` : null,
+      webAppUrl: TELEGRAM_PROMOTION_WEB_APP_PATH,
+      workspaceUrl: TELEGRAM_PROMOTION_WORKSPACE_PATH,
+      downloadUrl: TELEGRAM_PROMOTION_DOWNLOAD_PATH,
+      android: TELEGRAM_PROMOTION_ANDROID,
     },
     mark: { status: "coming_soon" as const },
     support: {

@@ -14,6 +14,7 @@ import { Route as AboutRouteImport } from './routes/about'
 import { Route as AcceptableUseRouteImport } from './routes/acceptable-use'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as ContactRouteImport } from './routes/contact'
+import { Route as DownloadRouteImport } from './routes/download'
 import { Route as FaqRouteImport } from './routes/faq'
 import { Route as GuidesRouteImport } from './routes/guides'
 import { Route as MarkRouteImport } from './routes/mark'
@@ -61,6 +62,11 @@ const AdminRoute = AdminRouteImport.update({
 const ContactRoute = ContactRouteImport.update({
   id: '/contact',
   path: '/contact',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DownloadRoute = DownloadRouteImport.update({
+  id: '/download',
+  path: '/download',
   getParentRoute: () => rootRouteImport,
 } as any)
 const FaqRoute = FaqRouteImport.update({
@@ -188,6 +194,7 @@ export interface FileRoutesByFullPath {
   '/acceptable-use': typeof AcceptableUseRoute
   '/admin': typeof AdminRouteWithChildren
   '/contact': typeof ContactRoute
+  '/download': typeof DownloadRoute
   '/faq': typeof FaqRoute
   '/guides': typeof GuidesRouteWithChildren
   '/mark': typeof MarkRouteWithChildren
@@ -217,6 +224,7 @@ export interface FileRoutesByTo {
   '/about': typeof AboutRoute
   '/acceptable-use': typeof AcceptableUseRoute
   '/contact': typeof ContactRoute
+  '/download': typeof DownloadRoute
   '/faq': typeof FaqRoute
   '/guides': typeof GuidesRouteWithChildren
   '/mark': typeof MarkRouteWithChildren
@@ -247,6 +255,7 @@ export interface FileRoutesById {
   '/acceptable-use': typeof AcceptableUseRoute
   '/admin': typeof AdminRouteWithChildren
   '/contact': typeof ContactRoute
+  '/download': typeof DownloadRoute
   '/faq': typeof FaqRoute
   '/guides': typeof GuidesRouteWithChildren
   '/mark': typeof MarkRouteWithChildren
@@ -279,6 +288,7 @@ export interface FileRouteTypes {
     | '/acceptable-use'
     | '/admin'
     | '/contact'
+    | '/download'
     | '/faq'
     | '/guides'
     | '/mark'
@@ -308,6 +318,7 @@ export interface FileRouteTypes {
     | '/about'
     | '/acceptable-use'
     | '/contact'
+    | '/download'
     | '/faq'
     | '/guides'
     | '/mark'
@@ -337,6 +348,7 @@ export interface FileRouteTypes {
     | '/acceptable-use'
     | '/admin'
     | '/contact'
+    | '/download'
     | '/faq'
     | '/guides'
     | '/mark'
@@ -368,6 +380,7 @@ export interface RootRouteChildren {
   AcceptableUseRoute: typeof AcceptableUseRoute
   AdminRoute: typeof AdminRouteWithChildren
   ContactRoute: typeof ContactRoute
+  DownloadRoute: typeof DownloadRoute
   FaqRoute: typeof FaqRoute
   GuidesRoute: typeof GuidesRouteWithChildren
   MarkRoute: typeof MarkRouteWithChildren
@@ -417,6 +430,13 @@ declare module '@tanstack/react-router' {
       path: '/contact'
       fullPath: '/contact'
       preLoaderRoute: typeof ContactRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/download': {
+      id: '/download'
+      path: '/download'
+      fullPath: '/download'
+      preLoaderRoute: typeof DownloadRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/faq': {
@@ -655,6 +675,7 @@ const rootRouteChildren: RootRouteChildren = {
   AcceptableUseRoute: AcceptableUseRoute,
   AdminRoute: AdminRouteWithChildren,
   ContactRoute: ContactRoute,
+  DownloadRoute: DownloadRoute,
   FaqRoute: FaqRoute,
   GuidesRoute: GuidesRouteWithChildren,
   MarkRoute: MarkRouteWithChildren,
