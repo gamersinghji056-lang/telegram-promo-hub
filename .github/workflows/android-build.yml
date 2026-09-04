@@ -17,7 +17,7 @@ on:
       - "tsconfig*.json"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-debug-apk:
@@ -65,6 +65,34 @@ jobs:
 
       - name: Verify APK exists
         run: test -f android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Prepare public APK asset
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk telegram-promotion-latest.apk
+          node - <<'NODE'
+          const fs = require("node:fs");
+          const crypto = require("node:crypto");
+          const apk = fs.readFileSync("telegram-promotion-latest.apk");
+          fs.writeFileSync("android-release.json", `${JSON.stringify({
+            versionName: "0.1.0",
+            versionCode: 1,
+            channel: "Android Beta / Debug Test Build",
+            apkFileName: "telegram-promotion-latest.apk",
+            apkUrl: "/downloads/telegram-promotion-latest.apk",
+            apkSizeBytes: apk.length,
+            apkSha256: crypto.createHash("sha256").update(apk).digest("hex"),
+            buildSha: process.env.GITHUB_SHA,
+            buildDate: new Date().toISOString(),
+          }, null, 2)}\n`);
+          NODE
+
+      - name: Publish public APK release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: telegram-promotion-android-beta
+        run: |
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --title "Telegram Promotion Android Beta" --notes "Latest debug APK for Telegram Promotion Android testing."
+          gh release upload "$RELEASE_TAG" telegram-promotion-latest.apk android-release.json --clobber
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v5

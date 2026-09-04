@@ -47,3 +47,25 @@ test("PWA and Android distribution avoid sensitive offline caching and broad per
     }
   }
 });
+
+test("Android debug APK workflow publishes a stable official download asset", () => {
+  const workflow = read(".github/workflows/android-build.yml");
+  const platform = read("src/lib/promotion-platform.ts");
+  const downloadRoute = read("src/routes/downloads.$file.ts");
+  assert(workflow.includes("workflow_dispatch"));
+  assert(workflow.includes("permissions:"));
+  assert(workflow.includes("contents: write"));
+  assert(workflow.includes("java-version: \"21\""));
+  assert(workflow.includes("telegram-promotion-latest.apk"));
+  assert(workflow.includes("android-release.json"));
+  assert(workflow.includes("gh release upload"));
+  assert(workflow.includes("retention-days: 10"));
+  assert(platform.includes("TELEGRAM_PROMOTION_ANDROID_RELEASE_TAG"));
+  assert(platform.includes("TELEGRAM_PROMOTION_ANDROID_APK_FILENAME"));
+  assert(downloadRoute.includes('createFileRoute("/downloads/$file")'));
+  assert(downloadRoute.includes("TELEGRAM_PROMOTION_ANDROID.apkSourceUrl"));
+  assert(downloadRoute.includes("application/vnd.android.package-archive"));
+  assert(!workflow.includes("KEYSTORE"));
+  assert(!workflow.includes("SERVICE_ROLE"));
+  assert(!workflow.includes("TELEGRAM_BOT_TOKEN"));
+});

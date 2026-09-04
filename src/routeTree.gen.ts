@@ -26,6 +26,7 @@ import { Route as TermsRouteImport } from './routes/terms'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
 import { Route as AdminSectionRouteImport } from './routes/admin.$section'
 import { Route as AdminLoginRouteImport } from './routes/admin.login'
+import { Route as DownloadsFileRouteImport } from './routes/downloads.$file'
 import { Route as GuidesMarkRouteImport } from './routes/guides.mark'
 import { Route as GuidesPromotionRouteImport } from './routes/guides.promotion'
 import { Route as MarkAppRouteImport } from './routes/mark.app'
@@ -124,6 +125,11 @@ const AdminLoginRoute = AdminLoginRouteImport.update({
   path: '/login',
   getParentRoute: () => AdminRoute,
 } as any)
+const DownloadsFileRoute = DownloadsFileRouteImport.update({
+  id: '/downloads/$file',
+  path: '/downloads/$file',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const GuidesMarkRoute = GuidesMarkRouteImport.update({
   id: '/mark',
   path: '/mark',
@@ -205,6 +211,7 @@ export interface FileRoutesByFullPath {
   '/terms': typeof TermsRoute
   '/admin/$section': typeof AdminSectionRoute
   '/admin/login': typeof AdminLoginRoute
+  '/downloads/$file': typeof DownloadsFileRoute
   '/guides/mark': typeof GuidesMarkRoute
   '/guides/promotion': typeof GuidesPromotionRoute
   '/mark/app': typeof MarkAppRoute
@@ -234,6 +241,7 @@ export interface FileRoutesByTo {
   '/terms': typeof TermsRoute
   '/admin/$section': typeof AdminSectionRoute
   '/admin/login': typeof AdminLoginRoute
+  '/downloads/$file': typeof DownloadsFileRoute
   '/guides/mark': typeof GuidesMarkRoute
   '/guides/promotion': typeof GuidesPromotionRoute
   '/mark/app': typeof MarkAppRoute
@@ -266,6 +274,7 @@ export interface FileRoutesById {
   '/terms': typeof TermsRoute
   '/admin/$section': typeof AdminSectionRoute
   '/admin/login': typeof AdminLoginRoute
+  '/downloads/$file': typeof DownloadsFileRoute
   '/guides/mark': typeof GuidesMarkRoute
   '/guides/promotion': typeof GuidesPromotionRoute
   '/mark/app': typeof MarkAppRoute
@@ -299,6 +308,7 @@ export interface FileRouteTypes {
     | '/terms'
     | '/admin/$section'
     | '/admin/login'
+    | '/downloads/$file'
     | '/guides/mark'
     | '/guides/promotion'
     | '/mark/app'
@@ -328,6 +338,7 @@ export interface FileRouteTypes {
     | '/terms'
     | '/admin/$section'
     | '/admin/login'
+    | '/downloads/$file'
     | '/guides/mark'
     | '/guides/promotion'
     | '/mark/app'
@@ -359,6 +370,7 @@ export interface FileRouteTypes {
     | '/terms'
     | '/admin/$section'
     | '/admin/login'
+    | '/downloads/$file'
     | '/guides/mark'
     | '/guides/promotion'
     | '/mark/app'
@@ -389,6 +401,7 @@ export interface RootRouteChildren {
   PromotionRoute: typeof PromotionRouteWithChildren
   SecurityRoute: typeof SecurityRoute
   TermsRoute: typeof TermsRoute
+  DownloadsFileRoute: typeof DownloadsFileRoute
   ApiAssistantTtsRoute: typeof ApiAssistantTtsRoute
   ApiInternalCampaignWorkerRoute: typeof ApiInternalCampaignWorkerRoute
   ApiInternalEntitySendTestRoute: typeof ApiInternalEntitySendTestRoute
@@ -515,6 +528,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/admin/login'
       preLoaderRoute: typeof AdminLoginRouteImport
       parentRoute: typeof AdminRoute
+    }
+    '/downloads/$file': {
+      id: '/downloads/$file'
+      path: '/downloads/$file'
+      fullPath: '/downloads/$file'
+      preLoaderRoute: typeof DownloadsFileRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/guides/mark': {
       id: '/guides/mark'
@@ -684,6 +704,7 @@ const rootRouteChildren: RootRouteChildren = {
   PromotionRoute: PromotionRouteWithChildren,
   SecurityRoute: SecurityRoute,
   TermsRoute: TermsRoute,
+  DownloadsFileRoute: DownloadsFileRoute,
   ApiAssistantTtsRoute: ApiAssistantTtsRoute,
   ApiInternalCampaignWorkerRoute: ApiInternalCampaignWorkerRoute,
   ApiInternalEntitySendTestRoute: ApiInternalEntitySendTestRoute,

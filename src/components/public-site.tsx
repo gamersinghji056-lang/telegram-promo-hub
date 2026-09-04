@@ -176,6 +176,7 @@ function RichIcon({ icon: Icon }: { icon: LucideIcon }) { return <Icon />; }
 function PlatformAccessSection({ config, compact = false }: { config: PublicConfig | null; compact?: boolean }) {
   const webAppUrl = config?.promotion.webAppUrl ?? "/promotion/app";
   const downloadUrl = config?.promotion.downloadUrl ?? "/download";
+  const androidUrl = config?.promotion.android.releaseApkAvailable ? config.promotion.android.apkPath : downloadUrl;
   const botUrl = config?.promotion.botUrl ?? "/guides/promotion";
   return (
     <section className={compact ? "public-section public-section-alt" : "public-section"}>
@@ -186,11 +187,11 @@ function PlatformAccessSection({ config, compact = false }: { config: PublicConf
           copy="Android, iPhone, browser, and Telegram entry points all open the same Promotion workspace and account data."
         />
         <div className="platform-access-grid">
-          <a className="platform-access-card platform-android" href={downloadUrl}>
+          <a className="platform-access-card platform-android" href={androidUrl} download={androidUrl !== downloadUrl}>
             <span><Smartphone /></span>
             <small>Android</small>
             <strong>Download Android App</strong>
-            <p>Use the native Android shell for the same Promotion workspace.</p>
+            <p>Download the current Android Beta test build for the same Promotion workspace.</p>
           </a>
           <a className="platform-access-card" href={webAppUrl}>
             <span><MonitorSmartphone /></span>
@@ -415,9 +416,9 @@ function DownloadPage() {
               <span><Smartphone /></span>
               <div>
                 <h3>Android</h3>
-                <p>Use the Capacitor Android app shell when a signed APK is available. Until signing is configured, use the Web App button.</p>
+                <p>Download the current Android Beta debug test build. It is for testing, not a signed production release.</p>
                 <div className="public-actions">
-                  {apkReady && android ? <a className="public-button public-button-primary" href={android.apkPath} download>Download Android App <Download /></a> : <button className="public-button public-button-secondary" type="button" disabled>Signed APK pending</button>}
+                  {apkReady && android ? <a className="public-button public-button-primary" href={android.apkPath} download>Download Android App <Download /></a> : <button className="public-button public-button-secondary" type="button" disabled>Android build unavailable</button>}
                   <a className="public-button public-button-secondary" href={webAppUrl}>Open Web App</a>
                 </div>
               </div>
@@ -453,11 +454,13 @@ function DownloadPage() {
           <dl>
             <div><dt>Version</dt><dd>{android?.versionName ?? "Not available"}</dd></div>
             <div><dt>Version code</dt><dd>{android?.versionCode ?? "Not available"}</dd></div>
-            <div><dt>Release date</dt><dd>{android?.releaseDate ?? "Pending signed release"}</dd></div>
+            <div><dt>Channel</dt><dd>{android?.channel ?? "Android Beta / Debug Test Build"}</dd></div>
+            <div><dt>Build date</dt><dd>{android?.releaseDate ?? "Pending build"}</dd></div>
             <div><dt>Minimum Android</dt><dd>{android?.minAndroid ?? "Not available"}</dd></div>
             <div><dt>APK size</dt><dd>{android?.apkSizeLabel ?? "Pending artifact"}</dd></div>
+            <div><dt>Build SHA</dt><dd>{android?.buildSha ? android.buildSha.slice(0, 12) : "Pending build"}</dd></div>
           </dl>
-          <p>APK distribution will use the official MARK8BOT website after release signing is configured. Private signing keys are not stored in this repository.</p>
+          <p>This APK is a debug beta build for testing. Private release signing keys are not stored in this repository.</p>
         </aside>
       </div></section>
     </>;
