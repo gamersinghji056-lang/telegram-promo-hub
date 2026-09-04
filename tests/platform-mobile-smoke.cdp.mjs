@@ -33,7 +33,9 @@ async function evaluate(expression) {
     awaitPromise: true,
     returnByValue: true,
   });
-  if (result.exceptionDetails) throw new Error(result.exceptionDetails.text);
+  if (result.exceptionDetails) {
+    throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
+  }
   return result.result.value;
 }
 
@@ -56,12 +58,12 @@ for (const item of cases) {
     mobile: true,
   });
   await send("Page.navigate", { url: `${appBase}${item.path}` });
-  await new Promise((resolve) => setTimeout(resolve, 900));
+  await new Promise((resolve) => setTimeout(resolve, 1600));
   const data = await evaluate(`(() => {
-    const text = document.body.innerText;
+    const text = document.body?.innerText || "";
     const doc = document.documentElement;
     const actions = [...document.querySelectorAll("a,button")]
-      .map((node) => node.textContent.trim())
+      .map((node) => (node.textContent || "").trim())
       .filter(Boolean);
     return {
       path: location.pathname,
