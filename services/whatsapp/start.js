@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
 
 const port = process.env.PORT || "4173";
-const command = "node";
-const args = ["../../node_modules/vite/bin/vite.js", "preview", "--host", "0.0.0.0", "--port", String(port)];
+const command = "vite";
+const args = ["preview", "--host", "0.0.0.0", "--port", String(port)];
 
 const preview = spawn(command, args, { stdio: "inherit" });
 
