@@ -190,7 +190,8 @@ test("campaign aggregate recovery reads Supabase rows directly and repairs stale
   assert(counter.includes('campaign?.type === "GROUP"'));
   assert(counter.includes('update["next_run_at"] = null'));
   assert(worker.includes("async function recoverStaleCampaignAggregates"));
-  assert(worker.includes("const recovered = await recoverStaleCampaignAggregates(batchLimit)"));
+  assert(worker.includes("async function clearTerminalCampaignRetryTimes"));
+  assert(worker.includes("await clearTerminalCampaignRetryTimes(batchLimit)"));
 });
 
 test("group category summary is read-only and campaign worker applies sent-group proof", () => {

@@ -374,6 +374,29 @@ async function recoverStaleCampaignAggregates(limit: number) {
   return recovered;
 }
 
+async function clearTerminalCampaignRetryTimes(limit: number) {
+  const terminalStatuses = ["COMPLETED", "COMPLETED_WITH_ERRORS", "FAILED", "CANCELLED"];
+  const { data: campaigns, error } = await db()
+    .from("campaigns")
+    .select("id, tenant_id")
+    .in("status", terminalStatuses)
+    .not("next_run_at", "is", null)
+    .order("updated_at", { ascending: true, nullsFirst: false })
+    .limit(Math.max(1, Math.min(limit, 50)));
+  if (error) throw new Error(error.message);
+  let cleared = 0;
+  for (const campaign of campaigns ?? []) {
+    await db()
+      .from("campaigns")
+      .update({ next_run_at: null, updated_at: new Date().toISOString() })
+      .eq("id", campaign.id)
+      .eq("tenant_id", campaign.tenant_id)
+      .in("status", terminalStatuses);
+    cleared += 1;
+  }
+  return cleared;
+}
+
 async function logCampaign(
   job: JobRow,
   level: string,
@@ -761,7 +784,7 @@ export async function processCampaignJobs(limit = DEFAULT_BATCH_LIMIT) {
     else if (result.failed) failed += 1;
     else skipped += 1;
   }
-  const recovered = await recoverStaleCampaignAggregates(batchLimit);
+  const recovered = (await recoverStaleCampaignAggregates(batchLimit)) + (await clearTerminalCampaignRetryTimes(batchLimit));
   await logSystem({
     action: "CAMPAIGN_WORKER_RUN",
     details: { requested: batchLimit, candidates: candidates?.length ?? 0, selected: jobs.length, sent, failed, skipped, recovered },
