@@ -1563,28 +1563,52 @@ export async function createApprovedGroupFolderLink(
   if (!sessionUsable(connection as Record<string, unknown>)) throw new Error("Reconnect required");
   const rows = await approvedFolderGroups(ctx, ids);
   if (rows.length !== ids.length) throw new Error("Only your own approved groups can be exported.");
-  let eligibility: Awaited<ReturnType<typeof folderLinkEligibilityViaUserSession>>;
-  try {
-    eligibility = await folderLinkEligibilityViaUserSession(ctx.tenantId, String(connection.id), rows.map((group) => ({
-      id: String(group.id),
-      username: group.username as string | null,
-      telegram_group_id: group.telegram_group_id as number | null,
-      access_hash: group.access_hash as string | null,
-      entity_type: group.entity_type as string | null,
-    })));
-  } catch (error) {
-    throw new Error(safeFolderLinkFailure(error));
+  const groupRefs = rows.map((group) => ({
+    id: String(group.id),
+    username: group.username as string | null,
+    telegram_group_id: group.telegram_group_id as number | null,
+    access_hash: group.access_hash as string | null,
+    entity_type: group.entity_type as string | null,
+  }));
+  const sessions = await eligibleTenantSessions(ctx.tenantId);
+  const candidateSessions = [
+    connection,
+    ...(sessions ?? []).filter((session) => String(session.id) !== String(connection.id)),
+  ].filter((session) => sessionUsable(session as Record<string, unknown>));
+  let selected:
+    | {
+        connection: typeof connection;
+        exportRows: typeof rows;
+      }
+    | null = null;
+  const failures: string[] = [];
+  for (const candidate of candidateSessions) {
+    try {
+      const candidateEligibility = await folderLinkEligibilityViaUserSession(
+        ctx.tenantId,
+        String(candidate.id),
+        groupRefs,
+      );
+      const exportableIds = new Set(candidateEligibility.filter((row) => row.exportable).map((row) => row.groupId));
+      const candidateExportRows = rows.filter((group) => exportableIds.has(String(group.id)));
+      if (!selected || candidateExportRows.length > selected.exportRows.length) {
+        selected = { connection: candidate as typeof connection, exportRows: candidateExportRows };
+      }
+      if (candidateExportRows.length === rows.length) break;
+    } catch (error) {
+      failures.push(safeFolderLinkFailure(error));
+    }
   }
-  const exportableIds = new Set(eligibility.filter((row) => row.exportable).map((row) => row.groupId));
-  const exportRows = rows.filter((group) => exportableIds.has(String(group.id)));
-  if (!exportRows.length) throw new Error(EMPTY_EXPORT_MESSAGE);
+  if (!selected?.exportRows.length) throw new Error(failures[0] ?? EMPTY_EXPORT_MESSAGE);
+  const exportConnection = selected.connection;
+  const exportRows = selected.exportRows;
   const title = "WPAY Groups";
   const { data: previousLink } = await untypedDb()
     .from("telegram_folder_links")
     .select("filter_id")
     .eq("tenant_id", ctx.tenantId)
     .eq("customer_id", ctx.customerId)
-    .eq("connection_id", connection.id)
+    .eq("connection_id", exportConnection.id)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -1596,7 +1620,7 @@ export async function createApprovedGroupFolderLink(
   }));
   let result: Awaited<ReturnType<typeof createShareableFolderLinkViaUserSession>>;
   try {
-    result = await createShareableFolderLinkViaUserSession(ctx.tenantId, String(connection.id), {
+    result = await createShareableFolderLinkViaUserSession(ctx.tenantId, String(exportConnection.id), {
       title,
       groups: exportGroups,
       preferredFilterId: previousLink?.filter_id == null ? null : Number(previousLink.filter_id),
@@ -1616,7 +1640,7 @@ export async function createApprovedGroupFolderLink(
     .insert({
       tenant_id: ctx.tenantId,
       customer_id: ctx.customerId,
-      connection_id: connection.id,
+      connection_id: exportConnection.id,
       title: result.title || title,
       url: result.url,
       slug: result.slug,
@@ -1629,7 +1653,7 @@ export async function createApprovedGroupFolderLink(
     .single();
   if (insertError || !link) {
     try {
-      await revokeShareableFolderLinkViaUserSession(ctx.tenantId, String(connection.id), {
+      await revokeShareableFolderLinkViaUserSession(ctx.tenantId, String(exportConnection.id), {
         filterId: result.filterId,
         slug: result.slug,
         removeFilter: result.filterCreated,
@@ -1639,7 +1663,7 @@ export async function createApprovedGroupFolderLink(
     }
     throw new Error("PERSISTENCE_FAILED: Telegram created the invite, but it could not be saved. No success was recorded.");
   }
-  await clientConnectionUsed(ctx.tenantId, connection.id as string);
+  await clientConnectionUsed(ctx.tenantId, exportConnection.id as string);
   await logSystem({
     tenant_id: ctx.tenantId,
     customer_id: ctx.customerId,
@@ -1649,9 +1673,11 @@ export async function createApprovedGroupFolderLink(
       group_count: rows.length,
       included_group_count: exportRows.length,
       skipped_group_count: rows.length - exportRows.length,
-      connection_id: connection.id,
-      telegram_user_id: connection.telegram_user_id ?? connection.telegram_id ?? null,
-      username: connection.username ?? null,
+      requested_connection_id: connection.id,
+      connection_id: exportConnection.id,
+      used_fallback_connection: String(exportConnection.id) !== String(connection.id),
+      telegram_user_id: exportConnection.telegram_user_id ?? exportConnection.telegram_id ?? null,
+      username: exportConnection.username ?? null,
       filter_id: result.filterId,
       filter_source: result.filterSource,
       filter_created: result.filterCreated,

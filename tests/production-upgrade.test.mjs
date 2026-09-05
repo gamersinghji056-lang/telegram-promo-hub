@@ -112,10 +112,53 @@ test("affected Mini App loaders fetch independent data in parallel", () => {
 test("folder export persists the exportable subset instead of failing every mixed selection", () => {
   const src = read("src/lib/customer-data.server.ts");
   const fn = src.slice(src.indexOf("export async function createApprovedGroupFolderLink"), src.indexOf("export async function revokeApprovedGroupFolderLink"));
-  assert(fn.includes("const exportRows = rows.filter"));
+  assert(fn.includes("const candidateExportRows = rows.filter"));
+  assert(fn.includes("const exportRows = selected.exportRows"));
   assert(!fn.includes("if (exportRows.length !== rows.length)"));
   assert(fn.includes("const includedGroups = exportRows.map"));
   assert(fn.includes("skipped_group_count: rows.length - exportRows.length"));
+});
+
+test("folder export can fall back to the linked session with the largest exportable subset", () => {
+  const src = read("src/lib/customer-data.server.ts");
+  const fn = src.slice(src.indexOf("export async function createApprovedGroupFolderLink"), src.indexOf("export async function revokeApprovedGroupFolderLink"));
+  assert(fn.includes("const sessions = await eligibleTenantSessions(ctx.tenantId)"));
+  assert(fn.includes("const candidateSessions = ["));
+  assert(fn.includes("candidateExportRows.length > selected.exportRows.length"));
+  assert(fn.includes("used_fallback_connection"));
+  assert(fn.includes("requested_connection_id"));
+});
+
+test("category create buttons do not run writable or sendable Telegram checks", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  const helper = route.slice(route.indexOf("function openFilteredEditor"), route.indexOf("async function saveCategory"));
+  assert(helper.includes('categoryType === "SENDABLE" ? sendableGroups : writableGroups'));
+  assert(!helper.includes("testWritableGroups"));
+  assert(!helper.includes("testSendableGroups"));
+  const buttons = route.slice(route.indexOf('<Plus className="mr-2 size-4" /> CREATE CATEGORY'), route.indexOf("VERIFY UNKNOWN GROUPS"));
+  assert(buttons.includes('onClick={() => openFilteredEditor("WRITABLE")}'));
+  assert(buttons.includes('onClick={() => openFilteredEditor("SENDABLE")}'));
+  assert(!buttons.includes("openCheckedEditor"));
+  assert(!buttons.includes("CHECKING..."));
+});
+
+test("dedicated writable and sendable check actions remain separate from category creation", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  const checkHelper = route.slice(route.indexOf("async function runSelectedCheck"), route.indexOf("async function checkOne"));
+  assert(checkHelper.includes("testSendableGroups"));
+  assert(checkHelper.includes("testWritableGroups"));
+  assert(route.includes('onClick={() => runSelectedCheck("WRITABLE")}'));
+  assert(route.includes('onClick={() => runSelectedCheck("SENDABLE")}'));
+});
+
+test("standalone Mini App error recovery does not force Return to bot", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  const warning = route.slice(route.indexOf("function SessionWarning"), route.indexOf("function CustomerContent"));
+  assert(warning.includes("isTelegramRuntime"));
+  assert(warning.includes("Retry"));
+  assert(warning.includes("Go to dashboard"));
+  assert(warning.includes("isTelegramRuntime ? ("));
+  assert(warning.includes("Return to bot"));
 });
 
 test("order worker uses eager runtime entrypoint and campaign batching is tenant-fair", () => {
@@ -126,6 +169,17 @@ test("order worker uses eager runtime entrypoint and campaign batching is tenant
   assert(worker.includes("CAMPAIGN_WORKER_CLAIM_SCAN_MULTIPLIER"));
   assert(worker.includes("details: { requested: batchLimit, candidates:"));
   assert(worker.includes('.eq("status", "QUEUED")'));
+});
+
+test("campaign rate limits use recoverable cooldown instead of campaign-wide pause", () => {
+  const worker = read("src/lib/campaign-worker.server.ts");
+  const flood = worker.slice(worker.indexOf('if (classification === "FLOOD")'), worker.indexOf('if (classification === "RESTRICTED"'));
+  assert(worker.includes("function recoverableTelegramRetryAt"));
+  assert(flood.includes('status: "QUEUED"'));
+  assert(flood.includes("run_after: nextRun"));
+  assert(flood.includes('restriction_status: "COOLDOWN"'));
+  assert(flood.includes('status: "RUNNING", next_run_at: nextRun'));
+  assert(!flood.includes('status: "PAUSED"'));
 });
 
 test("modal save state is local and guarded against stale async results", () => {

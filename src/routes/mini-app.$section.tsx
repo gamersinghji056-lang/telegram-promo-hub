@@ -949,6 +949,10 @@ function MiniAppSection() {
     if (sectionRef.current === origin) setNotice(value);
   };
 
+  const isTelegramRuntime =
+    typeof window !== "undefined" &&
+    Boolean((window as unknown as { Telegram?: { WebApp?: unknown } }).Telegram?.WebApp);
+
   if (error === AUTH_REQUIRED_MESSAGE) {
     return (
       <DirectMiniAppLogin
@@ -998,7 +1002,7 @@ function MiniAppSection() {
         </div>
       ) : null}
       {error ? (
-        <SessionWarning error={error} />
+        <SessionWarning error={error} isTelegramRuntime={isTelegramRuntime} onRetry={() => load(true)} />
       ) : busy || loadedSection !== section ? (
         <LoadingWorkspace />
       ) : (
@@ -1082,17 +1086,35 @@ function MiniAppSection() {
   );
 }
 
-function SessionWarning({ error }: { error: string }) {
+function SessionWarning({
+  error,
+  isTelegramRuntime,
+  onRetry,
+}: {
+  error: string;
+  isTelegramRuntime: boolean;
+  onRetry: () => void;
+}) {
   return (
     <div className={panelClass("border-l-2 border-l-warning")}>
       <AlertTriangle className="size-5 text-warning" />
       <p className="mt-3 text-sm">{error}</p>
-      <a
-        href="https://t.me/Wpaypromotionbot"
-        className="mt-4 inline-flex text-sm font-semibold text-primary"
-      >
-        Return to bot
-      </a>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button type="button" size="sm" variant="secondary" onClick={onRetry}>
+          Retry
+        </Button>
+        <a href="/mini-app/dashboard" className="inline-flex min-h-9 items-center border border-border px-3 text-sm font-semibold text-primary">
+          Go to dashboard
+        </a>
+        {isTelegramRuntime ? (
+          <a
+            href="https://t.me/Wpaypromotionbot"
+            className="inline-flex min-h-9 items-center border border-border px-3 text-sm font-semibold text-primary"
+          >
+            Return to bot
+          </a>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -2792,42 +2814,22 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
     }
   }
 
-  async function openCheckedEditor(categoryType: "WRITABLE" | "SENDABLE") {
-    const ids = approvedGroups.map((group: any) => group.id);
-    if (!ids.length) {
-      setNotice("Approve groups before creating a checked category.");
-      return;
-    }
-    const joinIfRequired = confirm(
-      "Some groups may require joining before testing. Continue with Join & Test where required?",
-    );
-    if (!joinIfRequired) return;
-    await runAction(categoryType === "SENDABLE" ? "create-category-sendable" : "create-category-writable", async () => {
-      const response =
-        categoryType === "SENDABLE"
-          ? await actions.testSendableGroups({ data: { auth, groupIds: ids, joinIfRequired } })
-          : await actions.testWritableGroups({ data: { auth, groupIds: ids, joinIfRequired } });
-      setTestResult({ ...response, mode: categoryType });
-      setWritability(response.summary ?? writability);
-      const passed = (response.groups ?? [])
-        .filter((group: any) =>
-          categoryType === "SENDABLE"
-            ? group.sendable_status === "SENDABLE"
-            : group.writable_status === "WRITABLE" && group.can_send_messages === true,
-        )
-        .map((group: any) => String(group.id));
-      categorySaveRun.current += 1;
-      setDetail(null);
-      setCategorySaveBusy(false);
-      setCategoryError("");
-      setEditing({ id: null, category_type: categoryType, modal_key: `${categoryType}-${Date.now()}` });
-      setName("");
-      setSelected(passed);
+  function openFilteredEditor(categoryType: "WRITABLE" | "SENDABLE") {
+    const candidates = categoryType === "SENDABLE" ? sendableGroups : writableGroups;
+    categorySaveRun.current += 1;
+    setDetail(null);
+    setCategorySaveBusy(false);
+    setCategoryError("");
+    setEditing({ id: null, category_type: categoryType, modal_key: `${categoryType}-${Date.now()}` });
+    setName("");
+    setSelected(candidates.map((group: any) => String(group.id)));
+    if (!candidates.length) {
       setNotice(
-        `${categoryType === "SENDABLE" ? "Sendable" : "Writable"} check complete. ${passed.length} group(s) are ready for category save.`,
+        categoryType === "SENDABLE"
+          ? "No saved sendable groups yet. Run CHECK SENDABLE GROUPS if you want to verify groups first."
+          : "No saved writable groups yet. Run CHECK WRITABLE GROUPS if you want to verify groups first.",
       );
-      void reload();
-    });
+    }
   }
 
   async function saveCategory() {
@@ -2876,19 +2878,17 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
           </Button>
           <Button
             className="min-h-10 flex-1 rounded-md text-xs font-semibold sm:flex-none"
-            disabled={actionBusy === "create-category-writable"}
-            onClick={() => void openCheckedEditor("WRITABLE")}
+            onClick={() => openFilteredEditor("WRITABLE")}
           >
             <Plus className="mr-2 size-4" />
-            {actionBusy === "create-category-writable" ? "CHECKING..." : "CREATE CATEGORY WITH WRITABLE CHECK"}
+            CREATE CATEGORY WITH WRITABLE CHECK
           </Button>
           <Button
             className="min-h-10 flex-1 rounded-md text-xs font-semibold sm:flex-none"
-            disabled={actionBusy === "create-category-sendable"}
-            onClick={() => void openCheckedEditor("SENDABLE")}
+            onClick={() => openFilteredEditor("SENDABLE")}
           >
             <Plus className="mr-2 size-4" />
-            {actionBusy === "create-category-sendable" ? "CHECKING..." : "CREATE CATEGORY WITH SENDABLE CHECK"}
+            CREATE CATEGORY WITH SENDABLE CHECK
           </Button>
         </div>
         <div className="flex flex-wrap items-center gap-2">

@@ -126,6 +126,18 @@ function backoffMinutes(attempts: number) {
   return Math.min(60, 2 ** Math.max(attempts, 1));
 }
 
+function recoverableTelegramRetryAt(error: string, attempts: number) {
+  const upper = error.toUpperCase();
+  const explicitWait = upper.match(/(?:FLOOD_WAIT|SLOWMODE_WAIT|WAIT|RETRY_AFTER)[_: ]+(\d+)/)?.[1];
+  const waitSeconds = explicitWait
+    ? Number(explicitWait)
+    : upper.includes("PEER_FLOOD")
+      ? 60 * 60
+      : backoffMinutes(attempts) * 60;
+  const boundedSeconds = Number.isFinite(waitSeconds) ? Math.max(60, Math.min(waitSeconds, 24 * 60 * 60)) : 60 * 60;
+  return new Date(Date.now() + boundedSeconds * 1000).toISOString();
+}
+
 async function campaignMessage(campaignId: string, tenantId: string) {
   const { data } = await db()
     .from("campaigns")
@@ -413,11 +425,62 @@ async function failJob(job: JobRow, error: string) {
       classification,
       run_after: runAfter,
     });
+    await db()
+      .from("campaigns")
+      .update({ status: "RUNNING", next_run_at: runAfter, updated_at: new Date().toISOString() })
+      .eq("id", job.campaign_id)
+      .eq("tenant_id", job.tenant_id);
     console.info("CAMPAIGN_JOB_COOLDOWN", {
       tenantId: job.tenant_id,
       campaignId: job.campaign_id,
       jobId: job.id,
       runAfter,
+    });
+    return;
+  }
+  if (classification === "FLOOD") {
+    const nextRun = recoverableTelegramRetryAt(error, job.attempts + 1);
+    await db()
+      .from("campaign_jobs")
+      .update({
+        status: "QUEUED",
+        attempts: job.attempts + 1,
+        last_error: error,
+        run_after: nextRun,
+        locked_at: null,
+        started_at: null,
+        completed_at: null,
+      })
+      .eq("id", job.id);
+    if (job.connection_id) {
+      await db()
+        .from("telegram_connections")
+        .update({ restriction_status: "COOLDOWN", cooldown_until: nextRun, error_message: error })
+        .eq("id", job.connection_id)
+        .eq("tenant_id", job.tenant_id);
+    }
+    await db()
+      .from("campaigns")
+      .update({ status: "RUNNING", next_run_at: nextRun, updated_at: new Date().toISOString() })
+      .eq("id", job.campaign_id)
+      .eq("tenant_id", job.tenant_id);
+    const context = await campaignFailureContext(job);
+    await logCampaign(job, "WARNING", rpc.human, {
+      ...context,
+      classification,
+      telegram_scope: rpc.scope,
+      telegram_code: rpc.code,
+      raw_error: rpc.raw,
+      human_reason: rpc.human,
+      run_after: nextRun,
+      test_type: "CAMPAIGN",
+    });
+    console.info("CAMPAIGN_JOB_COOLDOWN", {
+      tenantId: job.tenant_id,
+      campaignId: job.campaign_id,
+      jobId: job.id,
+      runAfter: nextRun,
+      reason: rpc.code,
     });
     return;
   }
@@ -481,25 +544,6 @@ async function failJob(job: JobRow, error: string) {
           .eq("tenant_id", job.tenant_id);
       }
     }
-  }
-
-  if (classification === "FLOOD" && job.connection_id) {
-    const until = new Date(Date.now() + backoffMinutes(job.attempts + 1) * 60_000).toISOString();
-    await db()
-      .from("telegram_connections")
-      .update({ restriction_status: "COOLDOWN", cooldown_until: until, error_message: error })
-      .eq("id", job.connection_id)
-      .eq("tenant_id", job.tenant_id);
-    await db()
-      .from("campaigns")
-      .update({ status: "PAUSED", updated_at: new Date().toISOString() })
-      .eq("id", job.campaign_id)
-      .eq("tenant_id", job.tenant_id);
-    await db()
-      .from("campaign_jobs")
-      .update({ status: "PAUSED" })
-      .eq("campaign_id", job.campaign_id)
-      .eq("status", "QUEUED");
   }
 
   if (classification === "RESTRICTED" && job.connection_id) {
