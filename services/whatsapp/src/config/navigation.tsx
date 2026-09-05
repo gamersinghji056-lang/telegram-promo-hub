@@ -35,6 +35,56 @@ export type RouteSpec = {
   group: NavGroup;
 };
 
+export type MenuItem = {
+  path: `/${string}`;
+  label: string;
+};
+
+export type FooterMenuSection = {
+  title: string;
+  links: MenuItem[];
+};
+
+export const publicHeaderLinks: MenuItem[] = [
+  { path: "/features", label: "Features" },
+  { path: "/download", label: "Download" },
+  { path: "/pricing", label: "Pricing" },
+  { path: "/docs", label: "Docs" },
+];
+
+export const authMenuLinks = {
+  login: { path: "/login", label: "Login" },
+  primaryAction: { path: "/register", label: "Get Started" },
+};
+
+export const publicFooterLinks: FooterMenuSection[] = [
+  {
+    title: "Product",
+    links: [
+      { path: "/features", label: "Features" },
+      { path: "/download", label: "Download" },
+      { path: "/pricing", label: "Pricing" },
+      { path: "/docs", label: "Docs" },
+    ],
+  },
+  {
+    title: "Resources",
+    links: [{ path: "/download", label: "Downloads" }],
+  },
+  {
+    title: "Company",
+    links: [{ path: "/", label: "wa.mark8bot.com" }],
+  },
+  {
+    title: "Legal",
+    links: [
+      { path: "/privacy", label: "Privacy" },
+      { path: "/terms", label: "Terms" },
+      { path: "/acceptable-use", label: "Acceptable Use" },
+    ],
+  },
+];
+
 export const publicRoutes: RouteSpec[] = [
   { path: "/", label: "Home", element: <HomePage />, nav: true, group: "public" },
   { path: "/features", label: "Features", element: <FeaturesPage />, nav: true, group: "public" },

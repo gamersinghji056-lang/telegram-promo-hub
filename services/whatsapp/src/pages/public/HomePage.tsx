@@ -1,6 +1,5 @@
-import { PlaceholderPage } from "../../shared/ui/PlaceholderPage";
+import { LandingPage } from "../../public-site/components/landing/LandingPage";
 
 export function HomePage() {
-  return <PlaceholderPage title="Home" />;
+  return <LandingPage />;
 }
-

@@ -1,14 +1,16 @@
 import { Navigate, Route, BrowserRouter, Routes } from "react-router-dom";
 import { AppLayout } from "../layouts/AppLayout";
 import { PublicLayout } from "../layouts/PublicLayout";
-import { appRoutes, publicRoutes, publicNavigation } from "../config/navigation";
+import { appRoutes, authMenuLinks, publicHeaderLinks, publicRoutes, publicNavigation } from "../config/navigation";
 
 export function App() {
   return (
     <BrowserRouter>
       <Routes>
         <Route
-          element={<PublicLayout links={publicNavigation.map((route) => ({ path: route.path, label: route.label }))} />}
+          element={
+            <PublicLayout links={publicHeaderLinks} authLinks={authMenuLinks} />
+          }
         >
           {publicRoutes.map((route) => (
             <Route key={route.path} path={route.path} element={route.element} />
