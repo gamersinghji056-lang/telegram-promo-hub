@@ -591,70 +591,103 @@ function MiniAppSection() {
       dashboard: (a) => dashboardFn({ data: { auth: a } }),
       audience: async () => ({}),
       sessions: (a) => connectionsFn({ data: { auth: a } }),
-      "groups-find": async (a) => ({
-        connections: await connectionsFn({ data: { auth: a } }),
-        keywords: await keywordsFn({ data: { auth: a } }),
-        groups: await groupsFn({ data: { auth: a, status: "AUTO_PENDING" } }),
-        discovery: await discoveryStateFn({ data: { auth: a } }),
-      }),
-      "groups-found": async (a) => ({
-        connections: await connectionsFn({ data: { auth: a } }),
-        groups: await groupsFn({ data: { auth: a, status: "FOUND" } }),
-      }),
-      "groups-approved": async (a) => ({
-        connections: await connectionsFn({ data: { auth: a } }),
-        groups: await groupsFn({ data: { auth: a, status: "APPROVED_ACTIVE" } }),
-        bulkJoin: await bulkJoinStateFn({ data: { auth: a } }),
-        folderLinks: await actions.getApprovedGroupFolderLinks({ data: { auth: a } }),
-      }),
-      "groups-joined": async (a) => ({
-        connections: await connectionsFn({ data: { auth: a } }),
-        groups: await groupsFn({ data: { auth: a, status: "JOINED" } }),
-      }),
-      "dm-audience": async (a) => ({
-        groups: await groupsFn({ data: { auth: a, status: "APPROVED_ACTIVE" } }),
-        discovery: await audienceDiscoveryFn({ data: { auth: a } }),
-      }),
-      "add-users": async (a) => ({
-        connections: await connectionsFn({ data: { auth: a } }),
-        audience: await audienceFn({ data: { auth: a, groupIds: [], onlyNew: true } }),
-        addUsers: await actions.getAddUsersState({ data: { auth: a } }),
-      }),
-      "dm-create": async (a) => ({
-        connections: await connectionsFn({ data: { auth: a } }),
-        audience: await audienceFn({ data: { auth: a, groupIds: [], onlyNew: true } }),
-        campaigns: await campaignsFn({ data: { auth: a, filter: "DM" } }),
-        billing: await billingFn({ data: { auth: a } }),
-      }),
+      "groups-find": async (a) => {
+        const [connections, keywords, groups, discovery] = await Promise.all([
+          connectionsFn({ data: { auth: a } }),
+          keywordsFn({ data: { auth: a } }),
+          groupsFn({ data: { auth: a, status: "AUTO_PENDING" } }),
+          discoveryStateFn({ data: { auth: a } }),
+        ]);
+        return { connections, keywords, groups, discovery };
+      },
+      "groups-found": async (a) => {
+        const [connections, groups] = await Promise.all([
+          connectionsFn({ data: { auth: a } }),
+          groupsFn({ data: { auth: a, status: "FOUND" } }),
+        ]);
+        return { connections, groups };
+      },
+      "groups-approved": async (a) => {
+        const [connections, groups, bulkJoin, folderLinks] = await Promise.all([
+          connectionsFn({ data: { auth: a } }),
+          groupsFn({ data: { auth: a, status: "APPROVED_ACTIVE" } }),
+          bulkJoinStateFn({ data: { auth: a } }),
+          actions.getApprovedGroupFolderLinks({ data: { auth: a } }),
+        ]);
+        return { connections, groups, bulkJoin, folderLinks };
+      },
+      "groups-joined": async (a) => {
+        const [connections, groups] = await Promise.all([
+          connectionsFn({ data: { auth: a } }),
+          groupsFn({ data: { auth: a, status: "JOINED" } }),
+        ]);
+        return { connections, groups };
+      },
+      "dm-audience": async (a) => {
+        const [groups, discovery] = await Promise.all([
+          groupsFn({ data: { auth: a, status: "APPROVED_ACTIVE" } }),
+          audienceDiscoveryFn({ data: { auth: a } }),
+        ]);
+        return { groups, discovery };
+      },
+      "add-users": async (a) => {
+        const [connections, audience, addUsers] = await Promise.all([
+          connectionsFn({ data: { auth: a } }),
+          audienceFn({ data: { auth: a, groupIds: [], onlyNew: true } }),
+          actions.getAddUsersState({ data: { auth: a } }),
+        ]);
+        return { connections, audience, addUsers };
+      },
+      "dm-create": async (a) => {
+        const [connections, audience, campaigns, billing] = await Promise.all([
+          connectionsFn({ data: { auth: a } }),
+          audienceFn({ data: { auth: a, groupIds: [], onlyNew: true } }),
+          campaignsFn({ data: { auth: a, filter: "DM" } }),
+          billingFn({ data: { auth: a } }),
+        ]);
+        return { connections, audience, campaigns, billing };
+      },
       "dm-history": (a) => campaignsFn({ data: { auth: a, filter: "DM" } }),
-      campaigns: async (a) => ({
-        campaigns: await campaignsFn({ data: { auth: a, filter: "ALL" } }),
-        connections: await connectionsFn({ data: { auth: a } }),
-      }),
-      "group-create": async (a) => ({
-        connections: await connectionsFn({ data: { auth: a } }),
-        groups: await groupsFn({ data: { auth: a, status: "APPROVED_ACTIVE" } }),
-        categories: await groupCategoriesFn({ data: { auth: a } }),
-        campaigns: await campaignsFn({ data: { auth: a, filter: "GROUP" } }),
-        billing: await billingFn({ data: { auth: a } }),
-      }),
+      campaigns: async (a) => {
+        const [campaigns, connections] = await Promise.all([
+          campaignsFn({ data: { auth: a, filter: "ALL" } }),
+          connectionsFn({ data: { auth: a } }),
+        ]);
+        return { campaigns, connections };
+      },
+      "group-create": async (a) => {
+        const [connections, groups, categories, campaigns, billing] = await Promise.all([
+          connectionsFn({ data: { auth: a } }),
+          groupsFn({ data: { auth: a, status: "APPROVED_ACTIVE" } }),
+          groupCategoriesFn({ data: { auth: a } }),
+          campaignsFn({ data: { auth: a, filter: "GROUP" } }),
+          billingFn({ data: { auth: a } }),
+        ]);
+        return { connections, groups, categories, campaigns, billing };
+      },
       "group-history": (a) => campaignsFn({ data: { auth: a, filter: "GROUP" } }),
-      "group-categories": async (a) => ({
-        connections: await connectionsFn({ data: { auth: a } }),
-        groups: await groupsFn({ data: { auth: a, status: "APPROVED_ACTIVE" } }),
-        categories: await groupCategoriesFn({ data: { auth: a } }),
-        writability: await groupWritabilitySummaryFn({ data: { auth: a } }),
-      }),
+      "group-categories": async (a) => {
+        const [connections, groups, categories, writability] = await Promise.all([
+          connectionsFn({ data: { auth: a } }),
+          groupsFn({ data: { auth: a, status: "APPROVED_ACTIVE" } }),
+          groupCategoriesFn({ data: { auth: a } }),
+          groupWritabilitySummaryFn({ data: { auth: a } }),
+        ]);
+        return { connections, groups, categories, writability };
+      },
       analytics: (a) => analyticsFn({ data: { auth: a } }),
       "growth-intelligence": (a) => growthFn({ data: { auth: a, range: "7D" } }),
       "refer-earn": (a) => referralFn({ data: { auth: a } }),
       billing: (a) => billingFn({ data: { auth: a } }),
-      settings: async (a) => ({
-        logs: await logsFn({ data: { auth: a } }),
-        profile: await profileFn({ data: { auth: a } }),
-        preferences: await actions.getCustomerPreferences({ data: { auth: a } }),
-        support: await actions.getSupportSettings({ data: { auth: a } }),
-      }),
+      settings: async (a) => {
+        const [logs, profile, preferences, support] = await Promise.all([
+          logsFn({ data: { auth: a } }),
+          profileFn({ data: { auth: a } }),
+          actions.getCustomerPreferences({ data: { auth: a } }),
+          actions.getSupportSettings({ data: { auth: a } }),
+        ]);
+        return { logs, profile, preferences, support };
+      },
     }),
     [],
   );
@@ -3110,7 +3143,7 @@ function GroupCategories({ auth, data, actions, reload, setNotice, actionBusy, r
                 </p>
               ) : null}
             </div>
-            <Button className="w-full" type="submit" disabled={!name || !selected.length || categorySaveBusy}>
+            <Button className="w-full" type="submit" disabled={!name || categorySaveBusy}>
               {categorySaveBusy ? "Saving..." : editing.id ? "SAVE" : "CREATE CATEGORY"}
             </Button>
           </form>

@@ -136,7 +136,7 @@ test("worker roles preserve combined production behavior and keep MARK foundatio
   assert(pkg.scripts["start:promotion-worker"].includes("telegram-promotion-worker"));
   assert(pkg.scripts["start:telegram-worker"].includes("telegram-worker"));
   assert(pkg.scripts["start:blockchain-worker"].includes("blockchain-worker"));
-  assert(pkg.scripts["start:order-worker"].includes("order-worker"));
+  assert.equal(pkg.scripts["start:order-worker"], "node workers/runtime-worker.mjs order-worker");
   assert(pkg.scripts["start:promotion-bot"].includes("promotion-bot"));
   assert(pkg.scripts["start:mark-worker"].includes("mark-ai"));
   assert(markWorker.includes('request.url === "/health"'));

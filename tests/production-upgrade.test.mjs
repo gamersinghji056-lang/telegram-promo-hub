@@ -86,6 +86,46 @@ test("Category Save does not call Telegram testing and validates persisted statu
   assert(!fn.includes("testSendableGroups("));
   assert(fn.includes('group.can_send_messages === true && group.writable_status === "WRITABLE"'));
   assert(fn.includes('group.sendable_status === "SENDABLE"'));
+  assert(!fn.includes('throw new Error("Select at least one approved group.")'));
+  assert(fn.includes("if (finalIds.length)"));
+  const route = read("src/routes/mini-app.$section.tsx");
+  assert(route.includes('disabled={!name || categorySaveBusy}'));
+});
+
+test("affected Mini App loaders fetch independent data in parallel", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  for (const section of [
+    '"groups-find": async',
+    '"groups-approved": async',
+    '"dm-create": async',
+    '"group-create": async',
+    '"group-categories": async',
+    "settings: async",
+  ]) {
+    const start = route.indexOf(section);
+    assert(start > -1, `missing loader ${section}`);
+    const block = route.slice(start, start + 800);
+    assert(block.includes("Promise.all"), `loader ${section} should parallelize independent reads`);
+  }
+});
+
+test("folder export persists the exportable subset instead of failing every mixed selection", () => {
+  const src = read("src/lib/customer-data.server.ts");
+  const fn = src.slice(src.indexOf("export async function createApprovedGroupFolderLink"), src.indexOf("export async function revokeApprovedGroupFolderLink"));
+  assert(fn.includes("const exportRows = rows.filter"));
+  assert(!fn.includes("if (exportRows.length !== rows.length)"));
+  assert(fn.includes("const includedGroups = exportRows.map"));
+  assert(fn.includes("skipped_group_count: rows.length - exportRows.length"));
+});
+
+test("order worker uses eager runtime entrypoint and campaign batching is tenant-fair", () => {
+  const pkg = JSON.parse(read("package.json"));
+  const worker = read("src/lib/campaign-worker.server.ts");
+  assert.equal(pkg.scripts["start:order-worker"], "node workers/runtime-worker.mjs order-worker");
+  assert(worker.includes("function fairCampaignBatch"));
+  assert(worker.includes("CAMPAIGN_WORKER_CLAIM_SCAN_MULTIPLIER"));
+  assert(worker.includes("details: { requested: batchLimit, candidates:"));
+  assert(worker.includes('.eq("status", "QUEUED")'));
 });
 
 test("modal save state is local and guarded against stale async results", () => {

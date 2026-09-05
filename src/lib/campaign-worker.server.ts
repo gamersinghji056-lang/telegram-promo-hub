@@ -8,6 +8,7 @@ import { entityDiagnostics, normalizeMessageEntities } from "./message-entities"
 const DEFAULT_BATCH_LIMIT = 10;
 const DEFAULT_SEND_DELAY_MS = 2_000;
 const MAX_ATTEMPTS = 3;
+const DEFAULT_CLAIM_SCAN_MULTIPLIER = 10;
 
 type JobRow = {
   id: string;
@@ -36,6 +37,33 @@ export type DiagnosticCampaignSendResult = {
 function sendDelayMs() {
   const raw = Number(process.env["CAMPAIGN_SEND_DELAY_MS"] ?? DEFAULT_SEND_DELAY_MS);
   return Number.isFinite(raw) && raw >= 1000 ? raw : DEFAULT_SEND_DELAY_MS;
+}
+
+function claimScanLimit(batchLimit: number) {
+  const multiplier = Number(process.env["CAMPAIGN_WORKER_CLAIM_SCAN_MULTIPLIER"] ?? DEFAULT_CLAIM_SCAN_MULTIPLIER);
+  const boundedMultiplier = Number.isFinite(multiplier) ? Math.max(1, Math.min(multiplier, 25)) : DEFAULT_CLAIM_SCAN_MULTIPLIER;
+  return Math.max(batchLimit, Math.min(500, batchLimit * boundedMultiplier));
+}
+
+function fairCampaignBatch(jobs: JobRow[], batchLimit: number) {
+  const perTenantLimit = Math.max(1, Math.ceil(batchLimit / 3));
+  const tenantCounts = new Map<string, number>();
+  const selected: JobRow[] = [];
+  for (const job of jobs) {
+    const count = tenantCounts.get(job.tenant_id) ?? 0;
+    if (count >= perTenantLimit) continue;
+    selected.push(job);
+    tenantCounts.set(job.tenant_id, count + 1);
+    if (selected.length >= batchLimit) break;
+  }
+  if (selected.length >= batchLimit) return selected;
+  const selectedIds = new Set(selected.map((job) => job.id));
+  for (const job of jobs) {
+    if (selectedIds.has(job.id)) continue;
+    selected.push(job);
+    if (selected.length >= batchLimit) break;
+  }
+  return selected;
 }
 
 function classifyCampaignError(error: string, jobType?: JobRow["job_type"]) {
@@ -641,19 +669,20 @@ export async function processCampaignJobs(limit = DEFAULT_BATCH_LIMIT) {
     })
     .eq("status", "PROCESSING")
     .lt("locked_at", new Date(Date.now() - 5 * 60_000).toISOString());
-  const { data: jobs, error } = await db()
+  const { data: candidates, error } = await db()
     .from("campaign_jobs")
     .select("*")
     .eq("status", "QUEUED")
     .lte("run_after", new Date().toISOString())
     .order("created_at", { ascending: true })
-    .limit(batchLimit);
+    .limit(claimScanLimit(batchLimit));
   if (error) throw new Error(error.message);
 
+  const jobs = fairCampaignBatch(((candidates ?? []) as unknown as JobRow[]), batchLimit);
   let sent = 0;
   let failed = 0;
   let skipped = 0;
-  for (const job of (jobs ?? []) as unknown as JobRow[]) {
+  for (const job of jobs) {
     const result = await processJob(job);
     if (result.sent) sent += 1;
     else if (result.failed) failed += 1;
@@ -661,9 +690,9 @@ export async function processCampaignJobs(limit = DEFAULT_BATCH_LIMIT) {
   }
   await logSystem({
     action: "CAMPAIGN_WORKER_RUN",
-    details: { requested: batchLimit, sent, failed, skipped },
+    details: { requested: batchLimit, candidates: candidates?.length ?? 0, selected: jobs.length, sent, failed, skipped },
   });
-  return { processed: jobs?.length ?? 0, sent, failed, skipped };
+  return { processed: jobs.length, sent, failed, skipped };
 }
 
 export async function sendDiagnosticCampaignMessage(input: {

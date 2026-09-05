@@ -1578,7 +1578,6 @@ export async function createApprovedGroupFolderLink(
   const exportableIds = new Set(eligibility.filter((row) => row.exportable).map((row) => row.groupId));
   const exportRows = rows.filter((group) => exportableIds.has(String(group.id)));
   if (!exportRows.length) throw new Error(EMPTY_EXPORT_MESSAGE);
-  if (exportRows.length !== rows.length) throw new Error(EMPTY_EXPORT_MESSAGE);
   const title = "WPAY Groups";
   const { data: previousLink } = await untypedDb()
     .from("telegram_folder_links")
@@ -1605,7 +1604,7 @@ export async function createApprovedGroupFolderLink(
   } catch (error) {
     throw new Error(safeFolderLinkFailure(error));
   }
-  const includedGroups = rows.map((group) => ({
+  const includedGroups = exportRows.map((group) => ({
     id: group.id,
     title: group.title,
     username: group.username,
@@ -1648,6 +1647,8 @@ export async function createApprovedGroupFolderLink(
     resource: result.url,
     details: {
       group_count: rows.length,
+      included_group_count: exportRows.length,
+      skipped_group_count: rows.length - exportRows.length,
       connection_id: connection.id,
       telegram_user_id: connection.telegram_user_id ?? connection.telegram_id ?? null,
       username: connection.username ?? null,
@@ -3258,16 +3259,16 @@ export async function saveGroupCategory(
   const name = input.name.trim();
   if (!name) throw new Error("Category name is required.");
   const ids = [...new Set(input.group_ids)];
-  if (!ids.length) throw new Error("Select at least one approved group.");
   const categoryType = input.category_type ?? "NW_NS";
-  const groupQuery = client
-    .from("discovered_groups")
-    .select("id, can_send_messages, writable_status, sendable_status, entity_type")
-    .eq("tenant_id", ctx.tenantId)
-    .in("id", ids)
-    .in("status", ["APPROVED", "JOINED"]);
-  const { data: groups } = await groupQuery;
-  if ((groups ?? []).length !== ids.length) {
+  const { data: groups } = ids.length
+    ? await client
+        .from("discovered_groups")
+        .select("id, can_send_messages, writable_status, sendable_status, entity_type")
+        .eq("tenant_id", ctx.tenantId)
+        .in("id", ids)
+        .in("status", ["APPROVED", "JOINED"])
+    : { data: [] };
+  if (ids.length && (groups ?? []).length !== ids.length) {
     throw new Error("One or more selected groups are not approved.");
   }
   const existingIds = new Set<string>();
@@ -3304,16 +3305,6 @@ export async function saveGroupCategory(
       throw new Error("One or more selected groups do not have persisted SENDABLE status.");
     }
   }
-  if (!finalIds.length) {
-    throw new Error(
-      categoryType === "SENDABLE"
-        ? "No selected groups have persisted SENDABLE status. Run CHECK SENDABLE GROUPS first."
-        : categoryType === "WRITABLE"
-          ? "No selected groups have persisted WRITABLE status. Run CHECK WRITABLE GROUPS first."
-          : "Select at least one approved group.",
-    );
-  }
-
   let categoryId = input.id ?? null;
   if (!categoryId) {
     const { count } = await client
@@ -3344,13 +3335,15 @@ export async function saveGroupCategory(
     .delete()
     .eq("tenant_id", ctx.tenantId)
     .eq("category_id", categoryId);
-  await client.from("group_category_members").insert(
-    finalIds.map((groupId) => ({
-      tenant_id: ctx.tenantId,
-      category_id: categoryId,
-      group_id: groupId,
-    })),
-  );
+  if (finalIds.length) {
+    await client.from("group_category_members").insert(
+      finalIds.map((groupId) => ({
+        tenant_id: ctx.tenantId,
+        category_id: categoryId,
+        group_id: groupId,
+      })),
+    );
+  }
   return groupCategoryDetail(ctx, categoryId);
 }
 

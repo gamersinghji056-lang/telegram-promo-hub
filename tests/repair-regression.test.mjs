@@ -50,7 +50,8 @@ test("support Telegram setting is loaded server-side and opened with Telegram Mi
   assert(customer.includes("normalizeSupportTelegram"));
   assert(customer.includes("https://t.me/${telegramUsername}"));
   assert(funcs.includes("getSupportSettings"));
-  assert(route.includes("support: await actions.getSupportSettings"));
+  assert(route.includes("const [logs, profile, preferences, support] = await Promise.all"));
+  assert(route.includes("actions.getSupportSettings({ data: { auth: a } })"));
   assert(route.includes("openTelegramLink"));
   assert(route.includes("window.open(support.telegramUrl"));
 });

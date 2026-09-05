@@ -13,7 +13,7 @@
     "start:promotion-worker": "MARK8BOT_RUNTIME_ROLE=telegram-promotion-worker node .output/server/index.mjs",
     "start:telegram-worker": "node workers/runtime-worker.mjs telegram-worker",
     "start:blockchain-worker": "MARK8BOT_RUNTIME_ROLE=blockchain-worker node .output/server/index.mjs",
-    "start:order-worker": "MARK8BOT_RUNTIME_ROLE=order-worker node .output/server/index.mjs",
+    "start:order-worker": "node workers/runtime-worker.mjs order-worker",
     "start:promotion-bot": "MARK8BOT_RUNTIME_ROLE=promotion-bot node .output/server/index.mjs",
     "start:mark-worker": "MARK8BOT_RUNTIME_ROLE=mark-ai node workers/mark-intelligence-worker.mjs",
     "start:lara-voice": "node services/lara-voice/server.mjs",
