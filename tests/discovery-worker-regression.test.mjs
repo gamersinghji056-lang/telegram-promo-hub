@@ -64,9 +64,13 @@ test("telegram-worker remains the documented owner of discovery queues", () => {
   const docs = read("RAILWAY_SERVICES.md");
   const role = read("src/lib/runtime-role.server.ts");
   const pkg = JSON.parse(read("package.json"));
+  const entry = read("workers/runtime-worker.mjs");
   assert(docs.includes("telegram-worker"));
   assert(docs.includes("group discovery, audience discovery"));
   assert(role.includes('"telegram-worker"'));
   assert(role.includes('role === "telegram-worker"'));
-  assert(pkg.scripts["start:telegram-worker"].includes("MARK8BOT_RUNTIME_ROLE=telegram-worker"));
+  assert.equal(pkg.scripts["start:telegram-worker"], "node workers/runtime-worker.mjs telegram-worker");
+  assert(entry.includes("process.env.MARK8BOT_RUNTIME_ROLE = role"));
+  assert(entry.includes('await import("../.output/server/_ssr/ssr.mjs")'));
+  assert(entry.includes("mark8bot_worker_health_server_started"));
 });
