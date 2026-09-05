@@ -42,6 +42,15 @@ test("recoverable discovery failures schedule retry without explicit pause or co
   assert(!customer.includes('status: "PAUSED",\n          last_error'));
 });
 
+test("group discovery caps new inserts to remaining quota instead of discarding a whole batch", () => {
+  const customer = read("src/lib/customer-data.server.ts");
+  const entitlements = read("src/lib/entitlements.server.ts");
+  assert(entitlements.includes("export async function usageQuotaRemaining"));
+  assert(customer.includes("usageQuotaRemaining"));
+  assert(customer.includes("if (remaining !== null && added >= remaining) continue;"));
+  assert(!customer.includes("rows.length,\n    \"Monthly group discovery limit reached.\""));
+});
+
 test("start pause and resume remain persisted server actions for every client", () => {
   const customer = read("src/lib/customer-data.server.ts");
   const fns = read("src/lib/customer.functions.ts");

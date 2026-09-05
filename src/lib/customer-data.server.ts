@@ -37,6 +37,7 @@ import {
   ensureDefaultPlans,
   incrementMonthlyUsage,
   tenantUsageDashboard,
+  usageQuotaRemaining,
 } from "./entitlements.server";
 import {
   ADD_USERS_CREDITS_CODE,
@@ -835,13 +836,13 @@ async function discoverGroupsForTenant(tenantId: string, connectionId: string, s
   }));
   let added = 0;
   let duplicates = 0;
-  await assertUsageQuota(
+  const remaining = await usageQuotaRemaining(
     tenantId,
     "groups_found",
     "monthly_groups_found_limit",
-    rows.length,
-    "Monthly group discovery limit reached.",
   );
+  if (remaining !== null && remaining <= 0 && rows.length) throw new Error("Monthly group discovery limit reached.");
+  const returnedRows = [];
   if (rows.length) {
     const client = db();
     for (const row of rows) {
@@ -872,14 +873,17 @@ async function discoverGroupsForTenant(tenantId: string, connectionId: string, s
           })
           .eq("id", existing.id)
           .eq("tenant_id", tenantId);
+        returnedRows.push(row);
       } else {
+        if (remaining !== null && added >= remaining) continue;
         await client.from("discovered_groups").insert(row);
         added += 1;
+        returnedRows.push(row);
       }
     }
   }
   if (added) await incrementMonthlyUsage(tenantId, { groups_found: added });
-  return { configured: !!s.provider_url, added, duplicates, results: rows };
+  return { configured: !!s.provider_url, added, duplicates, results: returnedRows };
 }
 
 export async function groupDiscoveryState(ctx: AuthContext) {

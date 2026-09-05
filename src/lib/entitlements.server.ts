@@ -344,6 +344,18 @@ export async function assertUsageQuota(
   }
 }
 
+export async function usageQuotaRemaining(
+  tenantId: string,
+  usageKey: UsageKey,
+  limitKey: PlanLimitKey,
+) {
+  const summary = await tenantEntitlementSummary(tenantId);
+  const limit = summary.limits[limitKey];
+  if (limit == null) return null;
+  const current = Number((summary.usage as Record<string, unknown>)[usageKey] ?? 0);
+  return Math.max(0, limit - current);
+}
+
 export function formatLimit(limit: number | null | undefined) {
   return limitLabel(limit);
 }
