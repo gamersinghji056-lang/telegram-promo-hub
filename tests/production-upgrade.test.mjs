@@ -255,6 +255,16 @@ test("group list payload excludes server-only Telegram entity fields", () => {
   assert(!listGroups.includes('"telegram_group_id"'));
 });
 
+test("audience and category list payloads avoid private or detail-only fields", () => {
+  const customer = read("src/lib/customer-data.server.ts");
+  const audienceColumns = customer.slice(customer.indexOf("function audienceColumns"), customer.indexOf("function normalizeAudienceOptions"));
+  const categoryList = customer.slice(customer.indexOf("export async function listGroupCategories"), customer.indexOf("export async function groupCategoryDetail"));
+  assert(!audienceColumns.includes("access_hash"));
+  assert(categoryList.includes('select("id, name, category_type, created_at, updated_at")'));
+  assert(!categoryList.includes('select("*")'));
+  assert(categoryList.includes('.eq("tenant_id", ctx.tenantId)'));
+});
+
 test("Android viewport keyboard handler batches visual viewport updates", () => {
   const route = read("src/routes/mini-app.$section.tsx");
   assert(route.includes("requestAnimationFrame"));

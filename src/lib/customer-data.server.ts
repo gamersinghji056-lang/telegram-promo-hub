@@ -2324,7 +2324,7 @@ const ACTIVE_PRESENCE = ["ONLINE", "RECENTLY", "WITHIN_WEEK", "WITHIN_MONTH"];
 const RECENT_PRESENCE = ["ONLINE", "RECENTLY", "WITHIN_WEEK"];
 
 function audienceColumns() {
-  return "id, telegram_user_id, access_hash, display_name, username, has_username, source_group_id, eligibility, status, entity_status, contact_count, first_found_at, last_contacted_at, presence_status, last_seen_at, recent_activity_at, messages_observed, active_source_group_ids, discovered_groups(title, username)";
+  return "id, telegram_user_id, display_name, username, has_username, source_group_id, eligibility, status, entity_status, contact_count, first_found_at, last_contacted_at, presence_status, last_seen_at, recent_activity_at, messages_observed, active_source_group_ids, discovered_groups(title, username)";
 }
 
 function normalizeAudienceOptions(
@@ -2855,7 +2855,7 @@ export async function listGroupCategories(ctx: AuthContext) {
   const client = db();
   const { data: categories } = await client
     .from("group_categories")
-    .select("*")
+    .select("id, name, category_type, created_at, updated_at")
     .eq("tenant_id", ctx.tenantId)
     .order("created_at", { ascending: false });
   if (!categories?.length) return [];
