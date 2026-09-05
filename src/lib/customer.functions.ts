@@ -116,6 +116,10 @@ export const getConnections = createServerFn({ method: "POST" })
   .inputValidator((i: Auth) => i)
   .handler(async ({ data: i }) => data.listConnections(await resolveAuth(i.auth)));
 
+export const getConnectionOptions = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth) => i)
+  .handler(async ({ data: i }) => data.listConnectionOptions(await resolveAuth(i.auth)));
+
 export const addConnection = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { label: string }) => i)
   .handler(async ({ data: i }) => data.createConnection(await resolveAuth(i.auth), i.label));
@@ -561,6 +565,10 @@ export const deleteTemplate = createServerFn({ method: "POST" })
 export const getCampaigns = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { filter?: string }) => i)
   .handler(async ({ data: i }) => data.listCampaigns(await resolveAuth(i.auth), i.filter));
+
+export const getCampaignComposerState = createServerFn({ method: "POST" })
+  .inputValidator((i: Auth) => i)
+  .handler(async ({ data: i }) => data.campaignComposerState(await resolveAuth(i.auth)));
 
 export const getCampaignDetail = createServerFn({ method: "POST" })
   .inputValidator((i: Auth & { id: string }) => i)

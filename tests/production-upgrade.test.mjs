@@ -224,6 +224,46 @@ test("dashboard avoids many independent count requests on mobile app load", () =
   assert(dashboard.includes("tenantUsageDashboard(ctx.tenantId)"));
 });
 
+test("campaign create routes load composer metadata without full history or billing", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  const loaders = route.slice(route.indexOf("const loaders = useMemo"), route.indexOf("async function load"));
+  const dmCreate = loaders.slice(loaders.indexOf('"dm-create": async'), loaders.indexOf('"dm-history"'));
+  const groupCreate = loaders.slice(loaders.indexOf('"group-create": async'), loaders.indexOf('"group-history"'));
+  assert(dmCreate.includes("campaignComposerStateFn"));
+  assert(groupCreate.includes("campaignComposerStateFn"));
+  assert(dmCreate.includes("connectionOptionsFn"));
+  assert(groupCreate.includes("connectionOptionsFn"));
+  assert(!dmCreate.includes("connectionsFn"));
+  assert(!groupCreate.includes("connectionsFn"));
+  assert(!dmCreate.includes("campaignsFn"));
+  assert(!groupCreate.includes("campaignsFn"));
+  assert(!dmCreate.includes("billingFn"));
+  assert(!groupCreate.includes("billingFn"));
+  assert(!groupCreate.includes("groupsFn"));
+  assert(dmCreate.includes("pageSize: 25"));
+  assert(route.includes('const [createMode, setCreateMode] = useState(true);'));
+});
+
+test("group list payload excludes server-only Telegram entity fields", () => {
+  const customer = read("src/lib/customer-data.server.ts");
+  const listGroups = customer.slice(customer.indexOf("export async function listGroups"), customer.indexOf("export async function approvedGroupFolderLinks"));
+  assert(!listGroups.includes('select("*")'));
+  assert(listGroups.includes('"title"'));
+  assert(listGroups.includes('"writable_status"'));
+  assert(listGroups.includes('"sendable_status"'));
+  assert(!listGroups.includes('"access_hash"'));
+  assert(!listGroups.includes('"telegram_group_id"'));
+});
+
+test("Android viewport keyboard handler batches visual viewport updates", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  assert(route.includes("requestAnimationFrame"));
+  assert(route.includes("scheduleViewportPadding"));
+  assert(route.includes("lastKeyboardInset"));
+  assert(route.includes("lastNavTranslate"));
+  assert(route.includes('addEventListener("resize", scheduleViewportPadding)'));
+});
+
 test("growth charts are lazy-loaded instead of pulling Recharts into every Mini App route", () => {
   const route = read("src/routes/mini-app.$section.tsx");
   assert(!route.includes('from "recharts"'));

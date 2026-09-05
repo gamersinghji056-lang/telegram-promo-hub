@@ -444,6 +444,20 @@ export async function listConnections(ctx: AuthContext) {
     }));
 }
 
+export async function listConnectionOptions(ctx: AuthContext) {
+  const { data } = await db()
+    .from("telegram_connections")
+    .select(
+      "id, label, account_name, username, status, health, health_score, telegram_premium, session_error_code, restriction_status, cooldown_until, encrypted_session, created_at",
+    )
+    .eq("tenant_id", ctx.tenantId)
+    .order("created_at", { ascending: false });
+  return (data ?? []).map(({ encrypted_session, ...row }) => ({
+    ...row,
+    has_session: Boolean(encrypted_session),
+  }));
+}
+
 export async function setPreferredPremiumEmojiSession(
   ctx: AuthContext,
   input: { mode: "AUTO" | "MANUAL"; connectionId?: string | null },
@@ -1418,7 +1432,24 @@ export async function importApprovedGroups(
 }
 
 export async function listGroups(ctx: AuthContext, status?: string) {
-  let q = db().from("discovered_groups").select("*").eq("tenant_id", ctx.tenantId);
+  let q = db()
+    .from("discovered_groups")
+    .select(
+      [
+        "id",
+        "title",
+        "username",
+        "member_count",
+        "matched_keywords",
+        "status",
+        "join_error",
+        "discovered_at",
+        "can_send_messages",
+        "writable_status",
+        "sendable_status",
+      ].join(", "),
+    )
+    .eq("tenant_id", ctx.tenantId);
   if (status === "APPROVED_ACTIVE") q = q.in("status", ["APPROVED", "JOINED"]);
   else if (status === "AUTO_PENDING")
     q = q.eq("discovery_source", "AUTO").eq("status", "FOUND");
@@ -3438,6 +3469,17 @@ export async function listCampaigns(ctx: AuthContext, filter?: string) {
     rows.map((row) => row.id as string),
   );
   return rows.map((row) => withCampaignJobStats(row, stats.get(row.id as string)));
+}
+
+export async function campaignComposerState(ctx: AuthContext) {
+  const premiumEmoji = await premiumEmojiEntitlement(ctx.tenantId);
+  return {
+    addons: {
+      premiumEmoji: {
+        active: premiumEmoji.active,
+      },
+    },
+  };
 }
 
 export async function campaignDetail(ctx: AuthContext, id: string) {

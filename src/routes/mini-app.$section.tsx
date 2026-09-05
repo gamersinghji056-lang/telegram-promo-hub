@@ -76,8 +76,10 @@ import {
   getApprovedGroupFolderLinks,
   getBilling,
   getBulkJoinState,
+  getCampaignComposerState,
   getCampaignDetail,
   getCampaigns,
+  getConnectionOptions,
   getConnections,
   getGroupDiscoveryState,
   getDashboard,
@@ -456,9 +458,11 @@ function MiniAppSection() {
   const { section } = Route.useParams();
   const dashboardFn = useServerFn(getDashboard);
   const connectionsFn = useServerFn(getConnections);
+  const connectionOptionsFn = useServerFn(getConnectionOptions);
   const groupsFn = useServerFn(getGroups);
   const keywordsFn = useServerFn(getKeywords);
   const campaignsFn = useServerFn(getCampaigns);
+  const campaignComposerStateFn = useServerFn(getCampaignComposerState);
   const groupCategoriesFn = useServerFn(getGroupCategories);
   const groupWritabilitySummaryFn = useServerFn(getGroupWritabilitySummary);
   const analyticsFn = useServerFn(getAnalytics);
@@ -595,7 +599,7 @@ function MiniAppSection() {
       sessions: (a) => connectionsFn({ data: { auth: a } }),
       "groups-find": async (a) => {
         const [connections, keywords, groups, discovery] = await Promise.all([
-          connectionsFn({ data: { auth: a } }),
+          connectionOptionsFn({ data: { auth: a } }),
           keywordsFn({ data: { auth: a } }),
           groupsFn({ data: { auth: a, status: "AUTO_PENDING" } }),
           discoveryStateFn({ data: { auth: a } }),
@@ -604,7 +608,7 @@ function MiniAppSection() {
       },
       "groups-found": async (a) => {
         const [connections, groups] = await Promise.all([
-          connectionsFn({ data: { auth: a } }),
+          connectionOptionsFn({ data: { auth: a } }),
           groupsFn({ data: { auth: a, status: "FOUND" } }),
         ]);
         return { connections, groups };
@@ -641,13 +645,12 @@ function MiniAppSection() {
         return { connections, audience, addUsers };
       },
       "dm-create": async (a) => {
-        const [connections, audience, campaigns, billing] = await Promise.all([
-          connectionsFn({ data: { auth: a } }),
-          audienceFn({ data: { auth: a, groupIds: [], onlyNew: true } }),
-          campaignsFn({ data: { auth: a, filter: "DM" } }),
-          billingFn({ data: { auth: a } }),
+        const [connections, audience, composer] = await Promise.all([
+          connectionOptionsFn({ data: { auth: a } }),
+          audienceFn({ data: { auth: a, groupIds: [], onlyNew: true, pageSize: 25 } }),
+          campaignComposerStateFn({ data: { auth: a } }),
         ]);
-        return { connections, audience, campaigns, billing };
+        return { connections, audience, billing: composer };
       },
       "dm-history": (a) => campaignsFn({ data: { auth: a, filter: "DM" } }),
       campaigns: async (a) => {
@@ -658,14 +661,12 @@ function MiniAppSection() {
         return { campaigns, connections };
       },
       "group-create": async (a) => {
-        const [connections, groups, categories, campaigns, billing] = await Promise.all([
-          connectionsFn({ data: { auth: a } }),
-          groupsFn({ data: { auth: a, status: "APPROVED_ACTIVE" } }),
+        const [connections, categories, composer] = await Promise.all([
+          connectionOptionsFn({ data: { auth: a } }),
           groupCategoriesFn({ data: { auth: a } }),
-          campaignsFn({ data: { auth: a, filter: "GROUP" } }),
-          billingFn({ data: { auth: a } }),
+          campaignComposerStateFn({ data: { auth: a } }),
         ]);
-        return { connections, groups, categories, campaigns, billing };
+        return { connections, categories, billing: composer };
       },
       "group-history": (a) => campaignsFn({ data: { auth: a, filter: "GROUP" } }),
       "group-categories": async (a) => {
@@ -871,6 +872,9 @@ function MiniAppSection() {
       }
     ).Telegram?.WebApp;
     let lastFocused: HTMLElement | null = null;
+    let viewportFrame = 0;
+    let lastKeyboardInset = "";
+    let lastNavTranslate = "";
     const layoutHeight = () =>
       Math.max(
         window.innerHeight,
@@ -916,11 +920,16 @@ function MiniAppSection() {
       const navHeight = Number.parseFloat(
         getComputedStyle(root).getPropertyValue("--miniapp-bottom-nav-height") || "72",
       );
-      root.style.setProperty(
-        "--miniapp-keyboard-inset",
-        `${Math.ceil(keyboardOpen ? inset + navHeight + 96 : 0)}px`,
-      );
-      root.style.setProperty("--miniapp-nav-translate", keyboardOpen ? "110%" : "0px");
+      const keyboardInset = `${Math.ceil(keyboardOpen ? inset + navHeight + 96 : 0)}px`;
+      const navTranslate = keyboardOpen ? "110%" : "0px";
+      if (keyboardInset !== lastKeyboardInset) {
+        lastKeyboardInset = keyboardInset;
+        root.style.setProperty("--miniapp-keyboard-inset", keyboardInset);
+      }
+      if (navTranslate !== lastNavTranslate) {
+        lastNavTranslate = navTranslate;
+        root.style.setProperty("--miniapp-nav-translate", navTranslate);
+      }
       const active = document.activeElement;
       if (active instanceof HTMLElement && active.matches(focusSelector)) {
         lastFocused = active;
@@ -931,32 +940,40 @@ function MiniAppSection() {
         lastFocused = null;
       }
     };
+    const scheduleViewportPadding = () => {
+      if (viewportFrame) return;
+      viewportFrame = window.requestAnimationFrame(() => {
+        viewportFrame = 0;
+        updateViewportPadding();
+      });
+    };
     const onFocus = (event: Event) => {
       if (event.target instanceof HTMLElement && event.target.matches(focusSelector)) {
         lastFocused = event.target;
         event.target.style.scrollMarginBottom = "calc(7rem + var(--miniapp-keyboard-inset, 0px))";
-        window.setTimeout(updateViewportPadding, 60);
-        window.setTimeout(updateViewportPadding, 260);
+        window.setTimeout(scheduleViewportPadding, 60);
+        window.setTimeout(scheduleViewportPadding, 260);
         window.setTimeout(() => scrollFocusedIntoView(event.target as HTMLElement), 360);
       }
     };
     const onBlur = () => {
       if (lastFocused) lastFocused.style.scrollMarginBottom = "";
       lastFocused = null;
-      window.setTimeout(updateViewportPadding, 80);
+      window.setTimeout(scheduleViewportPadding, 80);
     };
-    window.visualViewport?.addEventListener("resize", updateViewportPadding);
-    window.visualViewport?.addEventListener("scroll", updateViewportPadding);
+    window.visualViewport?.addEventListener("resize", scheduleViewportPadding);
+    window.visualViewport?.addEventListener("scroll", scheduleViewportPadding);
     window.addEventListener("focusin", onFocus);
     window.addEventListener("focusout", onBlur);
-    telegram?.onEvent?.("viewportChanged", updateViewportPadding);
+    telegram?.onEvent?.("viewportChanged", scheduleViewportPadding);
     updateViewportPadding();
     return () => {
-      window.visualViewport?.removeEventListener("resize", updateViewportPadding);
-      window.visualViewport?.removeEventListener("scroll", updateViewportPadding);
+      if (viewportFrame) window.cancelAnimationFrame(viewportFrame);
+      window.visualViewport?.removeEventListener("resize", scheduleViewportPadding);
+      window.visualViewport?.removeEventListener("scroll", scheduleViewportPadding);
       window.removeEventListener("focusin", onFocus);
       window.removeEventListener("focusout", onBlur);
-      telegram?.offEvent?.("viewportChanged", updateViewportPadding);
+      telegram?.offEvent?.("viewportChanged", scheduleViewportPadding);
       root.style.removeProperty("--miniapp-keyboard-inset");
       root.style.removeProperty("--miniapp-nav-translate");
     };
@@ -3425,6 +3442,7 @@ function AddUsersPage({ auth, data, actions, reload, setNotice, actionBusy, runA
           usernameFilter: nextUsername,
           activityFilter: nextActivity,
           excludeInactive: nextActivity === "ALL",
+          pageSize: 25,
         },
       });
       setAudience(response);
@@ -3737,7 +3755,7 @@ function CampaignChoice({ href, label, body, visual }: { href: string; label: st
 }
 
 function DMCampaign({ auth, data, actions, reload, setNotice, actionBusy, runAction }: any) {
-  const [createMode, setCreateMode] = useState(false);
+  const [createMode, setCreateMode] = useState(true);
   const [audience, setAudience] = useState<any>(data?.audience ?? null);
   const [selected, setSelected] = useState<string[]>([]);
   const [usernameFilter, setUsernameFilter] = useState<"ALL" | "WITH_USERNAME" | "WITHOUT_USERNAME">("ALL");
@@ -3765,6 +3783,7 @@ function DMCampaign({ auth, data, actions, reload, setNotice, actionBusy, runAct
           usernameFilter: nextUsername,
           activityFilter: nextActivity,
           excludeInactive: nextActivity === "ALL",
+          pageSize: 25,
         },
       });
       setAudience(response);
@@ -3805,8 +3824,12 @@ function DMCampaign({ auth, data, actions, reload, setNotice, actionBusy, runAct
         },
       });
       setNotice("DM campaign queued. Worker will process due jobs.");
-      await reload();
-      setCreateMode(false);
+      if (typeof window !== "undefined") {
+        window.location.href = "/mini-app/dm-history";
+      } else {
+        await reload();
+        setCreateMode(false);
+      }
     });
   }
   if (!createMode) {
@@ -3831,8 +3854,8 @@ function DMCampaign({ auth, data, actions, reload, setNotice, actionBusy, runAct
   }
   return (
     <form onSubmit={submit} className="space-y-4">
-      <Button type="button" variant="secondary" onClick={() => setCreateMode(false)}>
-        BACK TO DM CAMPAIGNS
+      <Button asChild variant="secondary">
+        <a href="/mini-app/dm-history">BACK TO DM CAMPAIGNS</a>
       </Button>
       {audience ? (
         <>
@@ -3938,7 +3961,7 @@ function DMCampaign({ auth, data, actions, reload, setNotice, actionBusy, runAct
 }
 
 function GroupCampaign({ auth, data, actions, reload, setNotice, actionBusy, runAction }: any) {
-  const [createMode, setCreateMode] = useState(false);
+  const [createMode, setCreateMode] = useState(true);
   const [categoryId, setCategoryId] = useState("");
   const [connectionId, setConnectionId] = useState("");
   const [message, setMessage] = useState("");
@@ -3981,8 +4004,12 @@ function GroupCampaign({ auth, data, actions, reload, setNotice, actionBusy, run
       setNotice(
         scheduledAt ? "Group campaign scheduled." : "Group campaign queued.",
       );
-      await reload();
-      setCreateMode(false);
+      if (typeof window !== "undefined") {
+        window.location.href = "/mini-app/group-history";
+      } else {
+        await reload();
+        setCreateMode(false);
+      }
     });
   }
   async function submit(e: FormEvent) {
@@ -4011,8 +4038,8 @@ function GroupCampaign({ auth, data, actions, reload, setNotice, actionBusy, run
   }
   return (
     <form onSubmit={submit} className="space-y-4">
-      <Button type="button" variant="secondary" onClick={() => setCreateMode(false)}>
-        BACK TO GROUP PROMOTION CAMPAIGNS
+      <Button asChild variant="secondary">
+        <a href="/mini-app/group-history">BACK TO GROUP PROMOTION CAMPAIGNS</a>
       </Button>
       <SessionSelect
         label="Select Sending Session"
