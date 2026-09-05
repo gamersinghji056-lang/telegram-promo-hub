@@ -28,6 +28,7 @@ type WorkerTask = {
   run: () => Promise<unknown>;
   timer?: NodeJS.Timeout;
   running: boolean;
+  ticks: number;
 };
 
 function intervalMs() {
@@ -43,15 +44,24 @@ export function startBackgroundWorkers(options: WorkerOptions = { orders: true, 
   const runTelegram = options.telegram !== false;
 
   const tasks: WorkerTask[] = [];
-  const addTask = (task: Omit<WorkerTask, "timer" | "running">) => {
-    tasks.push({ ...task, running: false });
+  const addTask = (task: Omit<WorkerTask, "timer" | "running" | "ticks">) => {
+    tasks.push({ ...task, running: false, ticks: 0 });
   };
 
   const runTask = async (task: WorkerTask) => {
     if (task.running) return;
     task.running = true;
+    task.ticks += 1;
+    const startedAt = Date.now();
     try {
-      await task.run();
+      const result = await task.run();
+      const processed =
+        result && typeof result === "object" && "processed" in result
+          ? Number((result as { processed?: unknown }).processed ?? 0)
+          : 0;
+      if (processed > 0 || task.ticks % Math.max(1, Math.ceil(60_000 / Math.max(5_000, task.interval))) === 0) {
+        console.info("BACKGROUND_WORKER_TICK", { task: task.name, durationMs: Date.now() - startedAt, result });
+      }
     } catch (error) {
       const label = task.name === "Payment" ? "Payment worker failed" : `${task.name} worker failed`;
       console.error(label, error instanceof Error ? error.message : error);
@@ -106,6 +116,7 @@ export function startBackgroundWorkers(options: WorkerOptions = { orders: true, 
   }
 
   for (const task of tasks) {
+    console.info("BACKGROUND_WORKER_TASK_STARTED", { task: task.name, intervalMs: Math.max(5_000, task.interval) });
     setTimeout(() => runTask(task), 3_000).unref?.();
     task.timer = setInterval(() => runTask(task), Math.max(5_000, task.interval)).unref?.();
   }

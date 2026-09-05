@@ -931,9 +931,40 @@ function discoveryRetryDelay(error: unknown) {
   return null;
 }
 
+function discoveryKeepsWorkPending(error: unknown) {
+  const message = telegramErrorMessage(error).toUpperCase();
+  return (
+    message.includes("AUTH_KEY_UNREGISTERED") ||
+    message.includes("SESSION") ||
+    message.includes("RECONNECT") ||
+    message.includes("COOLING DOWN") ||
+    message.includes("CONNECT A TELEGRAM") ||
+    message.includes("CONNECT AN AUTHORIZED") ||
+    message.includes("MONTHLY AUDIENCE DISCOVERY LIMIT REACHED") ||
+    message.includes("MONTHLY GROUP DISCOVERY LIMIT REACHED")
+  );
+}
+
 function audienceResultRetryDelay(result: { status?: string | null; reason?: string | null }) {
   if (result.status !== "FAILED") return null;
   return discoveryRetryDelay(new Error(result.reason || "Audience discovery failed."));
+}
+
+async function healthyDiscoveryConnection(ctx: AuthContext, preferredConnectionId?: string | null) {
+  let preferredError: unknown = null;
+  if (preferredConnectionId) {
+    try {
+      return await requireConnection(ctx, preferredConnectionId);
+    } catch (error) {
+      preferredError = error;
+    }
+  }
+  try {
+    return await defaultHealthyConnection(ctx);
+  } catch {
+    if (preferredError) throw preferredError;
+    throw new Error("Connect a healthy Telegram session first.");
+  }
 }
 
 function withDiscoveryLeaseRelease<T extends Record<string, unknown>>(state: Record<string, unknown>, update: T) {
@@ -985,13 +1016,7 @@ async function claimGroupDiscoveryJobs(limit: number) {
   });
   if (error) {
     console.warn("GROUP_DISCOVERY_LEASE_UNAVAILABLE", telegramErrorMessage(error));
-    const { data: states } = await db()
-      .from("group_discovery_states")
-      .select("*")
-      .eq("status", "RUNNING")
-      .lte("next_search_at", new Date().toISOString())
-      .limit(Math.max(1, Math.min(limit, 20)));
-    return (states ?? []) as unknown as DiscoveryStateRow[];
+    return [];
   }
   return (data ?? []) as DiscoveryStateRow[];
 }
@@ -1005,12 +1030,7 @@ async function claimAudienceDiscoveryJobs(limit: number) {
   });
   if (error) {
     console.warn("AUDIENCE_DISCOVERY_LEASE_UNAVAILABLE", telegramErrorMessage(error));
-    const { data: states } = await db()
-      .from("audience_discovery_states")
-      .select("*")
-      .eq("status", "RUNNING")
-      .limit(Math.max(1, Math.min(limit, 10)));
-    return (states ?? []) as unknown as DiscoveryStateRow[];
+    return [];
   }
   return (data ?? []) as DiscoveryStateRow[];
 }
@@ -1111,7 +1131,16 @@ export async function processGroupDiscoveryJobs(limit = 5) {
   for (const state of states ?? []) {
     try {
       const keywords = stringArray(state.selected_keywords ?? state.keywords);
-      if (!state.connection_id || !keywords.length) throw new Error("Discovery needs keywords and a healthy session.");
+      if (!keywords.length) throw new Error("Discovery needs at least one saved keyword.");
+      const ctx = {
+        tenantId: state.tenant_id as string,
+        customerId: "",
+        email: "",
+        name: null,
+        telegramUserId: null,
+      };
+      const connection = await healthyDiscoveryConnection(ctx, state.connection_id as string | null);
+      const connectionId = connection.id as string;
       const batch = Number(state.batches_completed ?? 0);
       const cursor = keywords.length ? batch % keywords.length : 0;
       const keyword = keywords[cursor];
@@ -1119,18 +1148,18 @@ export async function processGroupDiscoveryJobs(limit = 5) {
       const terms = discoveryTerms([keyword], batch);
       console.info("DISCOVERY_BATCH_START", {
         tenantId: state.tenant_id,
-        connectionId: state.connection_id,
+        connectionId,
         keyword,
         batch,
       });
       const result = await discoverGroupsForTenant(
         state.tenant_id as string,
-        state.connection_id as string,
+        connectionId,
         terms,
       );
       console.info("DISCOVERY_BATCH_COMPLETE", {
         tenantId: state.tenant_id,
-        connectionId: state.connection_id,
+        connectionId,
         keyword,
         added: result.added,
         duplicates: result.duplicates,
@@ -1139,6 +1168,7 @@ export async function processGroupDiscoveryJobs(limit = 5) {
         "group_discovery_states",
         state,
         {
+          connection_id: connectionId,
           total_found: Number(state.total_found ?? 0) + result.added,
           new_groups_found: result.added,
           duplicates_found: result.duplicates,
@@ -2479,13 +2509,12 @@ export async function discoverAudience(
     .in("status", ["APPROVED", "JOINED"]);
   const rows = groups ?? [];
   if (!rows.length) throw new Error("Select approved groups before finding users.");
-  await assertUsageQuota(
+  const remainingAudienceQuota = await usageQuotaRemaining(
     ctx.tenantId,
     "audience_found",
     "monthly_audience_found_limit",
-    1,
-    "Monthly audience discovery limit reached.",
   );
+  if (remainingAudienceQuota !== null && remainingAudienceQuota <= 0) throw new Error("Monthly audience discovery limit reached.");
 
   const summary = {
     groupsSelected: ids.length,
@@ -2516,20 +2545,13 @@ export async function discoverAudience(
       groupId: group.id as string,
       groupName: String(group.title ?? group.username ?? group.id),
       status: result.status,
-      usersFound: result.users.length,
+      usersFound: 0,
       duplicates: 0,
       alreadySaved: 0,
       reason: result.reason,
     };
 
     if (result.status === "FOUND") {
-      await assertUsageQuota(
-        ctx.tenantId,
-        "audience_found",
-        "monthly_audience_found_limit",
-        result.users.length,
-        "Monthly audience discovery limit reached.",
-      );
       for (const user of result.users) {
         const { data: existing } = await db()
           .from("audience_contacts")
@@ -2561,6 +2583,7 @@ export async function discoverAudience(
           summary.alreadySaved += 1;
           continue;
         }
+        if (remainingAudienceQuota !== null && summary.usersFound >= remainingAudienceQuota) continue;
         const { error } = await db().from("audience_contacts").insert({
           tenant_id: ctx.tenantId,
           telegram_user_id: user.telegramUserId,
@@ -2583,6 +2606,7 @@ export async function discoverAudience(
           groupResult.duplicates += 1;
           summary.duplicates += 1;
         } else {
+          groupResult.usersFound += 1;
           summary.usersFound += 1;
         }
       }
@@ -2656,6 +2680,7 @@ export async function startAudienceDiscovery(ctx: AuthContext, groupIds: string[
       previously_saved: 0,
       unavailable: 0,
       last_error: null,
+      next_search_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     },
     { onConflict: "tenant_id" },
@@ -2705,18 +2730,21 @@ export async function processAudienceDiscoveryJobs(limit = 2) {
       telegramUserId: null,
     };
     try {
-      const result = await discoverAudience(ctx, [next], state.connection_id as string | null);
+      const connection = await healthyDiscoveryConnection(ctx, state.connection_id as string | null);
+      const connectionId = connection.id as string;
+      const result = await discoverAudience(ctx, [next], connectionId);
       const groupResult = result.results[0];
       const retryDelay = groupResult ? audienceResultRetryDelay(groupResult) : null;
       if (retryDelay) {
         await updateClaimedDiscoveryState(
           "audience_discovery_states",
-          state,
-          {
-            last_error: groupResult?.reason || "Audience discovery is waiting for Telegram to allow another attempt.",
-            next_search_at: new Date(Date.now() + retryDelay).toISOString(),
-            updated_at: new Date().toISOString(),
-          },
+        state,
+        {
+          last_error: groupResult?.reason || "Audience discovery is waiting for Telegram to allow another attempt.",
+          errors: appendDiscoveryError(state.errors, new Error(groupResult?.reason || "Audience discovery is waiting for Telegram to allow another attempt.")),
+          next_search_at: new Date(Date.now() + retryDelay).toISOString(),
+          updated_at: new Date().toISOString(),
+        },
           "audience",
         );
         continue;
@@ -2726,6 +2754,7 @@ export async function processAudienceDiscoveryJobs(limit = 2) {
         "audience_discovery_states",
         state,
         {
+          connection_id: connectionId,
           processed_group_ids: [...done],
           users_found: Number(state.users_found ?? 0) + result.usersFound,
           new_users: Number(state.new_users ?? 0) + result.usersFound,
@@ -2741,14 +2770,16 @@ export async function processAudienceDiscoveryJobs(limit = 2) {
       processed += 1;
     } catch (error) {
       const retryDelay = discoveryRetryDelay(error);
-      if (!retryDelay) done.add(next);
+      const keepPending = retryDelay !== null || discoveryKeepsWorkPending(error);
+      if (!keepPending) done.add(next);
       await updateClaimedDiscoveryState(
         "audience_discovery_states",
         state,
         {
           processed_group_ids: [...done],
-          unavailable: retryDelay ? Number(state.unavailable ?? 0) : Number(state.unavailable ?? 0) + 1,
+          unavailable: keepPending ? Number(state.unavailable ?? 0) : Number(state.unavailable ?? 0) + 1,
           last_error: error instanceof Error ? error.message : "Audience discovery failed.",
+          errors: appendDiscoveryError(state.errors, error),
           next_search_at: new Date(Date.now() + (retryDelay ?? 15 * 60_000)).toISOString(),
           updated_at: new Date().toISOString(),
         },

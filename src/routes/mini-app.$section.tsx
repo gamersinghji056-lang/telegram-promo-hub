@@ -659,7 +659,7 @@ function MiniAppSection() {
     [],
   );
 
-  async function load(force = false) {
+  async function load(force = false, options: { quiet?: boolean } = {}) {
     const targetSection = section;
     const requestLanguageVersion = languageVersionRef.current;
     const nextAuth = await telegramAuthReady();
@@ -677,9 +677,14 @@ function MiniAppSection() {
       setProfile(cached.profile ?? profile);
       setBusy(false);
     } else {
-      setBusy(true);
-      setLoadedSection("");
-      setData(null);
+      if (!options.quiet) {
+        setBusy(true);
+        setLoadedSection("");
+        setData(null);
+      } else if (!data) {
+        setBusy(true);
+        setLoadedSection("");
+      }
     }
     setError("");
     setAuth(nextAuth);
@@ -769,6 +774,17 @@ function MiniAppSection() {
   useEffect(() => {
     void load(false);
   }, [section]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !auth) return;
+    const groupRunning = section === "groups-find" && data?.discovery?.status === "RUNNING";
+    const audienceRunning = section === "dm-audience" && data?.discovery?.state?.status === "RUNNING";
+    if (!groupRunning && !audienceRunning) return;
+    const timer = window.setInterval(() => {
+      void load(true, { quiet: true });
+    }, 10000);
+    return () => window.clearInterval(timer);
+  }, [auth, section, data?.discovery?.status, data?.discovery?.state?.status]);
 
   useEffect(() => {
     applyMiniAppTranslations(appLanguage);
@@ -3232,11 +3248,23 @@ function DMAudience({ auth, data, actions, reload, setNotice, actionBusy, runAct
           <Stat label="Excluded Inactive" value={audience.excludedInactive ?? 0} />
           <Stat label="Active Posters" value={audience.activePosters ?? 0} />
           <Stat label="Previously Saved" value={state.previously_saved ?? 0} />
+          <Stat label="Next Search" value={state.next_search_at ? new Date(state.next_search_at).toLocaleString() : "not scheduled"} />
+          <Stat label="Errors" value={(state.errors ?? []).length} />
         </div>
         {state.status === "RUNNING" ? (
           <p className="text-xs text-success">Running in the background. You can close the app and return later.</p>
         ) : null}
         {state.last_error ? <p className="text-sm text-warning">{state.last_error}</p> : null}
+        {(state.errors ?? []).length ? (
+          <details className="text-xs text-muted-foreground">
+            <summary>Recent Worker Errors ({(state.errors ?? []).length})</summary>
+            <div className="mt-2 space-y-1">
+              {(state.errors ?? []).slice(0, 5).map((item: any, index: number) => (
+                <p key={`${item.time ?? "error"}-${index}`}>{item.message ?? "Discovery failed."}</p>
+              ))}
+            </div>
+          </details>
+        ) : null}
       </section>
       <details className={panelClass("space-y-3")}>
         <summary className="cursor-pointer font-semibold">DISCOVERY ISSUES ({issues.length})</summary>

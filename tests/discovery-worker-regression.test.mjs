@@ -34,12 +34,12 @@ test("discovery state uses durable server-side claims instead of UI lifetime", (
 test("recoverable discovery failures schedule retry without explicit pause or completion", () => {
   const customer = read("src/lib/customer-data.server.ts");
   assert(customer.includes("discoveryRetryDelay(error)"));
+  assert(customer.includes("discoveryKeepsWorkPending(error)"));
   assert(customer.includes("FLOOD_WAIT"));
   assert(customer.includes("DISCOVERY_RATE_LIMIT_RETRY_MS"));
   assert(customer.includes("audienceResultRetryDelay(groupResult)"));
-  assert(customer.includes('if (!retryDelay) done.add(next);'));
+  assert(customer.includes("if (!keepPending) done.add(next);"));
   assert(customer.includes('status: "COMPLETED"'));
-  assert(!customer.includes('status: "PAUSED",\n          last_error'));
 });
 
 test("group discovery caps new inserts to remaining quota instead of discarding a whole batch", () => {
@@ -49,6 +49,32 @@ test("group discovery caps new inserts to remaining quota instead of discarding 
   assert(customer.includes("usageQuotaRemaining"));
   assert(customer.includes("if (remaining !== null && added >= remaining) continue;"));
   assert(!customer.includes("rows.length,\n    \"Monthly group discovery limit reached.\""));
+});
+
+test("audience discovery caps new inserts to remaining quota instead of discarding a whole source group", () => {
+  const customer = read("src/lib/customer-data.server.ts");
+  assert(customer.includes("const remainingAudienceQuota = await usageQuotaRemaining"));
+  assert(customer.includes("summary.usersFound >= remainingAudienceQuota"));
+  assert(customer.includes("groupResult.usersFound += 1;"));
+  assert(!customer.includes("result.users.length,\n        \"Monthly audience discovery limit reached.\""));
+});
+
+test("discovery workers do not process without a database lease when claim RPC is unavailable", () => {
+  const customer = read("src/lib/customer-data.server.ts");
+  assert(customer.includes('console.warn("GROUP_DISCOVERY_LEASE_UNAVAILABLE"'));
+  assert(customer.includes('console.warn("AUDIENCE_DISCOVERY_LEASE_UNAVAILABLE"'));
+  assert(!customer.includes('.from("group_discovery_states")\n      .select("*")\n      .eq("status", "RUNNING")'));
+  assert(!customer.includes('.from("audience_discovery_states")\n      .select("*")\n      .eq("status", "RUNNING")'));
+});
+
+test("discovery workers fall back to another healthy linked session during background processing", () => {
+  const customer = read("src/lib/customer-data.server.ts");
+  assert(customer.includes("async function healthyDiscoveryConnection"));
+  assert(customer.includes("return await requireConnection(ctx, preferredConnectionId);"));
+  assert(customer.includes("return await defaultHealthyConnection(ctx);"));
+  assert(customer.includes("const connection = await healthyDiscoveryConnection("));
+  assert(customer.includes("state.connection_id as string | null"));
+  assert(customer.includes("connection_id: connectionId"));
 });
 
 test("start pause and resume remain persisted server actions for every client", () => {
@@ -69,11 +95,21 @@ test("start pause and resume remain persisted server actions for every client", 
   assert(route.includes("setNotice(\"Find Users started.\")"));
 });
 
+test("discovery screens quietly refresh running server-side state", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  assert(route.includes('const groupRunning = section === "groups-find" && data?.discovery?.status === "RUNNING";'));
+  assert(route.includes("const audienceRunning = section === \"dm-audience\" && data?.discovery?.state?.status === \"RUNNING\";"));
+  assert(route.includes("void load(true, { quiet: true });"));
+  assert(route.includes('label="Next Search"'));
+  assert(route.includes("Recent Worker Errors"));
+});
+
 test("telegram-worker remains the documented owner of discovery queues", () => {
   const docs = read("RAILWAY_SERVICES.md");
   const role = read("src/lib/runtime-role.server.ts");
   const pkg = JSON.parse(read("package.json"));
   const entry = read("workers/runtime-worker.mjs");
+  const worker = read("src/lib/background-workers.server.ts");
   assert(docs.includes("telegram-worker"));
   assert(docs.includes("group discovery, audience discovery"));
   assert(role.includes('"telegram-worker"'));
@@ -82,4 +118,6 @@ test("telegram-worker remains the documented owner of discovery queues", () => {
   assert(entry.includes("process.env.MARK8BOT_RUNTIME_ROLE = role"));
   assert(entry.includes('await import("../.output/server/_ssr/ssr.mjs")'));
   assert(entry.includes("mark8bot_worker_health_server_started"));
+  assert(worker.includes("BACKGROUND_WORKER_TASK_STARTED"));
+  assert(worker.includes("BACKGROUND_WORKER_TICK"));
 });
