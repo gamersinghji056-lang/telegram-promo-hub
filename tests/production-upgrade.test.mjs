@@ -183,6 +183,45 @@ test("campaign rate limits use recoverable cooldown instead of campaign-wide pau
   assert(!flood.includes('status: "PAUSED"'));
 });
 
+test("campaign aggregate recovery reads Supabase rows directly and repairs stale RUNNING campaigns", () => {
+  const worker = read("src/lib/campaign-worker.server.ts");
+  const counter = worker.slice(worker.indexOf("async function markCampaignCounts"), worker.indexOf("async function logCampaign"));
+  assert(!counter.includes("campaign.data?."));
+  assert(counter.includes('campaign?.type === "GROUP"'));
+  assert(worker.includes("async function recoverStaleCampaignAggregates"));
+  assert(worker.includes("const recovered = await recoverStaleCampaignAggregates(batchLimit)"));
+});
+
+test("group category summary is read-only and campaign worker applies sent-group proof", () => {
+  const customer = read("src/lib/customer-data.server.ts");
+  const summary = customer.slice(customer.indexOf("export async function groupWritabilitySummary"), customer.indexOf("type GroupCheckMode"));
+  assert(!summary.includes("applySuccessfulSendWritableProof"));
+  const worker = read("src/lib/campaign-worker.server.ts");
+  assert(worker.includes('writable_status: "WRITABLE"'));
+  assert(worker.includes('sendable_status: "SENDABLE"'));
+});
+
+test("discovery polling skips hidden tabs and prevents overlapping full reloads", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  const polling = route.slice(route.indexOf("const groupRunning = section === \"groups-find\""), route.indexOf("applyMiniAppTranslations(appLanguage)"));
+  assert(polling.includes("document.hidden"));
+  assert(polling.includes("pollInFlightRef.current"));
+  assert(polling.includes('document.addEventListener("visibilitychange"'));
+  assert(polling.includes("load(true, { quiet: true })"));
+  assert(route.includes("shellFetchedAtRef"));
+  assert(route.includes("const shouldRefreshShell = !options.quiet"));
+});
+
+test("dashboard avoids many independent count requests on mobile app load", () => {
+  const src = read("src/lib/customer-data.server.ts");
+  const dashboard = src.slice(src.indexOf("export async function dashboard"), src.indexOf("export async function accountProfile"));
+  assert(!dashboard.includes("const count = async"));
+  assert(!dashboard.includes("const countIn = async"));
+  assert(dashboard.includes(".select(\"status, can_send_messages, writable_status, sendable_status\")"));
+  assert(dashboard.includes(".select(\"status, type\")"));
+  assert(dashboard.includes("tenantUsageDashboard(ctx.tenantId)"));
+});
+
 test("modal save state is local and guarded against stale async results", () => {
   const src = read("src/routes/mini-app.$section.tsx");
   assert(src.includes("categorySaveBusy"));

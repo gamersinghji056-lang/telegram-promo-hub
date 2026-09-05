@@ -99,7 +99,9 @@ test("discovery screens quietly refresh running server-side state", () => {
   const route = read("src/routes/mini-app.$section.tsx");
   assert(route.includes('const groupRunning = section === "groups-find" && data?.discovery?.status === "RUNNING";'));
   assert(route.includes("const audienceRunning = section === \"dm-audience\" && data?.discovery?.state?.status === \"RUNNING\";"));
-  assert(route.includes("void load(true, { quiet: true });"));
+  assert(route.includes("load(true, { quiet: true })"));
+  assert(route.includes("document.hidden"));
+  assert(route.includes("pollInFlightRef.current"));
   assert(route.includes('label="Next Search"'));
   assert(route.includes("Recent Worker Errors"));
 });

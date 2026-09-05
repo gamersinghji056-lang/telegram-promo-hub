@@ -563,6 +563,8 @@ function MiniAppSection() {
   const cacheRef = useRef(new Map<string, any>());
   const languageVersionRef = useRef(0);
   const manualLanguageRef = useRef(false);
+  const shellFetchedAtRef = useRef(0);
+  const pollInFlightRef = useRef(false);
   const currentLanguageRef = useRef(appLanguage);
 
   function applyAuthoritativeLanguage(value: string | null | undefined, source = "mini-app", manual = false, requestVersion = languageVersionRef.current) {
@@ -742,16 +744,20 @@ function MiniAppSection() {
       }
       setLoadedSection(targetSection);
       setBusy(false);
-      void notificationsFn({ data: { auth: nextAuth } }).then((notes) => {
-        setNotifications(notes ?? []);
-        const current = cacheRef.current.get(cacheKey) ?? {};
-        cacheRef.current.set(cacheKey, { ...current, data: result, notifications: notes ?? [] });
-      });
-      void profileFn({ data: { auth: nextAuth } }).then((nextProfile) => {
-        setProfile(nextProfile);
-        const current = cacheRef.current.get(cacheKey) ?? {};
-        cacheRef.current.set(cacheKey, { ...current, data: result, profile: nextProfile });
-      });
+      const shouldRefreshShell = !options.quiet && Date.now() - shellFetchedAtRef.current > 60_000;
+      if (shouldRefreshShell) {
+        shellFetchedAtRef.current = Date.now();
+        void notificationsFn({ data: { auth: nextAuth } }).then((notes) => {
+          setNotifications(notes ?? []);
+          const current = cacheRef.current.get(cacheKey) ?? {};
+          cacheRef.current.set(cacheKey, { ...current, data: result, notifications: notes ?? [] });
+        });
+        void profileFn({ data: { auth: nextAuth } }).then((nextProfile) => {
+          setProfile(nextProfile);
+          const current = cacheRef.current.get(cacheKey) ?? {};
+          cacheRef.current.set(cacheKey, { ...current, data: result, profile: nextProfile });
+        });
+      }
       cacheRef.current.set(cacheKey, { data: result, notifications, profile });
     } catch (e) {
       setError(
@@ -780,6 +786,7 @@ function MiniAppSection() {
     sessionStorage.removeItem("customer-session");
     setData(null);
     setProfile(null);
+    shellFetchedAtRef.current = 0;
     cacheRef.current.clear();
     setError(AUTH_REQUIRED_MESSAGE);
   }
@@ -813,10 +820,22 @@ function MiniAppSection() {
     const groupRunning = section === "groups-find" && data?.discovery?.status === "RUNNING";
     const audienceRunning = section === "dm-audience" && data?.discovery?.state?.status === "RUNNING";
     if (!groupRunning && !audienceRunning) return;
-    const timer = window.setInterval(() => {
-      void load(true, { quiet: true });
-    }, 10000);
-    return () => window.clearInterval(timer);
+    const refresh = () => {
+      if (document.hidden || pollInFlightRef.current) return;
+      pollInFlightRef.current = true;
+      void load(true, { quiet: true }).finally(() => {
+        pollInFlightRef.current = false;
+      });
+    };
+    const timer = window.setInterval(refresh, 15000);
+    const onVisibilityChange = () => {
+      if (!document.hidden) refresh();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, [auth, section, data?.discovery?.status, data?.discovery?.state?.status]);
 
   useEffect(() => {

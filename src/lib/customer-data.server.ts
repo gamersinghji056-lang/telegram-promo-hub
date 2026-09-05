@@ -229,81 +229,71 @@ export async function tenantOverview(ctx: AuthContext) {
 export async function dashboard(ctx: AuthContext) {
   const client = db();
   const t = ctx.tenantId;
-  const count = async (table: string, filters: Record<string, unknown> = {}) => {
-    let q = client.from(table).select("id", { count: "exact", head: true }).eq("tenant_id", t);
-    for (const [k, v] of Object.entries(filters)) q = q.eq(k, v);
-    const { count: c } = await q;
-    return c ?? 0;
-  };
-  const countIn = async (table: string, column: string, values: string[]) => {
-    const { count: c } = await client
-      .from(table)
-      .select("id", { count: "exact", head: true })
-      .eq("tenant_id", t)
-      .in(column, values);
-    return c ?? 0;
-  };
-
   const [
-    connections,
-    activeConnections,
-    issueConnections,
-    restrictedConnections,
-    keywords,
-    groupsFound,
-    groupsPending,
-    groupsApproved,
-    groupsWritable,
-    groupsSendable,
-    groupsJoined,
-    audienceTotal,
-    audienceContacted,
-    running,
-    scheduled,
-    completed,
-    failed,
-    dmCampaigns,
-    groupCampaigns,
-    unread,
+    { data: connectionRows },
+    { count: keywords },
+    { data: groupRows },
+    { data: audienceRows },
+    { data: campaignRows },
+    { count: unread },
+    entitlement,
+    { data: jobStatsRows },
   ] = await Promise.all([
-    count("telegram_connections"),
-    count("telegram_connections", { status: "CONNECTED" }),
-    count("telegram_connections", { status: "ERROR" }),
-    countIn("telegram_connections", "restriction_status", [
-      "COOLDOWN",
-      "RESTRICTED",
-      "REQUIRES_ACTION",
-    ]),
-    count("keywords"),
-    count("discovered_groups"),
-    count("discovered_groups", { status: "FOUND" }),
-    count("discovered_groups", { status: "APPROVED" }),
-    count("discovered_groups", { can_send_messages: true, writable_status: "WRITABLE" }),
-    count("discovered_groups", { sendable_status: "SENDABLE" }),
-    count("discovered_groups", { status: "JOINED" }),
-    count("audience_contacts"),
-    count("audience_contacts", { status: "CONTACTED" }),
-    count("campaigns", { status: "RUNNING" }),
-    count("campaigns", { status: "SCHEDULED" }),
-    count("campaigns", { status: "COMPLETED" }),
-    count("campaigns", { status: "FAILED" }),
-    count("campaigns", { type: "DM" }),
-    count("campaigns", { type: "GROUP" }),
+    client
+      .from("telegram_connections")
+      .select("status, restriction_status")
+      .eq("tenant_id", t),
+    client.from("keywords").select("id", { count: "exact", head: true }).eq("tenant_id", t),
+    client
+      .from("discovered_groups")
+      .select("status, can_send_messages, writable_status, sendable_status")
+      .eq("tenant_id", t),
+    client
+      .from("audience_contacts")
+      .select("status")
+      .eq("tenant_id", t),
+    client
+      .from("campaigns")
+      .select("status, type")
+      .eq("tenant_id", t)
+      .is("deleted_at", null),
     client
       .from("notifications")
       .select("id", { count: "exact", head: true })
       .eq("tenant_id", t)
       .is("read_at", null)
-      .then((r) => r.count ?? 0),
+      .then((r) => ({ count: r.count ?? 0 })),
+    tenantUsageDashboard(ctx.tenantId),
+    client
+      .from("campaign_job_stats")
+      .select("total_messages, sent_messages, pending_messages, failed_messages")
+      .eq("tenant_id", t),
   ]);
 
-  const tenant = await tenantOverview(ctx);
+  const connections = connectionRows?.length ?? 0;
+  const activeConnections = connectionRows?.filter((row) => row.status === "CONNECTED").length ?? 0;
+  const issueConnections = connectionRows?.filter((row) => row.status === "ERROR").length ?? 0;
+  const restrictedConnections =
+    connectionRows?.filter((row) =>
+      ["COOLDOWN", "RESTRICTED", "REQUIRES_ACTION"].includes(String(row.restriction_status)),
+    ).length ?? 0;
+  const groupsFound = groupRows?.length ?? 0;
+  const groupsPending = groupRows?.filter((row) => row.status === "FOUND").length ?? 0;
+  const groupsApproved = groupRows?.filter((row) => row.status === "APPROVED").length ?? 0;
+  const groupsWritable =
+    groupRows?.filter((row) => row.can_send_messages === true && row.writable_status === "WRITABLE").length ?? 0;
+  const groupsSendable = groupRows?.filter((row) => row.sendable_status === "SENDABLE").length ?? 0;
+  const groupsJoined = groupRows?.filter((row) => row.status === "JOINED").length ?? 0;
+  const audienceTotal = audienceRows?.length ?? 0;
+  const audienceContacted = audienceRows?.filter((row) => row.status === "CONTACTED").length ?? 0;
+  const running = campaignRows?.filter((row) => row.status === "RUNNING").length ?? 0;
+  const scheduled = campaignRows?.filter((row) => row.status === "SCHEDULED").length ?? 0;
+  const completed = campaignRows?.filter((row) => String(row.status).startsWith("COMPLETED")).length ?? 0;
+  const failed = campaignRows?.filter((row) => row.status === "FAILED").length ?? 0;
+  const dmCampaigns = campaignRows?.filter((row) => row.type === "DM").length ?? 0;
+  const groupCampaigns = campaignRows?.filter((row) => row.type === "GROUP").length ?? 0;
+  const tenant = entitlement.tenant;
   const plan = (tenant as { plans?: Record<string, number | string> } | null)?.plans ?? null;
-  const entitlement = await tenantUsageDashboard(ctx.tenantId);
-  const { data: jobStatsRows } = await client
-    .from("campaign_job_stats")
-    .select("total_messages, sent_messages, pending_messages, failed_messages")
-    .eq("tenant_id", t);
   const messageStats = sumJobStats((jobStatsRows ?? []) as CampaignJobStats[]);
 
   return {
@@ -2932,7 +2922,6 @@ async function applySuccessfulSendWritableProof(ctx: AuthContext) {
 
 export async function groupWritabilitySummary(ctx: AuthContext) {
   const client = db();
-  await applySuccessfulSendWritableProof(ctx);
   const [total, writable, sendable, notWritable, unknown] = await Promise.all([
     client
       .from("discovered_groups")

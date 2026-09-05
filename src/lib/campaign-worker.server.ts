@@ -274,7 +274,7 @@ async function resolveTarget(job: JobRow) {
 
 async function markCampaignCounts(campaignId: string, tenantId: string) {
   const client = db();
-  const [campaign, sent, failed, remaining] = await Promise.all([
+  const [{ data: campaign }, sent, failed, remaining] = await Promise.all([
     client
       .from("campaigns")
       .select("id, type, status, cycle_delay_minutes, cycles_completed, completed_count, failed_count")
@@ -302,15 +302,15 @@ async function markCampaignCounts(campaignId: string, tenantId: string) {
   const update: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
   };
-  if ((remaining.count ?? 0) === 0 && campaign.data?.type === "GROUP" && campaign.data?.status === "RUNNING") {
-    const nextCompleted = Number(campaign.data.completed_count ?? 0) + currentSent;
-    const nextFailed = Number(campaign.data.failed_count ?? 0) + currentFailed;
+  if ((remaining.count ?? 0) === 0 && campaign?.type === "GROUP" && campaign?.status === "RUNNING") {
+    const nextCompleted = Number(campaign.completed_count ?? 0) + currentSent;
+    const nextFailed = Number(campaign.failed_count ?? 0) + currentFailed;
     const nextRun = new Date(
-      Date.now() + Math.max(1, Number(campaign.data.cycle_delay_minutes ?? 20)) * 60_000,
+      Date.now() + Math.max(1, Number(campaign.cycle_delay_minutes ?? 20)) * 60_000,
     ).toISOString();
     update["completed_count"] = nextCompleted;
     update["failed_count"] = nextFailed;
-    update["cycles_completed"] = Number(campaign.data.cycles_completed ?? 0) + 1;
+    update["cycles_completed"] = Number(campaign.cycles_completed ?? 0) + 1;
     update["last_run_at"] = new Date().toISOString();
     update["next_run_at"] = nextRun;
     if (currentSent > 0) {
@@ -338,11 +338,38 @@ async function markCampaignCounts(campaignId: string, tenantId: string) {
     update["failed_count"] = currentFailed;
     update["status"] = currentFailed > 0 ? "COMPLETED_WITH_ERRORS" : "COMPLETED";
     update["completed_at"] = new Date().toISOString();
-  } else if (campaign.data?.type !== "GROUP") {
+  } else if (campaign?.type !== "GROUP") {
     update["completed_count"] = currentSent;
     update["failed_count"] = currentFailed;
   }
   await client.from("campaigns").update(update).eq("id", campaignId).eq("tenant_id", tenantId);
+}
+
+async function recoverStaleCampaignAggregates(limit: number) {
+  const { data: campaigns, error } = await db()
+    .from("campaigns")
+    .select("id, tenant_id")
+    .eq("status", "RUNNING")
+    .order("updated_at", { ascending: true, nullsFirst: false })
+    .limit(Math.max(1, Math.min(limit, 50)));
+  if (error) throw new Error(error.message);
+  let recovered = 0;
+  for (const campaign of campaigns ?? []) {
+    const { count: remaining } = await db()
+      .from("campaign_jobs")
+      .select("id", { count: "exact", head: true })
+      .eq("campaign_id", campaign.id)
+      .in("status", ["QUEUED", "PROCESSING", "HELD", "PAUSED"]);
+    if ((remaining ?? 0) > 0) continue;
+    const { count: total } = await db()
+      .from("campaign_jobs")
+      .select("id", { count: "exact", head: true })
+      .eq("campaign_id", campaign.id);
+    if ((total ?? 0) === 0) continue;
+    await markCampaignCounts(String(campaign.id), String(campaign.tenant_id));
+    recovered += 1;
+  }
+  return recovered;
 }
 
 async function logCampaign(
@@ -732,11 +759,12 @@ export async function processCampaignJobs(limit = DEFAULT_BATCH_LIMIT) {
     else if (result.failed) failed += 1;
     else skipped += 1;
   }
+  const recovered = await recoverStaleCampaignAggregates(batchLimit);
   await logSystem({
     action: "CAMPAIGN_WORKER_RUN",
-    details: { requested: batchLimit, candidates: candidates?.length ?? 0, selected: jobs.length, sent, failed, skipped },
+    details: { requested: batchLimit, candidates: candidates?.length ?? 0, selected: jobs.length, sent, failed, skipped, recovered },
   });
-  return { processed: jobs.length, sent, failed, skipped };
+  return { processed: jobs.length, sent, failed, skipped, recovered };
 }
 
 export async function sendDiagnosticCampaignMessage(input: {
