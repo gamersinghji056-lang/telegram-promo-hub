@@ -222,6 +222,16 @@ test("dashboard avoids many independent count requests on mobile app load", () =
   assert(dashboard.includes("tenantUsageDashboard(ctx.tenantId)"));
 });
 
+test("growth charts are lazy-loaded instead of pulling Recharts into every Mini App route", () => {
+  const route = read("src/routes/mini-app.$section.tsx");
+  assert(!route.includes('from "recharts"'));
+  assert(route.includes('const GrowthLineChart = lazy(() => import("@/components/growth-line-chart"))'));
+  assert(route.includes("<Suspense fallback="));
+  const chart = read("src/components/growth-line-chart.tsx");
+  assert(chart.includes('from "recharts"'));
+  assert(chart.includes("export function GrowthLineChart"));
+});
+
 test("modal save state is local and guarded against stale async results", () => {
   const src = read("src/routes/mini-app.$section.tsx");
   assert(src.includes("categorySaveBusy"));

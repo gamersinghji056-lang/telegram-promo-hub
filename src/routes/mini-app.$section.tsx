@@ -1,8 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, react-hooks/exhaustive-deps */
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import {
   AlertTriangle,
   ArrowRight,
@@ -247,6 +246,7 @@ const sectionVisual: Record<string, ProductIconName> = {
 };
 
 const AUTH_REQUIRED_MESSAGE = "Login to continue inside Telegram Promotion.";
+const GrowthLineChart = lazy(() => import("@/components/growth-line-chart"));
 
 export const Route = createFileRoute("/mini-app/$section")({
   head: ({ params }: { params: { section: string } }) => ({
@@ -5237,7 +5237,11 @@ function GrowthIntelligence({ auth, data, actions, reload, runAction, actionBusy
       <div className="mt-3 border-y border-border py-2"><p className="text-[10px] uppercase tracking-wide text-muted-foreground">Current Members</p><p className="text-2xl font-semibold">{row.member_count == null ? "Unavailable" : Number(row.member_count).toLocaleString()}</p></div>
       <div className="mt-2 grid grid-cols-4 gap-1 text-center text-xs"><span>+{row.joins}<br/>joins</span><span>-{row.leaves}<br/>leaves</span><span>{row.netGrowth}<br/>net</span><span>{row.engagementRate == null ? "—" : `${row.engagementRate.toFixed(1)}%`}<br/>engage</span></div>
       <div className="mt-3 flex flex-wrap gap-1" onClick={(event) => event.stopPropagation()}>{([[["memberCount","Member Count"],["joins","Joins"],["leaves","Leaves"],["netGrowth","Net Growth"]]] as const)[0].map(([series,label]) => <Button key={series} type="button" size="sm" variant={chartSeries.includes(series) ? "default" : "secondary"} className="h-7 px-2 text-[10px]" onClick={() => toggleChartSeries(series)}>{label}</Button>)}</div>
-      <div className="mt-2 h-44 min-w-0 rounded-lg bg-muted/20 p-1" onClick={(event) => event.stopPropagation()}><ResponsiveContainer width="100%" height="100%"><LineChart data={row.chart}><CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false}/><XAxis dataKey="bucket" axisLine={false} tickLine={false} tickFormatter={(v) => new Date(v).toLocaleDateString(undefined,{month:"short",day:"numeric"})} minTickGap={24} tick={{fontSize:10,fill:"var(--muted-foreground)"}}/><YAxis axisLine={false} tickLine={false} width={42} tick={{fontSize:10,fill:"var(--muted-foreground)"}}/><Tooltip contentStyle={{borderRadius:10,border:"1px solid var(--border)",background:"var(--popover)",color:"var(--popover-foreground)",fontSize:12}} labelFormatter={(v) => new Date(v).toLocaleString()}/>{chartSeries.includes("memberCount") ? <Line type="linear" dataKey="memberCount" name="Members" stroke="var(--chart-1)" strokeWidth={2.25} connectNulls={false} dot={row.chart?.length < 12}/> : null}{chartSeries.includes("joins") ? <Line type="linear" dataKey="joins" name="Joins" stroke="var(--success)" strokeWidth={2} connectNulls={false} dot={false}/> : null}{chartSeries.includes("leaves") ? <Line type="linear" dataKey="leaves" name="Leaves" stroke="var(--destructive)" strokeWidth={2} connectNulls={false} dot={false}/> : null}{chartSeries.includes("netGrowth") ? <Line type="linear" dataKey="netGrowth" name="Net Growth" stroke="var(--chart-2)" strokeWidth={2} connectNulls={false} dot={false}/> : null}</LineChart></ResponsiveContainer></div>
+      <div className="mt-2 h-44 min-w-0 rounded-lg bg-muted/20 p-1" onClick={(event) => event.stopPropagation()}>
+        <Suspense fallback={<div className="h-full w-full rounded-md bg-muted/20" />}>
+          <GrowthLineChart data={row.chart ?? []} series={chartSeries} />
+        </Suspense>
+      </div>
       <div className="mt-2 space-y-0.5 text-[11px] text-muted-foreground"><p>Live tracking: {row.status === "ACTIVE" ? "Active" : row.status}</p><p>Admin log history: {row.coverage?.adminLog?.error ?? (row.coverage?.adminLog?.complete ? "Complete" : "In progress")}</p><p>Membership message history: {row.coverage?.membershipHistory?.error ?? (!row.coverage?.membershipHistory?.started ? "Pending" : row.coverage?.membershipHistory?.complete ? "Complete" : "In progress")}</p>{row.coverage?.oldestEventAt ? <p>Oldest membership event collected: {new Date(row.coverage.oldestEventAt).toLocaleString()}</p> : null}<p>Last sync: {row.coverage?.lastSync ? new Date(row.coverage.lastSync).toLocaleString() : "Pending"}</p></div>
       <div className="mt-2 text-xs">Health: {row.health ? `${row.health.score}/100` : "Not enough data yet"}</div>
     </button>)}
