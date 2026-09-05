@@ -158,7 +158,8 @@ test("standalone Mini App error recovery does not force Return to bot", () => {
   assert(warning.includes("Retry"));
   assert(warning.includes("Go to dashboard"));
   assert(warning.includes("isTelegramRuntime ? ("));
-  assert(warning.includes("Return to bot"));
+  assert(warning.includes("Open Telegram bot"));
+  assert(!route.includes("Your session could not be verified. Return to the bot"));
 });
 
 test("order worker uses eager runtime entrypoint and campaign batching is tenant-fair", () => {

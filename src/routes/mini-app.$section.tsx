@@ -761,7 +761,7 @@ function MiniAppSection() {
             ? AUTH_REQUIRED_MESSAGE
           : e instanceof Error
             ? e.message
-            : "Your session could not be verified. Return to the bot and open the Mini App again.",
+            : "Your session could not be verified. Retry or sign in again.",
       );
     } finally {
       setBusy(false);
@@ -1111,7 +1111,7 @@ function SessionWarning({
             href="https://t.me/Wpaypromotionbot"
             className="inline-flex min-h-9 items-center border border-border px-3 text-sm font-semibold text-primary"
           >
-            Return to bot
+            Open Telegram bot
           </a>
         ) : null}
       </div>

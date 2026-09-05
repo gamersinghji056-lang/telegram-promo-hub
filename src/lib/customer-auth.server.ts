@@ -118,7 +118,7 @@ async function consumeTelegramFlow(
 }> {
   if (!token) {
     throw new Error(
-      "This registration link is invalid. Return to the bot and start again.",
+      "This registration link is invalid. Request a fresh Telegram Promotion link and try again.",
     );
   }
 
@@ -134,7 +134,7 @@ async function consumeTelegramFlow(
 
   if (!data || data.flow !== expectedFlow) {
     throw new Error(
-      "This secure link is invalid. Return to the bot and start again.",
+      "This secure link is invalid. Request a fresh Telegram Promotion link and try again.",
     );
   }
 
@@ -144,7 +144,7 @@ async function consumeTelegramFlow(
     );
 
     throw new Error(
-      "This secure link expired. Return to the bot and start again.",
+      "This secure link expired. Request a fresh Telegram Promotion link and try again.",
     );
   }
 
