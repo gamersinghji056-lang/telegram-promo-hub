@@ -332,12 +332,14 @@ async function markCampaignCounts(campaignId: string, tenantId: string) {
     } else {
       update["status"] = nextFailed > 0 ? "COMPLETED_WITH_ERRORS" : "COMPLETED";
       update["completed_at"] = new Date().toISOString();
+      update["next_run_at"] = null;
     }
   } else if ((remaining.count ?? 0) === 0) {
     update["completed_count"] = currentSent;
     update["failed_count"] = currentFailed;
     update["status"] = currentFailed > 0 ? "COMPLETED_WITH_ERRORS" : "COMPLETED";
     update["completed_at"] = new Date().toISOString();
+    update["next_run_at"] = null;
   } else if (campaign?.type !== "GROUP") {
     update["completed_count"] = currentSent;
     update["failed_count"] = currentFailed;

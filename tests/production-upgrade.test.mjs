@@ -188,6 +188,7 @@ test("campaign aggregate recovery reads Supabase rows directly and repairs stale
   const counter = worker.slice(worker.indexOf("async function markCampaignCounts"), worker.indexOf("async function logCampaign"));
   assert(!counter.includes("campaign.data?."));
   assert(counter.includes('campaign?.type === "GROUP"'));
+  assert(counter.includes('update["next_run_at"] = null'));
   assert(worker.includes("async function recoverStaleCampaignAggregates"));
   assert(worker.includes("const recovered = await recoverStaleCampaignAggregates(batchLimit)"));
 });
