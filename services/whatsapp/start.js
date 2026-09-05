@@ -24,6 +24,12 @@ const mimeTypes = {
   ".ico": "image/x-icon",
 };
 
+function resolveSafeDistPath(requestPath) {
+  const normalized = path.posix.normalize(requestPath.startsWith("/") ? requestPath : `/${requestPath}`);
+  const safePath = normalized === "/" ? "/index.html" : normalized;
+  return path.resolve(path.join(distDir, `.${safePath}`));
+}
+
 function sendJson(res, data, status = 200) {
   const payload = JSON.stringify(data);
   res.writeHead(status, {
@@ -62,8 +68,8 @@ const server = createServer((req, res) => {
     }
 
     const requested = cleanPath === "/" ? "/index.html" : cleanPath;
-    const candidate = path.join(distDir, requested.split("/").filter(Boolean).join(path.sep));
-    const target = candidate.startsWith(distDir) && existsSync(candidate) ? candidate : indexHtml;
+    const candidate = resolveSafeDistPath(requested);
+    const target = candidate.startsWith(`${distDir}${path.sep}`) && existsSync(candidate) ? candidate : indexHtml;
 
     if (existsSync(target) && statSync(target).isFile()) {
       if (path.extname(target) === ".html" && !requested.endsWith(".html")) {
