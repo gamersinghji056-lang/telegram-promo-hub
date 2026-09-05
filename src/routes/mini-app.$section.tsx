@@ -1876,6 +1876,9 @@ function GroupFinder({ auth, data, actions, reload, setNotice, actionBusy, runAc
         <p className="text-xs text-muted-foreground">
           Current Keyword: {discovery.current_keyword ?? "none"} | Errors: {(discovery.errors ?? []).length}
         </p>
+        {discovery.status === "RUNNING" ? (
+          <p className="text-xs text-success">Running in the background. You can close the app and return later.</p>
+        ) : null}
         {discovery.last_error ? (
           <p className="text-sm text-warning">{discovery.last_error}</p>
         ) : null}
@@ -3219,6 +3222,7 @@ function DMAudience({ auth, data, actions, reload, setNotice, actionBusy, runAct
       </section>
       <section className={panelClass("space-y-3")}>
         <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+          <Stat label="Status" value={state.status ?? "IDLE"} />
           <Stat label="Selected Groups" value={selectedCount} />
           <Stat label="Processed" value={processed} />
           <Stat label="Remaining" value={Math.max(selectedCount - processed, 0)} />
@@ -3229,6 +3233,10 @@ function DMAudience({ auth, data, actions, reload, setNotice, actionBusy, runAct
           <Stat label="Active Posters" value={audience.activePosters ?? 0} />
           <Stat label="Previously Saved" value={state.previously_saved ?? 0} />
         </div>
+        {state.status === "RUNNING" ? (
+          <p className="text-xs text-success">Running in the background. You can close the app and return later.</p>
+        ) : null}
+        {state.last_error ? <p className="text-sm text-warning">{state.last_error}</p> : null}
       </section>
       <details className={panelClass("space-y-3")}>
         <summary className="cursor-pointer font-semibold">DISCOVERY ISSUES ({issues.length})</summary>

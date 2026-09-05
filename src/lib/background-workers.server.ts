@@ -14,11 +14,20 @@ declare global {
 }
 
 const DEFAULT_INTERVAL_MS = 15_000;
+const TELEGRAM_DISCOVERY_INTERVAL_MS = 5_000;
 
 type WorkerOptions = {
   orders?: boolean;
   blockchain?: boolean;
   telegram?: boolean;
+};
+
+type WorkerTask = {
+  name: string;
+  interval: number;
+  run: () => Promise<unknown>;
+  timer?: NodeJS.Timeout;
+  running: boolean;
 };
 
 function intervalMs() {
@@ -33,36 +42,71 @@ export function startBackgroundWorkers(options: WorkerOptions = { orders: true, 
   const runBlockchain = options.blockchain !== false;
   const runTelegram = options.telegram !== false;
 
-  let running = false;
-  const tick = async () => {
-    if (running) return;
-    running = true;
+  const tasks: WorkerTask[] = [];
+  const addTask = (task: Omit<WorkerTask, "timer" | "running">) => {
+    tasks.push({ ...task, running: false });
+  };
+
+  const runTask = async (task: WorkerTask) => {
+    if (task.running) return;
+    task.running = true;
     try {
-      if (runOrders) {
-        await processCampaignJobs(Number(process.env["CAMPAIGN_WORKER_BATCH_LIMIT"] ?? 10));
-      }
-      if (runBlockchain) {
-        try {
-          await expireInvoices();
-          await processTronUsdtPayments();
-        } catch (paymentError) {
-          console.error("Payment worker failed", paymentError instanceof Error ? paymentError.message : paymentError);
-        }
-      }
-      if (runTelegram) {
-        await processGroupDiscoveryJobs(Number(process.env["GROUP_DISCOVERY_BATCH_LIMIT"] ?? 5));
-        await processAudienceDiscoveryJobs(Number(process.env["AUDIENCE_DISCOVERY_BATCH_LIMIT"] ?? 2));
-        await processBulkJoinJobs(Number(process.env["BULK_JOIN_BATCH_LIMIT"] ?? 2));
-        await processAddUsersJobs(Number(process.env["ADD_USERS_BATCH_LIMIT"] ?? 1));
-        await processGrowthCollection(Number(process.env["GROWTH_COLLECTION_BATCH_LIMIT"] ?? 2));
-      }
+      await task.run();
     } catch (error) {
-      console.error("Background worker failed", error instanceof Error ? error.message : error);
+      const label = task.name === "Payment" ? "Payment worker failed" : `${task.name} worker failed`;
+      console.error(label, error instanceof Error ? error.message : error);
     } finally {
-      running = false;
+      task.running = false;
     }
   };
 
-  setTimeout(tick, 3_000).unref?.();
-  setInterval(tick, intervalMs()).unref?.();
+  if (runOrders) {
+    addTask({
+      name: "Campaign",
+      interval: intervalMs(),
+      run: () => processCampaignJobs(Number(process.env["CAMPAIGN_WORKER_BATCH_LIMIT"] ?? 10)),
+    });
+  }
+  if (runBlockchain) {
+    addTask({
+      name: "Payment",
+      interval: intervalMs(),
+      run: async () => {
+        await expireInvoices();
+        await processTronUsdtPayments();
+      },
+    });
+  }
+  if (runTelegram) {
+    addTask({
+      name: "Group discovery",
+      interval: Number(process.env["GROUP_DISCOVERY_WORKER_INTERVAL_MS"] ?? TELEGRAM_DISCOVERY_INTERVAL_MS),
+      run: () => processGroupDiscoveryJobs(Number(process.env["GROUP_DISCOVERY_BATCH_LIMIT"] ?? 5)),
+    });
+    addTask({
+      name: "Audience discovery",
+      interval: Number(process.env["AUDIENCE_DISCOVERY_WORKER_INTERVAL_MS"] ?? TELEGRAM_DISCOVERY_INTERVAL_MS),
+      run: () => processAudienceDiscoveryJobs(Number(process.env["AUDIENCE_DISCOVERY_BATCH_LIMIT"] ?? 2)),
+    });
+    addTask({
+      name: "Bulk join",
+      interval: intervalMs(),
+      run: () => processBulkJoinJobs(Number(process.env["BULK_JOIN_BATCH_LIMIT"] ?? 2)),
+    });
+    addTask({
+      name: "Add Users",
+      interval: intervalMs(),
+      run: () => processAddUsersJobs(Number(process.env["ADD_USERS_BATCH_LIMIT"] ?? 1)),
+    });
+    addTask({
+      name: "Growth collection",
+      interval: intervalMs(),
+      run: () => processGrowthCollection(Number(process.env["GROWTH_COLLECTION_BATCH_LIMIT"] ?? 2)),
+    });
+  }
+
+  for (const task of tasks) {
+    setTimeout(() => runTask(task), 3_000).unref?.();
+    task.timer = setInterval(() => runTask(task), Math.max(5_000, task.interval)).unref?.();
+  }
 }

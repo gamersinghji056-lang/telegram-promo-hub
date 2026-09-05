@@ -54,7 +54,24 @@ import {
 } from "./billing.server";
 import { reconcileInvoicePayment } from "./tron-monitor.server";
 import { normalizeMessageEntities } from "./message-entities";
+import { classifyTelegramError, telegramErrorMessage } from "./telegram-errors.server";
 const LINK_CODE_TTL_MS = 15 * 60_000;
+const DISCOVERY_LEASE_SECONDS = 120;
+const AUDIENCE_DISCOVERY_LEASE_SECONDS = 180;
+const DISCOVERY_RETRY_MS = 5 * 60_000;
+const DISCOVERY_RATE_LIMIT_RETRY_MS = 30 * 60_000;
+type DiscoveryStateRow = Record<string, unknown>;
+type DiscoveryRpcClient = {
+  rpc: (name: string, args: Record<string, unknown>) => Promise<{ data: unknown[] | null; error: unknown }>;
+};
+type DiscoveryUpdateQuery = PromiseLike<unknown> & {
+  eq: (column: string, value: unknown) => DiscoveryUpdateQuery;
+};
+type DiscoveryDynamicClient = {
+  from: (table: string) => {
+    update: (values: Record<string, unknown>) => DiscoveryUpdateQuery;
+  };
+};
 
 export function hashConnectionLinkCode(code: string) {
   return createHash("sha256")
@@ -895,6 +912,120 @@ function selectedSavedKeywords(saved: string[], selected?: string[]) {
   return [...new Set(requested.length ? requested : saved)];
 }
 
+function discoveryWorkerId(kind: "group" | "audience") {
+  return `${kind}:${process.env["RAILWAY_SERVICE_ID"] ?? process.env["RAILWAY_REPLICA_ID"] ?? "local"}:${process.pid}`;
+}
+
+function discoveryRetryDelay(error: unknown) {
+  const message = telegramErrorMessage(error);
+  const classified = classifyTelegramError(error);
+  const flood = message.toUpperCase().match(/FLOOD_WAIT_?(\d+)|SLOWMODE_WAIT_?(\d+)/);
+  const waitSeconds = Number(flood?.[1] ?? flood?.[2] ?? 0);
+  if (waitSeconds > 0) return Math.min(Math.max(waitSeconds * 1000, DISCOVERY_RETRY_MS), 6 * 60 * 60_000);
+  if (classified.scope === "RATE_LIMIT") return DISCOVERY_RATE_LIMIT_RETRY_MS;
+  if (classified.retryable || message.toLowerCase().includes("cooling down")) return DISCOVERY_RETRY_MS;
+  return null;
+}
+
+function audienceResultRetryDelay(result: { status?: string | null; reason?: string | null }) {
+  if (result.status !== "FAILED") return null;
+  return discoveryRetryDelay(new Error(result.reason || "Audience discovery failed."));
+}
+
+function withDiscoveryLeaseRelease<T extends Record<string, unknown>>(state: Record<string, unknown>, update: T) {
+  const next: Record<string, unknown> = { ...update };
+  if ("lease_owner" in state) {
+    next.lease_owner = null;
+    next.lease_expires_at = null;
+  } else {
+    delete next.lease_owner;
+    delete next.lease_expires_at;
+  }
+  if (!("next_search_at" in state)) delete next.next_search_at;
+  return next as T;
+}
+
+async function clearDiscoveryLease(table: "group_discovery_states" | "audience_discovery_states", tenantId: string) {
+  try {
+    const client = db() as unknown as DiscoveryDynamicClient;
+    await client
+      .from(table)
+      .update({ lease_owner: null, lease_expires_at: null })
+      .eq("tenant_id", tenantId);
+  } catch (error) {
+    console.warn("DISCOVERY_LEASE_CLEAR_SKIPPED", { table, tenantId, reason: telegramErrorMessage(error) });
+  }
+}
+
+async function updateClaimedDiscoveryState(
+  table: "group_discovery_states" | "audience_discovery_states",
+  state: DiscoveryStateRow,
+  update: Record<string, unknown>,
+  kind: "group" | "audience",
+) {
+  const client = db() as unknown as DiscoveryDynamicClient;
+  const query = client
+    .from(table)
+    .update(withDiscoveryLeaseRelease(state, update))
+    .eq("tenant_id", state.tenant_id);
+  if ("lease_owner" in state) query.eq("lease_owner", discoveryWorkerId(kind));
+  return await query;
+}
+
+async function claimGroupDiscoveryJobs(limit: number) {
+  const client = db() as unknown as DiscoveryRpcClient;
+  const { data, error } = await client.rpc("claim_group_discovery_jobs", {
+    p_worker_id: discoveryWorkerId("group"),
+    p_limit: Math.max(1, Math.min(limit, 20)),
+    p_lease_seconds: DISCOVERY_LEASE_SECONDS,
+  });
+  if (error) {
+    console.warn("GROUP_DISCOVERY_LEASE_UNAVAILABLE", telegramErrorMessage(error));
+    const { data: states } = await db()
+      .from("group_discovery_states")
+      .select("*")
+      .eq("status", "RUNNING")
+      .lte("next_search_at", new Date().toISOString())
+      .limit(Math.max(1, Math.min(limit, 20)));
+    return (states ?? []) as unknown as DiscoveryStateRow[];
+  }
+  return (data ?? []) as DiscoveryStateRow[];
+}
+
+async function claimAudienceDiscoveryJobs(limit: number) {
+  const client = db() as unknown as DiscoveryRpcClient;
+  const { data, error } = await client.rpc("claim_audience_discovery_jobs", {
+    p_worker_id: discoveryWorkerId("audience"),
+    p_limit: Math.max(1, Math.min(limit, 10)),
+    p_lease_seconds: AUDIENCE_DISCOVERY_LEASE_SECONDS,
+  });
+  if (error) {
+    console.warn("AUDIENCE_DISCOVERY_LEASE_UNAVAILABLE", telegramErrorMessage(error));
+    const { data: states } = await db()
+      .from("audience_discovery_states")
+      .select("*")
+      .eq("status", "RUNNING")
+      .limit(Math.max(1, Math.min(limit, 10)));
+    return (states ?? []) as unknown as DiscoveryStateRow[];
+  }
+  return (data ?? []) as DiscoveryStateRow[];
+}
+
+function appendDiscoveryError(existing: unknown, error: unknown) {
+  const current = Array.isArray(existing) ? existing : [];
+  return [
+    {
+      time: new Date().toISOString(),
+      message: error instanceof Error ? error.message : telegramErrorMessage(error),
+    },
+    ...current,
+  ].slice(0, 20);
+}
+
+function stringArray(value: unknown) {
+  return Array.isArray(value) ? value.map(String).filter(Boolean) : [];
+}
+
 export async function startGroupDiscovery(ctx: AuthContext, connectionId: string, selected?: string[]) {
   const connection = await requireConnection(ctx, connectionId);
   const keywords = selectedSavedKeywords(
@@ -915,6 +1046,7 @@ export async function startGroupDiscovery(ctx: AuthContext, connectionId: string
     },
     { onConflict: "tenant_id" },
   );
+  await clearDiscoveryLease("group_discovery_states", ctx.tenantId);
   return groupDiscoveryState(ctx);
 }
 
@@ -922,9 +1054,14 @@ export async function pauseGroupDiscovery(ctx: AuthContext) {
   await db()
     .from("group_discovery_states")
     .upsert(
-      { tenant_id: ctx.tenantId, status: "PAUSED", updated_at: new Date().toISOString() },
+      {
+        tenant_id: ctx.tenantId,
+        status: "PAUSED",
+        updated_at: new Date().toISOString(),
+      },
       { onConflict: "tenant_id" },
     );
+  await clearDiscoveryLease("group_discovery_states", ctx.tenantId);
   return groupDiscoveryState(ctx);
 }
 
@@ -965,20 +1102,16 @@ export async function searchGroupDiscoveryNow(ctx: AuthContext, connectionId?: s
 }
 
 export async function processGroupDiscoveryJobs(limit = 5) {
-  const { data: states } = await db()
-    .from("group_discovery_states")
-    .select("*")
-    .eq("status", "RUNNING")
-    .lte("next_search_at", new Date().toISOString())
-    .limit(Math.max(1, Math.min(limit, 20)));
+  const states = await claimGroupDiscoveryJobs(limit);
   let processed = 0;
   for (const state of states ?? []) {
     try {
-      const keywords = (state.selected_keywords ?? state.keywords ?? []).map(String).filter(Boolean);
+      const keywords = stringArray(state.selected_keywords ?? state.keywords);
       if (!state.connection_id || !keywords.length) throw new Error("Discovery needs keywords and a healthy session.");
       const batch = Number(state.batches_completed ?? 0);
       const cursor = keywords.length ? batch % keywords.length : 0;
       const keyword = keywords[cursor];
+      if (!keyword) throw new Error("Discovery needs at least one saved keyword.");
       const terms = discoveryTerms([keyword], batch);
       console.info("DISCOVERY_BATCH_START", {
         tenantId: state.tenant_id,
@@ -998,9 +1131,10 @@ export async function processGroupDiscoveryJobs(limit = 5) {
         added: result.added,
         duplicates: result.duplicates,
       });
-      await db()
-        .from("group_discovery_states")
-        .update({
+      await updateClaimedDiscoveryState(
+        "group_discovery_states",
+        state,
+        {
           total_found: Number(state.total_found ?? 0) + result.added,
           new_groups_found: result.added,
           duplicates_found: result.duplicates,
@@ -1010,24 +1144,23 @@ export async function processGroupDiscoveryJobs(limit = 5) {
           batches_completed: Number(state.batches_completed ?? 0) + 1,
           last_error: null,
           updated_at: new Date().toISOString(),
-        })
-        .eq("tenant_id", state.tenant_id);
+        },
+        "group",
+      );
       processed += 1;
     } catch (error) {
-      await db()
-        .from("group_discovery_states")
-        .update({
+      const retryDelay = discoveryRetryDelay(error) ?? 15 * 60_000;
+      await updateClaimedDiscoveryState(
+        "group_discovery_states",
+        state,
+        {
           last_error: error instanceof Error ? error.message : "Discovery failed.",
-          errors: [
-            {
-              time: new Date().toISOString(),
-              message: error instanceof Error ? error.message : "Discovery failed.",
-            },
-          ],
-          next_search_at: new Date(Date.now() + 15 * 60_000).toISOString(),
+          errors: appendDiscoveryError(state.errors, error),
+          next_search_at: new Date(Date.now() + retryDelay).toISOString(),
           updated_at: new Date().toISOString(),
-        })
-        .eq("tenant_id", state.tenant_id);
+        },
+        "group",
+      );
     }
   }
   return { processed };
@@ -2523,6 +2656,7 @@ export async function startAudienceDiscovery(ctx: AuthContext, groupIds: string[
     },
     { onConflict: "tenant_id" },
   );
+  await clearDiscoveryLease("audience_discovery_states", ctx.tenantId);
   await notify(ctx.tenantId, "Audience discovery started", `${ids.length} source group(s) queued.`, "INFO", "/mini-app/dm-audience");
   return audienceDiscoveryState(ctx);
 }
@@ -2530,27 +2664,32 @@ export async function startAudienceDiscovery(ctx: AuthContext, groupIds: string[
 export async function pauseAudienceDiscovery(ctx: AuthContext) {
   await db()
     .from("audience_discovery_states")
-    .update({ status: "PAUSED", updated_at: new Date().toISOString() })
+    .update({
+      status: "PAUSED",
+      updated_at: new Date().toISOString(),
+    })
     .eq("tenant_id", ctx.tenantId);
+  await clearDiscoveryLease("audience_discovery_states", ctx.tenantId);
   return audienceDiscoveryState(ctx);
 }
 
 export async function processAudienceDiscoveryJobs(limit = 2) {
-  const { data: states } = await db()
-    .from("audience_discovery_states")
-    .select("*")
-    .eq("status", "RUNNING")
-    .limit(Math.max(1, Math.min(limit, 10)));
+  const states = await claimAudienceDiscoveryJobs(limit);
   let processed = 0;
   for (const state of states ?? []) {
-    const groupIds = ((state.group_ids ?? []) as string[]).filter(Boolean);
-    const done = new Set(((state.processed_group_ids ?? []) as string[]).filter(Boolean));
+    const groupIds = stringArray(state.group_ids);
+    const done = new Set(stringArray(state.processed_group_ids));
     const next = groupIds.find((id) => !done.has(id));
     if (!next) {
-      await db()
-        .from("audience_discovery_states")
-        .update({ status: "COMPLETED", updated_at: new Date().toISOString() })
-        .eq("tenant_id", state.tenant_id);
+      await updateClaimedDiscoveryState(
+        "audience_discovery_states",
+        state,
+        {
+          status: "COMPLETED",
+          updated_at: new Date().toISOString(),
+        },
+        "audience",
+      );
       await notify(state.tenant_id as string, "Audience discovery completed", "Find Users finished processing selected groups.", "SUCCESS", "/mini-app/dm-audience");
       continue;
     }
@@ -2563,10 +2702,26 @@ export async function processAudienceDiscoveryJobs(limit = 2) {
     };
     try {
       const result = await discoverAudience(ctx, [next], state.connection_id as string | null);
+      const groupResult = result.results[0];
+      const retryDelay = groupResult ? audienceResultRetryDelay(groupResult) : null;
+      if (retryDelay) {
+        await updateClaimedDiscoveryState(
+          "audience_discovery_states",
+          state,
+          {
+            last_error: groupResult?.reason || "Audience discovery is waiting for Telegram to allow another attempt.",
+            next_search_at: new Date(Date.now() + retryDelay).toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+          "audience",
+        );
+        continue;
+      }
       done.add(next);
-      await db()
-        .from("audience_discovery_states")
-        .update({
+      await updateClaimedDiscoveryState(
+        "audience_discovery_states",
+        state,
+        {
           processed_group_ids: [...done],
           users_found: Number(state.users_found ?? 0) + result.usersFound,
           new_users: Number(state.new_users ?? 0) + result.usersFound,
@@ -2574,21 +2729,27 @@ export async function processAudienceDiscoveryJobs(limit = 2) {
           previously_saved: Number(state.previously_saved ?? 0) + result.alreadySaved,
           unavailable: Number(state.unavailable ?? 0) + result.unavailable,
           last_error: null,
+          next_search_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
-        })
-        .eq("tenant_id", state.tenant_id);
+        },
+        "audience",
+      );
       processed += 1;
     } catch (error) {
-      done.add(next);
-      await db()
-        .from("audience_discovery_states")
-        .update({
+      const retryDelay = discoveryRetryDelay(error);
+      if (!retryDelay) done.add(next);
+      await updateClaimedDiscoveryState(
+        "audience_discovery_states",
+        state,
+        {
           processed_group_ids: [...done],
-          unavailable: Number(state.unavailable ?? 0) + 1,
+          unavailable: retryDelay ? Number(state.unavailable ?? 0) : Number(state.unavailable ?? 0) + 1,
           last_error: error instanceof Error ? error.message : "Audience discovery failed.",
+          next_search_at: new Date(Date.now() + (retryDelay ?? 15 * 60_000)).toISOString(),
           updated_at: new Date().toISOString(),
-        })
-        .eq("tenant_id", state.tenant_id);
+        },
+        "audience",
+      );
     }
   }
   return { processed };
