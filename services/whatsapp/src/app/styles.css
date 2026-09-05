@@ -1,15 +1,27 @@
 :root {
   font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
   color: #0b1021;
+  --bg: #f7f8fc;
+  --card: #ffffff;
+  --line: #d9deea;
+  --text: #0b1021;
+  --muted: #5d6785;
+  --brand: #0a5bd3;
 }
 
 body {
   margin: 0;
   min-height: 100vh;
-  background: #f7f8fc;
+  background: var(--bg);
+  color: var(--text);
 }
 
 #root {
+  min-height: 100vh;
+}
+
+.site-shell,
+.app-shell {
   min-height: 100vh;
 }
 
@@ -21,4 +33,79 @@ body {
   font-weight: 600;
   text-align: center;
   padding: 1.25rem;
+}
+
+.site-header {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.9rem 1rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--card);
+}
+
+.site-brand {
+  font-weight: 700;
+  margin-right: auto;
+  color: inherit;
+  text-decoration: none;
+}
+
+.site-header nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.site-header a,
+.app-sidebar a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.page-shell {
+  max-width: 960px;
+  margin: 1.5rem auto;
+  padding: 1rem;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  min-height: 100vh;
+}
+
+.app-sidebar {
+  background: #101a32;
+  color: #e5eaff;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.app-brand {
+  color: #fff;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+  text-decoration: none;
+}
+
+.app-sidebar nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.app-sidebar a.active {
+  font-weight: 700;
+}
+
+.app-content {
+  padding: 1rem;
+}
+
+.app-title-bar h1 {
+  margin: 0 0 1rem;
+  font-size: 1rem;
 }
