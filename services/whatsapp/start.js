@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import { existsSync, readFileSync, statSync, createReadStream, statSync as statFs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createCipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 const distDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "dist");
 const port = Number(process.env.PORT) || 4173;
@@ -54,6 +54,53 @@ async function readJson(req) {
     if (raw.length > 1_000_000) throw new Error("Request body too large");
   }
   return raw ? JSON.parse(raw) : {};
+}
+
+async function readRawBody(req) {
+  const chunks = [];
+  let size = 0;
+
+  for await (const chunk of req) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > 1_000_000) throw new Error("Request body too large");
+    chunks.push(buffer);
+  }
+
+  return Buffer.concat(chunks);
+}
+
+function verifyMetaWebhookSignature(rawBody, signatureHeader) {
+  const appSecret = process.env.META_APP_SECRET;
+  if (!appSecret) return false;
+  if (!signatureHeader || !signatureHeader.startsWith("sha256=")) return false;
+
+  const expectedHex = createHmac("sha256", appSecret).update(rawBody).digest("hex");
+  const providedHex = signatureHeader.slice("sha256=".length);
+
+  if (!/^[a-f0-9]{64}$/i.test(providedHex)) return false;
+
+  const expected = Buffer.from(expectedHex, "hex");
+  const provided = Buffer.from(providedHex, "hex");
+
+  return expected.length === provided.length && timingSafeEqual(expected, provided);
+}
+
+function extractWebhookSummary(payload) {
+  const entries = Array.isArray(payload?.entry) ? payload.entry : [];
+  let messages = 0;
+  let statuses = 0;
+
+  for (const entry of entries) {
+    const changes = Array.isArray(entry?.changes) ? entry.changes : [];
+    for (const change of changes) {
+      const value = change?.value || {};
+      if (Array.isArray(value.messages)) messages += value.messages.length;
+      if (Array.isArray(value.statuses)) statuses += value.statuses.length;
+    }
+  }
+
+  return { entries: entries.length, messages, statuses };
 }
 
 function encryptToken(token) {
@@ -221,6 +268,56 @@ const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
     const cleanPath = decodeURIComponent(url.pathname);
 
+    if (cleanPath === "/api/meta/webhook" && req.method === "GET") {
+      const mode = url.searchParams.get("hub.mode");
+      const verifyToken = url.searchParams.get("hub.verify_token");
+      const challenge = url.searchParams.get("hub.challenge");
+      const expectedToken = process.env.META_WEBHOOK_VERIFY_TOKEN;
+
+      if (
+        mode === "subscribe" &&
+        expectedToken &&
+        verifyToken === expectedToken &&
+        challenge
+      ) {
+        res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+        res.end(challenge);
+        return;
+      }
+
+      res.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
+      res.end("Forbidden");
+      return;
+    }
+
+    if (cleanPath === "/api/meta/webhook" && req.method === "POST") {
+      const rawBody = await readRawBody(req);
+      const signatureHeader = Array.isArray(req.headers["x-hub-signature-256"])
+        ? req.headers["x-hub-signature-256"][0]
+        : req.headers["x-hub-signature-256"];
+
+      if (!verifyMetaWebhookSignature(rawBody, signatureHeader)) {
+        res.writeHead(401, { "content-type": "text/plain; charset=utf-8" });
+        res.end("Invalid signature");
+        return;
+      }
+
+      let payload;
+      try {
+        payload = rawBody.length ? JSON.parse(rawBody.toString("utf8")) : {};
+      } catch {
+        res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
+        res.end("Invalid JSON");
+        return;
+      }
+
+      const summary = extractWebhookSummary(payload);
+      console.log("Meta WhatsApp webhook received", summary);
+
+      sendJson(res, { received: true });
+      return;
+    }
+
     if (cleanPath === "/api/meta/readiness" && req.method === "GET") {
       const appId = Boolean(process.env.META_APP_ID);
       const appSecret = Boolean(process.env.META_APP_SECRET);
@@ -228,15 +325,17 @@ const server = createServer(async (req, res) => {
       const serviceRole = Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY);
       const versionReady = Boolean(graphVersion);
       const encryptionKey = Boolean(process.env.WHATSAPP_TOKEN_ENCRYPTION_KEY);
+      const webhookVerifyToken = Boolean(process.env.META_WEBHOOK_VERIFY_TOKEN);
 
       sendJson(res, {
-        configured: appId && appSecret && configId && serviceRole && versionReady && encryptionKey,
+        configured: appId && appSecret && configId && serviceRole && versionReady && encryptionKey && webhookVerifyToken,
         appId,
         appSecret,
         configId,
         serviceRole,
         graphVersion: versionReady,
         encryptionKey,
+        webhookVerifyToken,
       });
       return;
     }
