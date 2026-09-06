@@ -1,29 +1,46 @@
-const operationsItems = [
-  "customer conversations with context and handoff notes",
-  "template support for structured messaging",
-  "approved campaigns and clear dispatch windows",
-  "follow-ups with reminders and outcomes",
-  "contact and label organization",
-  "human handoff controls at any step",
-];
+import { operationsHighlights } from "../../config/landingContent";
 
 export function LandingOperations() {
   return (
-    <section className="section">
-      <div className="section-shell">
-        <p className="section-kicker">WhatsApp Business Operations</p>
-        <h2>Built for compliant, human-led operations</h2>
-        <p className="section-intro">
-          MARK keeps operations structured: every outbound touch point and campaign action is clearly
-          controlled in one place.
-        </p>
-        <ul className="checklist">
-          {operationsItems.map((item) => (
-            <li key={item}>• {item}</li>
+    <section className="block">
+      <div className="container">
+        <div className="center-head">
+          <div className="kicker">WHATSAPP BUSINESS OPERATIONS</div>
+          <h2>Built for compliant, human-led operations.</h2>
+          <p>
+            WA MARK keeps operations structured: every outbound touch point, campaign action and handoff is clear and traceable.
+          </p>
+        </div>
+        <div className="dashboard-strip" aria-label="workflow sequence">
+          <article className="dash-mini">
+            <div className="dmicon">◎</div>
+            <b>1. Connect</b>
+            <span>Connect your WhatsApp workspace</span>
+          </article>
+          <article className="dash-mini">
+            <div className="dmicon">◻</div>
+            <b>2. Configure</b>
+            <span>Define templates and automations</span>
+          </article>
+          <article className="dash-mini">
+            <div className="dmicon">◆</div>
+            <b>3. Launch</b>
+            <span>Start approved flows and campaigns</span>
+          </article>
+          <article className="dash-mini">
+            <div className="dmicon">↗</div>
+            <b>4. Grow</b>
+            <span>Improve through dashboards and outcomes</span>
+          </article>
+        </div>
+        <div className="cards">
+          {operationsHighlights.map((item) => (
+            <article className="card3d tilt" key={item}>
+              <p>{item}</p>
+            </article>
           ))}
-        </ul>
+        </div>
       </div>
     </section>
   );
 }
-

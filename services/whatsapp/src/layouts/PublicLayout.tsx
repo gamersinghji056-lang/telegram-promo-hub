@@ -14,7 +14,7 @@ export function PublicLayout({ children, links, authLinks }: PublicLayoutProps) 
   return (
     <div className="site-shell">
       <PublicNavigation links={links} authLinks={authLinks} />
-      <main>{children}</main>
+      <main className="landing-main">{children}</main>
     </div>
   );
 }

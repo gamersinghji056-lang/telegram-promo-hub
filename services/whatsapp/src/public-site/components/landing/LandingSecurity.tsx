@@ -1,24 +1,24 @@
-const controls = [
-  "permission sets by role and action",
-  "approval controls for outbound and sensitive operations",
-  "activity logs with traceability",
-  "business data separation across teams",
-  "human oversight before release points",
-];
+import { securityControls } from "../../config/landingContent";
 
 export function LandingSecurity() {
   return (
-    <section className="section">
-      <div className="section-shell">
-        <p className="section-kicker">Security &amp; Control</p>
-        <h2>Built for teams that need confidence</h2>
-        <ul className="checklist">
-          {controls.map((item) => (
-            <li key={item}>✓ {item}</li>
+    <section className="block" id="security">
+      <div className="container">
+        <div className="center-head">
+          <div className="kicker">CONTROL IS PART OF THE DESIGN</div>
+          <h2>Automation without losing responsibility.</h2>
+          <p>Teams decide who can access what, where AI can act, and where human approval is required.</p>
+        </div>
+        <div className="cards">
+          {securityControls.map((item) => (
+            <article className="card3d tilt" key={item}>
+              <div className="card-icon">🔐</div>
+              <h3>Security Control</h3>
+              <p>{item}</p>
+            </article>
           ))}
-        </ul>
+        </div>
       </div>
     </section>
   );
 }
-

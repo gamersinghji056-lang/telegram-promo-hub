@@ -1,33 +1,32 @@
 import { Link } from "react-router-dom";
-import { downloadCatalog, type DownloadStatus } from "../../../config/downloads";
-
-const labelByStatus: Record<DownloadStatus, string> = {
-  available: "Available",
-  "coming-soon": "Coming Soon",
-};
+import { downloadMetadata } from "../../config/landingContent";
 
 export function LandingDownloadCta() {
   return (
-    <section className="section">
-      <div className="section-shell">
-        <p className="section-kicker">Download</p>
-        <h2>Get MARK on your team</h2>
-        <p className="section-intro">
-          Start with the web app today and plan Android, Windows, and iOS releases in the rollout
-          roadmap.
-        </p>
-        <div className="download-matrix">
-          {downloadCatalog.map((entry) => (
-            <article key={entry.id} className="panel panel-tight">
-              <h3>{entry.title}</h3>
+    <section className="block" id="download">
+      <div className="container">
+        <div className="center-head">
+          <div className="kicker">GET STARTED</div>
+          <h2>Download MARK where your team works.</h2>
+          <p>Web access is live now. Android, Windows, and iOS packages are queued in rollout.</p>
+        </div>
+        <div className="cards download-grid">
+          {downloadMetadata.map((entry) => (
+            <article className="card3d" key={entry.platform}>
+              <h3>{entry.platform}</h3>
               <p>{entry.description}</p>
-              <small className={`status-badge status-${entry.status}`}>{labelByStatus[entry.status]}</small>
+              <span className={`status-badge status-${entry.status}`}>{entry.status}</span>
             </article>
           ))}
         </div>
-        <Link className="btn btn-primary" to="/download">
-          Explore Download Options
-        </Link>
+        <div className="cta-group">
+          <Link className="btn primary" to="/register">
+            Get Started
+          </Link>
+          <Link className="btn" to="/download">
+            Explore Downloads
+          </Link>
+        </div>
       </div>
     </section>
   );

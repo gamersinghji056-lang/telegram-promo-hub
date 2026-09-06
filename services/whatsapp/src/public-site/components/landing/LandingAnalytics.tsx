@@ -1,46 +1,47 @@
-const stats = [
-  { label: "Active conversations", value: "1,420", trend: "+12%" },
-  { label: "Follow-ups completed", value: "884", trend: "+8%" },
-  { label: "Media items processed", value: "2,106", trend: "+19%" },
-  { label: "AI-assisted actions", value: "1,010", trend: "+15%" },
-];
-
-const chartBars = [
-  { label: "Mon", value: 56 },
-  { label: "Tue", value: 82 },
-  { label: "Wed", value: 61 },
-  { label: "Thu", value: 93 },
-  { label: "Fri", value: 77 },
-];
+import { analyticsCards } from "../../config/landingContent";
 
 export function LandingAnalytics() {
   return (
-    <section className="section">
-      <div className="section-shell">
-        <p className="section-kicker">Analytics</p>
-        <h2>Operational visibility at a glance</h2>
+    <section className="block" id="analytics">
+      <div className="container">
+        <div className="center-head">
+          <div className="kicker">ANALYTICS</div>
+          <h2>Operational visibility with actionable insights.</h2>
+        </div>
         <div className="analytics-grid">
           <div className="analytics-cards">
-            {stats.map((stat) => (
-              <article key={stat.label} className="panel panel-tight">
-                <p>{stat.label}</p>
-                <strong>{stat.value}</strong>
-                <small>{stat.trend} this week</small>
+            {analyticsCards.map((item) => (
+              <article className="panel panel-tight" key={item.title}>
+                <p>{item.title}</p>
+                <strong>{item.value}</strong>
+                <span>{item.change} this week</span>
               </article>
             ))}
           </div>
           <div className="chart-card">
             <h3>Response throughput</h3>
             <div className="chart">
-              {chartBars.map((bar) => (
-                <div key={bar.label} className="chart-item">
-                  <span>{bar.label}</span>
-                  <div className="bar-track">
-                    <i style={{ width: `${bar.value}%` }} />
-                  </div>
-                  <strong>{bar.value}%</strong>
+              <div className="chart-item">
+                <span>Mon</span>
+                <div className="bar-track">
+                  <i style={{ width: "56%" }} />
                 </div>
-              ))}
+                <strong>56%</strong>
+              </div>
+              <div className="chart-item">
+                <span>Tue</span>
+                <div className="bar-track">
+                  <i style={{ width: "82%" }} />
+                </div>
+                <strong>82%</strong>
+              </div>
+              <div className="chart-item">
+                <span>Wed</span>
+                <div className="bar-track">
+                  <i style={{ width: "61%" }} />
+                </div>
+                <strong>61%</strong>
+              </div>
             </div>
           </div>
         </div>
@@ -48,4 +49,3 @@ export function LandingAnalytics() {
     </section>
   );
 }
-

@@ -46,10 +46,13 @@ export type FooterMenuSection = {
 };
 
 export const publicHeaderLinks: MenuItem[] = [
-  { path: "/features", label: "Features" },
-  { path: "/download", label: "Download" },
-  { path: "/pricing", label: "Pricing" },
-  { path: "/docs", label: "Docs" },
+  { path: "/#features", label: "Product" },
+  { path: "/#how", label: "How to Use" },
+  { path: "/#about", label: "About" },
+  { path: "/#security", label: "Security" },
+  { path: "/#pricing", label: "Pricing" },
+  { path: "/#faq", label: "FAQ" },
+  { path: "/#support", label: "Support" },
 ];
 
 export const authMenuLinks = {
@@ -61,19 +64,27 @@ export const publicFooterLinks: FooterMenuSection[] = [
   {
     title: "Product",
     links: [
-      { path: "/features", label: "Features" },
-      { path: "/download", label: "Download" },
-      { path: "/pricing", label: "Pricing" },
-      { path: "/docs", label: "Docs" },
+      { path: "/#features", label: "Features" },
+      { path: "/#ai", label: "MARK AI" },
+      { path: "/#pricing", label: "Pricing" },
+      { path: "/#support", label: "Support" },
     ],
   },
   {
     title: "Resources",
-    links: [{ path: "/download", label: "Downloads" }],
+    links: [
+      { path: "/download", label: "Download" },
+      { path: "/docs", label: "Docs" },
+      { path: "/features", label: "Product Capability" },
+    ],
   },
   {
     title: "Company",
-    links: [{ path: "/", label: "wa.mark8bot.com" }],
+    links: [
+      { path: "/#about", label: "About" },
+      { path: "/#how", label: "How to Use" },
+      { path: "/#faq", label: "FAQ" },
+    ],
   },
   {
     title: "Legal",
