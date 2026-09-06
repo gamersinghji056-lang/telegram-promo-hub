@@ -1,153 +1,160 @@
-import { useEffect, useRef } from "react";
-
-type ParallaxLayer = {
-  element: HTMLElement;
-  depth: number;
-  base: string;
-  rotateX: number;
-  rotateY: number;
-};
-
-function toNumber(value: string | undefined, fallback: number): number {
-  if (!value) return fallback;
-  const parsed = Number.parseFloat(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
+﻿import { useEffect } from "react";
 
 export function LandingParallax() {
-  const rafRef = useRef<number | null>(null);
-
   useEffect(() => {
     if (typeof window === "undefined" || typeof document === "undefined") return;
 
-    const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const touchQuery = window.matchMedia("(pointer: coarse)");
-    if (motionQuery.matches || touchQuery.matches) return;
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    if (reducedMotion.matches) return;
 
-    const root = document.querySelector(".landing-root");
+    const root = document.querySelector<HTMLElement>(".landing-root");
+    const hero = document.querySelector<HTMLElement>(".hero");
+    const scene = document.getElementById("scene");
+    const stage = document.getElementById("stage");
+    const mark8 = document.querySelector<HTMLElement>(".mark8-emblem");
+
     if (!root) return;
 
-    const layers = Array.from(root.querySelectorAll<HTMLElement>("[data-parallax-depth]")).map((element) => ({
-      element,
-      depth: toNumber(element.dataset.parallaxDepth, 0),
-      base: element.dataset.parallaxBase || "",
-      rotateX: toNumber(element.dataset.parallaxRotateX, 0),
-      rotateY: toNumber(element.dataset.parallaxRotateY, 0),
-    }));
+    const cleanups: Array<() => void> = [];
 
-    const ambient = Array.from(root.querySelectorAll<HTMLElement>("[data-ambient-depth]")).map((element) => ({
-      element,
-      depth: toNumber(element.dataset.ambientDepth, 0),
-    }));
-
-    const mark8 = root.querySelector<HTMLElement>(".mark8-emblem");
-    const mark8Base = mark8?.dataset.parallaxBase || "translate(-50%, -50%)";
-    const scene = root.querySelector<HTMLElement>(".scene");
-    let mouseX = 0.5;
-    let mouseY = 0.5;
-    let scrollY = 0;
-    let stopped = false;
-    let rafLoop = 0;
-
-    const setLayerTransform = (layer: ParallaxLayer, x: number, y: number) => {
-      const tx = (x - 0.5) * layer.depth;
-      const ty = (y - 0.5) * layer.depth;
-      const extra = ` translate3d(${tx.toFixed(2)}px, ${ty.toFixed(2)}px, 0)`;
-      const rotate = `rotateX(${(layer.rotateX * (y - 0.5)).toFixed(2)}deg) rotateY(${(
-        layer.rotateY * (x - 0.5)
-      ).toFixed(2)}deg)`;
-
-      layer.element.style.transform = layer.base ? `${layer.base} ${extra} ${rotate}` : `${extra} ${rotate}`;
+    const listen = <K extends keyof WindowEventMap>(
+      target: Window,
+      type: K,
+      handler: (event: WindowEventMap[K]) => void,
+      options?: AddEventListenerOptions,
+    ) => {
+      target.addEventListener(type, handler as EventListener, options);
+      cleanups.push(() => target.removeEventListener(type, handler as EventListener));
     };
 
-    const onMouseMove = (event: MouseEvent) => {
-      const rect = root.getBoundingClientRect();
-      mouseX = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
-      mouseY = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
-      if (!stopped && !rafLoop) {
-        rafLoop = requestAnimationFrame(render);
-      }
+    const listenEl = (
+      target: HTMLElement | Document,
+      type: string,
+      handler: EventListener,
+      options?: AddEventListenerOptions,
+    ) => {
+      target.addEventListener(type, handler, options);
+      cleanups.push(() => target.removeEventListener(type, handler));
     };
 
-    const render = () => {
-      rafLoop = 0;
-      if (stopped) return;
+    // Exact V6 stage tilt: move the dashboard as the pointer moves over the 3D scene.
+    if (scene && stage) {
+      const onSceneMove = (event: MouseEvent) => {
+        const r = scene.getBoundingClientRect();
+        if (!r.width || !r.height) return;
+        const x = (event.clientX - r.left) / r.width - 0.5;
+        const y = (event.clientY - r.top) / r.height - 0.5;
+        stage.style.transform =
+          `rotateX(${7 - y * 8}deg) rotateY(${-11 + x * 14}deg) rotateZ(${x * 1.6}deg)`;
+      };
+      const onSceneLeave = () => {
+        stage.style.transform = "rotateX(7deg) rotateY(-11deg) rotateZ(1deg)";
+      };
+      listenEl(scene, "mousemove", onSceneMove as EventListener, { passive: true });
+      listenEl(scene, "mouseleave", onSceneLeave as EventListener);
+    }
 
-      ambient.forEach(({ element, depth }) => {
-        const tx = (mouseX - 0.5) * depth;
-        const ty = (mouseY - 0.5) * depth;
-        element.style.transform = `translate3d(${tx}px, ${ty}px, 0)`;
+    // Ambient glows follow the cursor across the whole viewport.
+    const ambient = Array.from(
+      document.querySelectorAll<HTMLElement>("[data-ambient-depth]"),
+    );
+    const onAmbientMove = (event: MouseEvent) => {
+      ambient.forEach((el) => {
+        const depth = Number(el.dataset.ambientDepth || 20);
+        const x = ((event.clientX - window.innerWidth / 2) / window.innerWidth) * depth;
+        const y = ((event.clientY - window.innerHeight / 2) / window.innerHeight) * depth;
+        el.style.transform = `translate3d(${x}px,${y}px,0)`;
       });
-
-      layers.forEach((layer) => setLayerTransform(layer, mouseX * 1.4, mouseY * 1.3));
-
-      if (mark8) {
-        const tx = (mouseX - 0.5) * 26;
-        const ty = (mouseY - 0.5) * 16 + scrollY * 0.1;
-        const rot = (mouseX - 0.5) * 4;
-        mark8.style.transform = `${mark8Base} translate3d(${tx}px, ${ty}px, 0) rotate(${rot.toFixed(2)}deg)`;
-      }
-
-      if (scene) {
-        const rotateX = (mouseY - 0.5) * -6;
-        const rotateY = (mouseX - 0.5) * 14 - 11;
-        const rotateZ = (mouseX - 0.5) * 1.5;
-        const base = scene.dataset.sceneBase || "rotateX(7deg) rotateY(-11deg) rotateZ(1deg)";
-        scene.style.transform = `rotateX(${7 + rotateX}deg) rotateY(${rotateY}deg) rotateZ(${rotateZ}deg)`;
-      }
     };
+    listen(window, "mousemove", onAmbientMove, { passive: true });
 
-    const onScroll = () => {
-      scrollY = window.scrollY;
-      if (!stopped && !rafLoop) {
-        rafLoop = requestAnimationFrame(render);
-      }
-    };
+    // Exact V6 hero parallax: laptop, floating cards, dashboard metrics, chart and AI panel.
+    if (hero) {
+      const onHeroMove = (event: MouseEvent) => {
+        const r = hero.getBoundingClientRect();
+        if (!r.width || !r.height) return;
+        const x = (event.clientX - r.left) / r.width - 0.5;
+        const y = (event.clientY - r.top) / r.height - 0.5;
 
-    const onResize = () => {
-      if (!stopped && !rafLoop) {
-        rafLoop = requestAnimationFrame(render);
-      }
-    };
+        const mw = document.querySelector<HTMLElement>(".main-window");
+        const f1 = document.querySelector<HTMLElement>(".fc1");
+        const f2 = document.querySelector<HTMLElement>(".fc2");
+        const f3 = document.querySelector<HTMLElement>(".fc3");
 
-    const onVisibilityChange = () => {
-      stopped = document.visibilityState !== "visible";
-      if (!stopped) {
-        rafLoop = requestAnimationFrame(render);
-      }
-    };
+        if (mw) mw.style.transform = `translateZ(25px) translate3d(${x * 12}px,${y * 8}px,0)`;
+        if (f1) {
+          f1.style.transform =
+            `translateZ(110px) rotateY(${-5 + x * 10}deg) translate3d(${x * 28}px,${y * 20}px,0)`;
+        }
+        if (f2) {
+          f2.style.transform =
+            `translateZ(125px) rotateY(${7 + x * 8}deg) translate3d(${x * -22}px,${y * -14}px,0)`;
+        }
+        if (f3) {
+          f3.style.transform = `translateZ(155px) translate3d(${x * 34}px,${y * -24}px,0)`;
+        }
 
-    stopped = false;
-    window.addEventListener("mousemove", onMouseMove, { passive: true });
-    window.addEventListener("scroll", onScroll, { passive: true });
-    window.addEventListener("resize", onResize);
-    document.addEventListener("visibilitychange", onVisibilityChange);
+        document.querySelectorAll<HTMLElement>(".metric").forEach((metric, index) => {
+          metric.style.transform =
+            `translate3d(${x * (4 + index * 2)}px,${y * (3 + index)}px,0)`;
+        });
 
-    rafLoop = requestAnimationFrame(render);
+        const chart = document.querySelector<HTMLElement>(".chart");
+        const assist = document.querySelector<HTMLElement>(".assist");
+        if (chart) chart.style.transform = `translate3d(${x * 8}px,${y * 6}px,0)`;
+        if (assist) assist.style.transform = `translate3d(${x * -10}px,${y * 8}px,0)`;
+      };
+      listenEl(hero, "mousemove", onHeroMove as EventListener, { passive: true });
+    }
+
+    // Interactive logo, badges and buttons nudge toward the cursor.
+    document.querySelectorAll<HTMLElement>(".v6-logo,.badge,.btn").forEach((el) => {
+      const onMove = (raw: Event) => {
+        const event = raw as MouseEvent;
+        const r = el.getBoundingClientRect();
+        if (!r.width || !r.height) return;
+        const x = (event.clientX - r.left) / r.width - 0.5;
+        const y = (event.clientY - r.top) / r.height - 0.5;
+        el.style.transform = `translate3d(${x * 6}px,${y * 5}px,0)`;
+      };
+      const onLeave = () => {
+        el.style.transform = "";
+      };
+      listenEl(el, "mousemove", onMove, { passive: true });
+      listenEl(el, "mouseleave", onLeave as EventListener);
+    });
+
+    // MARK8 infinity background follows cursor and scroll, same as approved V6 HTML.
+    if (mark8) {
+      let mx = 0;
+      let my = 0;
+      let sy = window.scrollY;
+
+      const renderMark8 = () => {
+        const x = mx * 22;
+        const y = my * 16 + sy * 0.1;
+        const rot = mx * 4;
+        mark8.style.transform =
+          `translate(-50%,-50%) translate3d(${x}px,${y}px,0) rotate(${rot}deg)`;
+      };
+
+      const onMarkMove = (event: MouseEvent) => {
+        mx = event.clientX / window.innerWidth - 0.5;
+        my = event.clientY / window.innerHeight - 0.5;
+        renderMark8();
+      };
+      const onScroll = () => {
+        sy = window.scrollY;
+        renderMark8();
+      };
+
+      listen(window, "mousemove", onMarkMove, { passive: true });
+      listen(window, "scroll", onScroll, { passive: true });
+      renderMark8();
+    }
 
     return () => {
-      stopped = true;
-      if (rafLoop) cancelAnimationFrame(rafLoop);
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("scroll", onScroll);
-      window.removeEventListener("resize", onResize);
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-      layers.forEach(({ element, base }) => {
-        if (base) {
-          element.style.transform = base;
-        } else {
-          element.style.transform = "";
-        }
-      });
-      ambient.forEach(({ element }) => {
-        element.style.transform = "";
-      });
-      if (mark8) {
-        mark8.style.transform = mark8Base;
-      }
-      if (scene) {
-        scene.style.transform = scene.dataset.sceneBase || "rotateX(7deg) rotateY(-11deg) rotateZ(1deg)";
-      }
+      cleanups.forEach((fn) => fn());
     };
   }, []);
 
