@@ -1,4 +1,4 @@
-﻿ï»¿import { Laptop3D } from "./Laptop3D";
+ï»¿import { Laptop3D } from "./Laptop3D";
 
 export function ProductScene() {
   return (

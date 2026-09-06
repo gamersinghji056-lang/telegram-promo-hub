@@ -1,4 +1,4 @@
-﻿import { Link } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { LandingAbout } from "./LandingAbout";
 import { LandingDownloadCta } from "./LandingDownloadCta";
 import { LandingFilesMedia } from "./LandingFilesMedia";
