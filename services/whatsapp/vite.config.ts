@@ -1,10 +1,16 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import type { Connect } from "vite";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { healthPayload } from "./src/lib/health";
 
+type HealthPluginHandler = (
+  req: IncomingMessage,
+  res: ServerResponse,
+  next: (error?: unknown) => void
+) => void;
+
 function createHealthHandler() {
-  return (req: Connect.IncomingMessage, res: Connect.ServerResponse, next: Connect.NextFunction) => {
+  return (req: IncomingMessage, res: ServerResponse, next: (error?: unknown) => void) => {
     if (!req.url || req.url.split("?")[0] !== "/health") {
       next();
       return;
@@ -19,10 +25,10 @@ function createHealthHandler() {
 
 const healthRoutePlugin = {
   name: "whatsapp-health-route",
-  configureServer(server: { middlewares: { use: (middleware: Connect.NextHandleFunction) => void } }) {
+  configureServer(server: { middlewares: { use: (middleware: HealthPluginHandler) => void } }) {
     server.middlewares.use(createHealthHandler());
   },
-  configurePreviewServer(server: { middlewares: { use: (middleware: Connect.NextHandleFunction) => void } }) {
+  configurePreviewServer(server: { middlewares: { use: (middleware: HealthPluginHandler) => void } }) {
     server.middlewares.use(createHealthHandler());
   },
 };

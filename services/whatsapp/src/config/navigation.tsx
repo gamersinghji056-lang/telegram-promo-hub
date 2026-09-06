@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { HomePage } from "../pages/public/HomePage";
 import { FeaturesPage } from "../pages/public/FeaturesPage";
 import { DownloadPage } from "../pages/public/DownloadPage";
@@ -30,7 +31,7 @@ export type NavGroup = "public" | "app";
 export type RouteSpec = {
   path: `/${string}`;
   label: string;
-  element: JSX.Element;
+  element: ReactElement;
   nav: boolean;
   group: NavGroup;
 };
@@ -55,7 +56,7 @@ export const publicHeaderLinks: MenuItem[] = [
   { path: "/#support", label: "Support" },
 ];
 
-export const authMenuLinks = {
+export const authMenuLinks: { login: MenuItem; primaryAction: MenuItem } = {
   login: { path: "/login", label: "Login" },
   primaryAction: { path: "/register", label: "Get Started" },
 };
