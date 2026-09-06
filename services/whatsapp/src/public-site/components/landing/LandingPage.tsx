@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+﻿import { Link } from "react-router-dom";
 import { LandingAbout } from "./LandingAbout";
 import { LandingDownloadCta } from "./LandingDownloadCta";
 import { LandingFilesMedia } from "./LandingFilesMedia";
@@ -16,12 +16,14 @@ import { LandingPricing } from "./LandingPricing";
 import { LandingSecurity } from "./LandingSecurity";
 import { LandingSupport } from "./LandingSupport";
 import { LandingParallax } from "./scene/ParallaxField";
+import { Mark8Infinity } from "./scene/Mark8Infinity";
 import { LandingWebTasks } from "./LandingWebTasks";
 
 export function LandingPage() {
   return (
     <div className="landing-root">
       <LandingParallax />
+      <Mark8Infinity />
       <div className="cursor-ambient c-a1" data-ambient-depth="16" />
       <div className="cursor-ambient c-a2" data-ambient-depth="28" />
       <div className="cursor-ambient c-a3" data-ambient-depth="40" />
@@ -50,7 +52,7 @@ export function LandingPage() {
             </p>
             <div className="hero-actions" style={{ justifyContent: "center" }}>
               <Link className="btn primary" to="/register">
-                Get Started →
+                Get Started â†’
               </Link>
               <Link className="btn" to="/#features">
                 Explore Features
@@ -64,3 +66,4 @@ export function LandingPage() {
     </div>
   );
 }
+
