@@ -50,6 +50,21 @@ const server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
     const cleanPath = decodeURIComponent(url.pathname);
 
+    if (cleanPath === "/api/meta/readiness" && req.method === "GET") {
+      const appId = Boolean(process.env.META_APP_ID);
+      const appSecret = Boolean(process.env.META_APP_SECRET);
+      const configId = Boolean(process.env.META_EMBEDDED_SIGNUP_CONFIG_ID);
+      const serviceRole = Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY);
+
+      sendJson(res, {
+        configured: appId && appSecret && configId && serviceRole,
+        appId,
+        appSecret,
+        configId,
+        serviceRole,
+      });
+      return;
+    }
     if (cleanPath === "/health") {
       sendJson(res, { status: "ok", service: "whatsapp-web" });
       return;

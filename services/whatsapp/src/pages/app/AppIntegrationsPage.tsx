@@ -1,6 +1,170 @@
-import { PlaceholderPage } from "../../shared/ui/PlaceholderPage";
+import { useEffect, useState } from "react";
+import { useAuth } from "../../auth/AuthProvider";
+import {
+  createPendingWhatsAppAccount,
+  listWhatsAppAccounts,
+  removeWhatsAppAccount,
+  type WhatsAppAccount,
+} from "../../lib/whatsappAccounts";
 
-export function AppIntegrationsPage() {
-  return <PlaceholderPage title="Integrations" />;
+type MetaReadiness = {
+  configured: boolean;
+  appId: boolean;
+  appSecret: boolean;
+  configId: boolean;
+  serviceRole: boolean;
+};
+
+function StatusDot({ status }: { status: WhatsAppAccount["status"] }) {
+  return <span className={`wa-connection-status ${status}`}><i />{status}</span>;
 }
 
+export function AppIntegrationsPage() {
+  const { workspace } = useAuth();
+  const [accounts, setAccounts] = useState<WhatsAppAccount[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [readiness, setReadiness] = useState<MetaReadiness | null>(null);
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    if (!workspace?.id) {
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    const result = await listWhatsAppAccounts(workspace.id);
+    if (result.error) setError(result.error.message);
+    setAccounts(result.data);
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    void load();
+    fetch("/api/meta/readiness")
+      .then((response) => response.json())
+      .then((data) => setReadiness(data))
+      .catch(() => setReadiness(null));
+  }, [workspace?.id]);
+
+  const startConnect = async () => {
+    if (!workspace?.id) return;
+    setError("");
+    setNotice("");
+
+    if (!readiness?.configured) {
+      setError("Meta Embedded Signup is not configured on the server yet. Add the Meta environment variables shown below.");
+      return;
+    }
+
+    setBusy(true);
+    const result = await createPendingWhatsAppAccount(workspace.id);
+    setBusy(false);
+
+    if (result.error) {
+      setError(result.error.message);
+      return;
+    }
+
+    setNotice("Connection slot created. The next step will launch Meta Embedded Signup and securely exchange the authorization code.");
+    await load();
+  };
+
+  const remove = async (id: string) => {
+    if (!window.confirm("Remove this disconnected connection record?")) return;
+    const result = await removeWhatsAppAccount(id);
+    if (result.error) {
+      setError(result.error.message);
+      return;
+    }
+    await load();
+  };
+
+  return (
+    <div className="wa-connect-page">
+      <section className="wa-connect-head">
+        <div>
+          <span className="eyebrow">INTEGRATIONS</span>
+          <h1>WhatsApp Business</h1>
+          <p>Connect official Meta WhatsApp Business Platform accounts to WA MARK. Personal WhatsApp Web sessions are not used.</p>
+        </div>
+        <button className="wm-primary-btn" onClick={startConnect} disabled={busy}>
+          {busy ? "Preparing..." : "Connect WhatsApp Business"}
+        </button>
+      </section>
+
+      {error && <div className="auth-alert error">{error}</div>}
+      {notice && <div className="auth-alert success">{notice}</div>}
+
+      <section className="wa-connect-grid">
+        <article className="wm-card wa-connection-main">
+          <div className="wm-card-head">
+            <div><span className="eyebrow">CONNECTIONS</span><h3>Your WhatsApp accounts</h3></div>
+            <span className="wa-count">{accounts.length} account{accounts.length === 1 ? "" : "s"}</span>
+          </div>
+
+          {loading ? (
+            <div className="wa-empty">Loading WhatsApp accounts...</div>
+          ) : accounts.length === 0 ? (
+            <div className="wa-empty">
+              <div className="wa-empty-icon">WA</div>
+              <h3>No WhatsApp Business account connected</h3>
+              <p>Start the official Meta connection flow to add your business phone number.</p>
+              <button className="wm-primary-btn" onClick={startConnect}>Connect account</button>
+            </div>
+          ) : (
+            <div className="wa-account-list">
+              {accounts.map((account) => (
+                <div className="wa-account-row" key={account.id}>
+                  <div className="wa-account-avatar">WA</div>
+                  <div className="wa-account-info">
+                    <div>
+                      <b>{account.verified_name || "WhatsApp Business"}</b>
+                      <StatusDot status={account.status} />
+                    </div>
+                    <span>{account.display_phone_number || "Phone number pending"}</span>
+                    <small>
+                      {account.waba_id ? `WABA ${account.waba_id}` : "Waiting for Meta onboarding"}
+                    </small>
+                  </div>
+                  <div className="wa-account-actions">
+                    {account.status === "connected" ? <button>Manage</button> : <button onClick={() => void remove(account.id)}>Remove</button>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </article>
+
+        <aside className="wm-card wa-readiness-card">
+          <span className="eyebrow">SERVER READINESS</span>
+          <h3>Meta connection setup</h3>
+          <p>These server variables are required before the real Embedded Signup window can launch.</p>
+          <div className="wa-readiness-list">
+            <div><span>META_APP_ID</span><b className={readiness?.appId ? "ok" : ""}>{readiness?.appId ? "Ready" : "Missing"}</b></div>
+            <div><span>META_APP_SECRET</span><b className={readiness?.appSecret ? "ok" : ""}>{readiness?.appSecret ? "Ready" : "Missing"}</b></div>
+            <div><span>META_EMBEDDED_SIGNUP_CONFIG_ID</span><b className={readiness?.configId ? "ok" : ""}>{readiness?.configId ? "Ready" : "Missing"}</b></div>
+            <div><span>SUPABASE_SERVICE_ROLE_KEY</span><b className={readiness?.serviceRole ? "ok" : ""}>{readiness?.serviceRole ? "Ready" : "Missing"}</b></div>
+          </div>
+          <div className="wa-security-note">
+            <b>Security rule</b>
+            <p>Meta App Secret and long-lived access tokens stay server-side. They are never exposed in browser code.</p>
+          </div>
+        </aside>
+      </section>
+
+      <section className="wm-card wa-flow-card">
+        <div className="wm-card-head"><div><span className="eyebrow">FLOW</span><h3>How connection will work</h3></div></div>
+        <div className="wa-flow-steps">
+          <div><strong>01</strong><b>Meta sign-in</b><p>User signs in through Meta Embedded Signup.</p></div>
+          <div><strong>02</strong><b>Select business</b><p>Select or create the WhatsApp Business Account.</p></div>
+          <div><strong>03</strong><b>Add phone number</b><p>Select and verify the business phone number.</p></div>
+          <div><strong>04</strong><b>Secure exchange</b><p>WA MARK exchanges the authorization code on the server.</p></div>
+          <div><strong>05</strong><b>Webhooks</b><p>Messages and delivery events start syncing into the workspace.</p></div>
+        </div>
+      </section>
+    </div>
+  );
+}
