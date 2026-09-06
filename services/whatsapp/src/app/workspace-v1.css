@@ -16,3 +16,11 @@
 .wm-ai-orb svg{width:30px;height:30px;display:block}
 .wm-quick-actions i svg,.wm-activity>i svg{width:17px;height:17px;display:block}
 .wm-live{display:flex;align-items:center;gap:5px}.wm-live i{width:6px;height:6px;border-radius:50%;background:#56a77d;box-shadow:0 0 0 3px rgba(86,167,125,.12)}
+/* WA MARK auth backend states */
+.auth-alert{padding:11px 12px;border-radius:10px;background:#f4edff;border:1px solid #dfd0f4;color:#5e3295;font-size:11px;line-height:1.5}
+.auth-alert.error{background:#fff0f2;border-color:#f1c8cf;color:#a33c4c}
+.auth-alert.success{background:#edf9f2;border-color:#c9ead6;color:#347654}
+.auth-submit:disabled{opacity:.65;cursor:wait}
+.wm-auth-loading,.wm-auth-setup{min-height:100vh;display:grid;place-items:center;background:#f4f1f8;color:#17111f}
+.wm-auth-loading{text-align:center}.wm-auth-loading>span{width:58px;height:58px;border-radius:17px;display:grid;place-items:center;margin:auto;background:linear-gradient(145deg,#a65aff,#5c1ccb);color:#fff;font-weight:900;box-shadow:0 18px 45px rgba(91,33,199,.24)}.wm-auth-loading p{font-size:11px;color:#776b80;margin-top:12px}
+.wm-auth-setup>div{width:min(620px,calc(100% - 32px));padding:36px;border:1px solid rgba(80,54,110,.1);border-radius:24px;background:#fff;box-shadow:0 24px 70px rgba(66,45,91,.09)}.wm-auth-setup span{font-size:9px;letter-spacing:.15em;color:#7134d8;font-weight:900}.wm-auth-setup h1{font-size:34px;line-height:1.05;letter-spacing:-.04em;margin:12px 0}.wm-auth-setup p{color:#74687d;line-height:1.7;font-size:12px}
