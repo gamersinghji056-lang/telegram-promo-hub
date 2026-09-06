@@ -6,6 +6,7 @@ import {
   removeWhatsAppAccount,
   type WhatsAppAccount,
 } from "../../lib/whatsappAccounts";
+import { launchMetaEmbeddedSignup } from "../../lib/metaEmbeddedSignup";
 
 type MetaReadiness = {
   configured: boolean;
@@ -13,6 +14,8 @@ type MetaReadiness = {
   appSecret: boolean;
   configId: boolean;
   serviceRole: boolean;
+  graphVersion: boolean;
+  encryptionKey: boolean;
 };
 
 function StatusDot({ status }: { status: WhatsAppAccount["status"] }) {
@@ -55,21 +58,28 @@ export function AppIntegrationsPage() {
     setNotice("");
 
     if (!readiness?.configured) {
-      setError("Meta Embedded Signup is not configured on the server yet. Add the Meta environment variables shown below.");
+      setError("Meta Embedded Signup is not fully configured yet. Complete the server variables shown on the right.");
       return;
     }
 
     setBusy(true);
-    const result = await createPendingWhatsAppAccount(workspace.id);
-    setBusy(false);
+    const slot = await createPendingWhatsAppAccount(workspace.id);
 
-    if (result.error) {
-      setError(result.error.message);
+    if (slot.error || !slot.data) {
+      setBusy(false);
+      setError(slot.error?.message || "Could not create connection slot");
       return;
     }
 
-    setNotice("Connection slot created. The next step will launch Meta Embedded Signup and securely exchange the authorization code.");
-    await load();
+    try {
+      await launchMetaEmbeddedSignup(slot.data.id);
+      setNotice("WhatsApp Business connected successfully.");
+    } catch (connectError) {
+      setError(connectError instanceof Error ? connectError.message : "Meta connection failed");
+    } finally {
+      setBusy(false);
+      await load();
+    }
   };
 
   const remove = async (id: string) => {
@@ -88,10 +98,10 @@ export function AppIntegrationsPage() {
         <div>
           <span className="eyebrow">INTEGRATIONS</span>
           <h1>WhatsApp Business</h1>
-          <p>Connect official Meta WhatsApp Business Platform accounts to WA MARK. Personal WhatsApp Web sessions are not used.</p>
+          <p>Connect an official Meta WhatsApp Business Platform account. WA MARK uses Meta Embedded Signup and never asks for a personal WhatsApp Web QR session.</p>
         </div>
         <button className="wm-primary-btn" onClick={startConnect} disabled={busy}>
-          {busy ? "Preparing..." : "Connect WhatsApp Business"}
+          {busy ? "Connecting..." : "Connect WhatsApp Business"}
         </button>
       </section>
 
@@ -111,7 +121,7 @@ export function AppIntegrationsPage() {
             <div className="wa-empty">
               <div className="wa-empty-icon">WA</div>
               <h3>No WhatsApp Business account connected</h3>
-              <p>Start the official Meta connection flow to add your business phone number.</p>
+              <p>Launch the official Meta signup flow to select your business and phone number.</p>
               <button className="wm-primary-btn" onClick={startConnect}>Connect account</button>
             </div>
           ) : (
@@ -125,12 +135,12 @@ export function AppIntegrationsPage() {
                       <StatusDot status={account.status} />
                     </div>
                     <span>{account.display_phone_number || "Phone number pending"}</span>
-                    <small>
-                      {account.waba_id ? `WABA ${account.waba_id}` : "Waiting for Meta onboarding"}
-                    </small>
+                    <small>{account.waba_id ? `WABA ${account.waba_id}` : "Waiting for Meta onboarding"}</small>
                   </div>
                   <div className="wa-account-actions">
-                    {account.status === "connected" ? <button>Manage</button> : <button onClick={() => void remove(account.id)}>Remove</button>}
+                    {account.status === "connected"
+                      ? <button>Manage</button>
+                      : <button onClick={() => void remove(account.id)}>Remove</button>}
                   </div>
                 </div>
               ))}
@@ -141,28 +151,30 @@ export function AppIntegrationsPage() {
         <aside className="wm-card wa-readiness-card">
           <span className="eyebrow">SERVER READINESS</span>
           <h3>Meta connection setup</h3>
-          <p>These server variables are required before the real Embedded Signup window can launch.</p>
+          <p>All items must show Ready before the real signup window can finish securely.</p>
           <div className="wa-readiness-list">
             <div><span>META_APP_ID</span><b className={readiness?.appId ? "ok" : ""}>{readiness?.appId ? "Ready" : "Missing"}</b></div>
             <div><span>META_APP_SECRET</span><b className={readiness?.appSecret ? "ok" : ""}>{readiness?.appSecret ? "Ready" : "Missing"}</b></div>
             <div><span>META_EMBEDDED_SIGNUP_CONFIG_ID</span><b className={readiness?.configId ? "ok" : ""}>{readiness?.configId ? "Ready" : "Missing"}</b></div>
+            <div><span>META_GRAPH_VERSION</span><b className={readiness?.graphVersion ? "ok" : ""}>{readiness?.graphVersion ? "Ready" : "Missing"}</b></div>
             <div><span>SUPABASE_SERVICE_ROLE_KEY</span><b className={readiness?.serviceRole ? "ok" : ""}>{readiness?.serviceRole ? "Ready" : "Missing"}</b></div>
+            <div><span>WHATSAPP_TOKEN_ENCRYPTION_KEY</span><b className={readiness?.encryptionKey ? "ok" : ""}>{readiness?.encryptionKey ? "Ready" : "Missing"}</b></div>
           </div>
           <div className="wa-security-note">
-            <b>Security rule</b>
-            <p>Meta App Secret and long-lived access tokens stay server-side. They are never exposed in browser code.</p>
+            <b>Credential isolation</b>
+            <p>Meta App Secret and WhatsApp access tokens stay on the server. Access tokens are encrypted before database storage.</p>
           </div>
         </aside>
       </section>
 
       <section className="wm-card wa-flow-card">
-        <div className="wm-card-head"><div><span className="eyebrow">FLOW</span><h3>How connection will work</h3></div></div>
+        <div className="wm-card-head"><div><span className="eyebrow">ACTIVE FLOW</span><h3>Embedded Signup connection</h3></div></div>
         <div className="wa-flow-steps">
-          <div><strong>01</strong><b>Meta sign-in</b><p>User signs in through Meta Embedded Signup.</p></div>
-          <div><strong>02</strong><b>Select business</b><p>Select or create the WhatsApp Business Account.</p></div>
-          <div><strong>03</strong><b>Add phone number</b><p>Select and verify the business phone number.</p></div>
-          <div><strong>04</strong><b>Secure exchange</b><p>WA MARK exchanges the authorization code on the server.</p></div>
-          <div><strong>05</strong><b>Webhooks</b><p>Messages and delivery events start syncing into the workspace.</p></div>
+          <div><strong>01</strong><b>Meta sign-in</b><p>Official Meta window opens.</p></div>
+          <div><strong>02</strong><b>Select business</b><p>Choose the WhatsApp Business Account.</p></div>
+          <div><strong>03</strong><b>Verify number</b><p>Select the business phone number.</p></div>
+          <div><strong>04</strong><b>Secure exchange</b><p>Authorization code is exchanged server-side.</p></div>
+          <div><strong>05</strong><b>Subscribe app</b><p>WA MARK subscribes the app to WABA events.</p></div>
         </div>
       </section>
     </div>
